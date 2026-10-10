@@ -104,6 +104,23 @@ class GitHubAdapter(unittest.TestCase):
         gh, _ = self.github([(500, {})])
         self.assertEqual(gh.remediate("r", args, "k"), "failed")             # nothing was sent
 
+    def test_the_git_route_is_the_same_compare_and_swap(self):
+        from trusted.github import GitHub
+        root = Path(tempfile.mkdtemp())
+        origin = demo_repository(root, FILES)
+        git = lambda *a: __import__("subprocess").run(["git", *a], check=True, capture_output=True, text=True).stdout.strip()
+        git("-C", str(origin), "config", "receive.denyCurrentBranch", "ignore")
+        mirror = root / "mirror"
+        git("clone", "-q", "--mirror", str(origin), str(mirror))
+        base = git("-C", str(mirror), "rev-parse", "main")
+        tree = git("-C", str(mirror), "rev-parse", "main^{tree}")
+        head = git("-C", str(mirror), "commit-tree", tree, "-p", base, "-m", "next")
+        other = git("-C", str(mirror), "commit-tree", tree, "-p", base, "-m", "other")
+        gh = GitHub("acme/app", "token", push_from=mirror)
+        self.assertEqual(gh.remediate("r", {"base": other, "head": head}, "k"), "failed")   # main is not that base
+        self.assertEqual(gh.remediate("r", {"base": base, "head": head}, "k"), "ok")
+        self.assertEqual(git("-C", str(origin), "rev-parse", "main"), head)
+
     def test_readback_never_concludes_absence(self):
         gh, _ = self.github([(200, {"status": "ahead"}), (200, {"status": "diverged"})])
         self.assertTrue(gh.applied("b" * 40))

@@ -121,7 +121,7 @@ class Agent:
         self.capabilities = capability if isinstance(capability, dict) else {"recipe": capability, "review": capability}
         self.signer, self.store = signer, Path(store)
         self.data, self.api_key, self.ask = data, api_key, ask
-        self.publish = publish or (lambda head: None)   # e.g. push to refs/standard/proposals/<head> on GitHub
+        self.publish = publish or (lambda head: None)   # e.g. push the branch standard/proposals/<head> on GitHub
 
     def craft(self, target_id: str, base: str, law_text: str = "") -> tuple[str, str]:
         """(head, route): "recipe" when an instrument can reproduce it, "review" when a human must sign a review."""

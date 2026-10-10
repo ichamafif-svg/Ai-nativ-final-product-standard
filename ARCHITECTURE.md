@@ -1030,7 +1030,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 4. Une heure plus tard (FLOOR-0) : `python tools/ceremony.py activate DIR`.
 5. Lancer les deux processus. `python tools/qualify.py DIR/standard.toml` liste ce que la démo ne tient pas physiquement.
 
-Côté GitHub, l'installation doit garantir que seule la garde déplace `main` (ruleset avec la garde seule en bypass) et que l'agent ne peut pousser que `refs/standard/proposals/*`. C'est T07 : `qualify.py` le vérifie en partie et dit le reste.
+Côté GitHub, l'installation doit garantir que seule la garde déplace `main` (ruleset avec la garde seule en bypass) et que l'agent ne peut pousser que les branches `standard/proposals/*` (une règle de ruleset sur un motif de branche, exprimable chez GitHub ; un ref hors `refs/heads` ne l'est pas). C'est T07 : `qualify.py` le vérifie en partie et dit le reste.
 
 Ce que la démo montre : la loi refuse, attend les faits indépendants, autorise un départ unique, prouve l'effet et ferme la dette, sans humain pour les réparations reproductibles et avec une revue signée pour les autres. Ce qu'elle ne montre pas : les garanties physiques (§15.2), puisqu'un seul opérateur tient toutes les clés.
 

@@ -49,7 +49,7 @@ def build(config_path) -> tuple[Cycle, callable]:
     else:
         main = lambda: git(store, "ls-remote", "origin", "refs/heads/main").split()[0]
         refresh = lambda: git(store, "fetch", "-q", "origin", "+refs/heads/main:refs/heads/main")
-        publish = lambda head: git(store, "push", "-q", "origin", f"{head}:refs/standard/proposals/{head}")
+        publish = lambda head: git(store, "push", "-q", "origin", f"{head}:refs/heads/standard/proposals/{head}")
     data = c.get("data")
     api = agent_cfg.get("api_key_file")
     agent = Agent(signer, {"recipe": c["grants"]["agent_recipe"], "review": c["grants"]["agent_review"]}, store,

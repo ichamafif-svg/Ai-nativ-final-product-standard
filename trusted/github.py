@@ -3,17 +3,21 @@
 - remediate: the GraphQL `updateRefs` mutation moves refs/heads/main from `beforeOid` (the judged base) to `afterOid`
   (the judged head), `force: false`. GitHub documents beforeOid as a precondition and the update as atomic: if main
   is not exactly the base, nothing moves. A response with errors is a definitive refusal; a lost response is unknown.
+  `push_from=<mirror>` (where GraphQL is unreachable) does the same CAS over git: `push --force-with-lease=main:base`
+  sends base as the expected old value and the server refuses the update if main is anything else.
 - applied (T08 readback): the compare API says whether main contains the head. Absence is never `not_applied`.
 - protections (instrument of the `branch` target): the rules GitHub enforces on main.
 
 The token is the guard's alone, held in the operator process. Proposed heads must already be in the repository
-(the agent pushes them to refs/standard/proposals/*, which a ruleset must keep apart from main): an installation
+(the agent pushes them as branches standard/proposals/*, which a ruleset must keep apart from main): an installation
 requirement checked by tools/qualify.py, not a property of this code.
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
+import subprocess
 import urllib.request
 
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -34,11 +38,12 @@ def http(method: str, url: str, token: str, body=None) -> tuple[int, dict]:
 
 
 class GitHub:
-    def __init__(self, repository: str, token: str, *, api: str = "https://api.github.com", transport=http):
+    def __init__(self, repository: str, token: str, *, api: str = "https://api.github.com", transport=http,
+                 push_from=None):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ValueError("owner/name")
         self.repository, self.token, self.api, self.http = repository, token, api.rstrip("/"), transport
-        self._node = None
+        self._node, self.push_from = None, push_from
 
     def _node_id(self) -> str:
         if self._node is None:
@@ -52,17 +57,30 @@ class GitHub:
         base, head = args["base"], args["head"]
         if not SHA.fullmatch(base) or not SHA.fullmatch(head):
             return "failed"
-        try:
-            node = self._node_id()
-        except Exception:
-            return "failed"                                 # before the send: nothing left
-        status, body = self.http("POST", f"{self.api}/graphql", self.token,
-                                 {"query": MUTATION, "variables": {"id": node, "before": base, "after": head}})
+        if self.push_from:
+            return self._push(base, head)
+        else:
+            try:
+                node = self._node_id()
+            except Exception:
+                return "failed"                             # before the send: nothing left
+            status, body = self.http("POST", f"{self.api}/graphql", self.token,
+                                     {"query": MUTATION, "variables": {"id": node, "before": base, "after": head}})
         if status == 200 and "data" in body and not body.get("errors"):
             return "ok"
         if status in (200, 400, 401, 403, 404, 409, 422):
             return "failed"                                 # GitHub answered and refused: atomic, nothing moved
         return "unknown"                                    # a server error may follow an applied update
+
+    def _push(self, base: str, head: str) -> str:
+        auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
+        r = subprocess.run(["git", "-C", str(self.push_from), "-c", f"http.extraHeader=Authorization: Basic {auth}",
+                            "-c", "remote.origin.mirror=false",
+                            "push", "--porcelain", f"--force-with-lease=refs/heads/main:{base}", "origin",
+                            f"{head}:refs/heads/main"], capture_output=True, text=True, timeout=300)
+        if r.returncode == 0:
+            return "ok"
+        return "failed" if "[rejected]" in r.stdout or "[remote rejected]" in r.stdout else "unknown"
 
     def applied(self, head: str) -> bool:
         status, body = self.http("GET", f"{self.api}/repos/{self.repository}/compare/{head}...main", self.token)

@@ -70,7 +70,8 @@ class Installation:
             self.world = None
         else:
             from .github import GitHub
-            self.repository = GitHub(repo["name"], resolve(repo["token_file"]).read_text().strip())
+            self.repository = GitHub(repo["name"], resolve(repo["token_file"]).read_text().strip(),
+                                     push_from=resolve(repo["mirror"]) if repo.get("api") == "git" else None)
             self.repo_path = self.proposals = resolve(repo["mirror"])
             self.world = self.repository
         data = c.get("data")
@@ -105,7 +106,7 @@ class Installation:
     def sync(self) -> None:
         if self.world is not None:                          # GitHub: refresh the mirror, proposals included
             git(self.repo_path, "fetch", "-q", "--prune", "origin", "+refs/heads/main:refs/heads/main",
-                "+refs/standard/proposals/*:refs/standard/proposals/*")
+                "+refs/heads/standard/proposals/*:refs/standard/proposals/*")
 
     def tick(self) -> dict:
         report = {}
