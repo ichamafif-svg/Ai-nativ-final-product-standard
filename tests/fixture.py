@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat 
 from floors import RELEASE  # noqa: E402
 from kernel import Kernel, Refused, apply, canon, digest, empty  # noqa: E402
 from kernel.identity import PAYLOAD_TYPE, keyid, pae, statement  # noqa: E402
+from trusted.checker import Checker  # noqa: E402
 
 CODE = digest({"code": "test-release"})
 HOUR = 3_600_000
@@ -62,6 +63,7 @@ class Ledger:
         self.kernel = kernel or Kernel(RELEASE, CODE)
         self.state, self.entries, self.n = empty(), [], 0
         self.records = []
+        self.checker = Checker()        # every admitted entry is also checked by the independent judge
         self.genesis(law or client_law(), at)
 
     def entry(self, kind, body, signers):
@@ -75,6 +77,8 @@ class Ledger:
                 "author": author, **fields}
         entry = self.entry(kind, body, signers or [author])
         record, delta = self.kernel.decide(self.state, entry)
+        law = self.kernel.law_by_digest(record["law"])
+        self.checker.check(self.state, record, copy.deepcopy(delta), entry, law.raw, law.digest)
         apply(self.state, delta)
         self.entries.append(entry)
         self.records.append(record)

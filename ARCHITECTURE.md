@@ -303,7 +303,7 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Plafonds de départ (hérités de la V7, à reconfirmer sur le nouveau code) : sûreté **2 942**, restrictif seul **537**, visibilité **500**. Dernières mesures connues : noyau hybride 2 442 lignes, TCB effective 4 507.
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **960 / 960**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **248 / 248**. TCB locale : 4 088 lignes, contre 4 507 pour le prototype hybride. Les trois derniers plafonds sont des cliquets.
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -509,7 +509,7 @@ Un seul automate dans FLOOR-0, lu par les deux juges. `(genre, résultat) → (�
 4. Une restriction admise avant l'envoi bloque l'effet. Après l'envoi, elle ne le rappelle pas.
 5. Toute exception après entrée dans l'adaptateur, y compris pendant l'attente, est `unknown`. Le même jeton ne peut pas être retenté.
 6. L'entrée candidate exacte est conservée **avant** l'épingle ; la reprise restaure la queue sans candidat perdu [V6-10].
-7. Un contrat T manquant au dernier contrôle laisse la réservation à réconcilier **sans** envoyer.
+7. Un contrat T manquant ou une restriction au dernier contrôle : **rien n'est envoyé**, et la garde rapporte `failed`, qu'elle sait avec certitude puisqu'aucun adaptateur n'a été appelé. Une fois l'adaptateur appelé, toute erreur devient `unknown`.
 
 ### 8.3 Réconciliation
 

@@ -1,0 +1,25 @@
+{
+  "kernel": {
+    "files": ["kernel/__init__.py", "kernel/canon.py", "kernel/types.py", "kernel/identity.py", "kernel/floor0.py",
+              "kernel/language.py", "kernel/obligations.py", "kernel/law.py", "kernel/judge.py", "floors/*.py"],
+    "ceiling": 3200,
+    "breaks": "safety (K): an effect, a widening or a rewrite that must be refused"
+  },
+  "trusted": {
+    "files": ["trusted/__init__.py", "trusted/signing.py", "trusted/journal.py", "trusted/guard.py",
+              "trusted/clock.py", "trusted/boundary.py", "trusted/service.py", "trusted/gateway.py",
+              "trusted/delivery.py"],
+    "ceiling": 960,
+    "breaks": "safety (T): a premise or a departure that must not happen"
+  },
+  "restrictive": {
+    "files": ["trusted/checker.py"],
+    "ceiling": 780,
+    "breaks": "only stops: it judges after a kernel admission, and its failure halts"
+  },
+  "visibility": {
+    "files": ["kernel/accountability.py"],
+    "ceiling": 248,
+    "breaks": "hides or invents a gap; never admits or sends"
+  }
+}

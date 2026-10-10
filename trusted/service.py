@@ -1,0 +1,147 @@
+"""The operator-side service: K and T assembled behind one admission path (ARCHITECTURE.md §10, §13.1).
+
+It runs in its own process, under its own OS account. U reaches it only through the gateway (`view`, `status`,
+`qualify`, `admit`); the operator loop calls `dispatch_due`, `reconcile_due` and `deliver_due`. Every operation first
+qualifies exactly the T contracts it depends on; a missing contract stops that operation only.
+"""
+from __future__ import annotations
+
+from kernel import Accountability, apply, empty
+from kernel.accountability import empty as accountability_empty
+from kernel.floor0 import line_state
+from kernel.identity import IdentityError, open_envelope
+
+from .boundary import BASE, CONTRACTS, TIMED, TrustUnavailable, required_for
+from .guard import EffectPort, Guard
+from .journal import Journal
+from .signing import Signer
+
+EFFECT = TIMED | {"T07", "T08"}
+
+
+class TrustedService:
+    def __init__(self, journal: Journal, *, boundary, clock, effect_port: EffectPort | None = None,
+                 guard_signer: Signer | None = None, reconciliation=None, delivery=None):
+        if not callable(getattr(boundary, "check", None)) or not callable(clock):
+            raise TrustUnavailable("TRUST.BOUNDARY_REQUIRED")
+        self.journal, self.boundary, self.clock = journal, boundary, clock
+        self.effect_port, self.guard_signer = effect_port, guard_signer
+        self.reconciliation, self.delivery = reconciliation, delivery
+        self._last_now = -1
+        self.accountability = Accountability(journal.kernel)
+
+    # ---- trust ------------------------------------------------------------------------------------------------------
+    def _require(self, need) -> int | None:
+        need = frozenset(need)
+        now = None
+        if "T03" in need:
+            try:
+                now = self.clock()
+            except Exception as exc:
+                raise TrustUnavailable("TRUST.CLOCK") from exc
+            if type(now) is not int or now < self._last_now:
+                raise TrustUnavailable("TRUST.CLOCK_ROLLBACK")
+            self._last_now = now
+        self.boundary.check(need, release=self.journal.kernel.code, genesis=self.journal.genesis_pin,
+                            ledger=str(self.journal.path), now=now)
+        if "T07" in need and not isinstance(self.effect_port, EffectPort):
+            raise TrustUnavailable("TRUST.EFFECT_PORT")
+        if "T08" in need and not callable(getattr(self.reconciliation, "readback", None)):
+            raise TrustUnavailable("TRUST.RECONCILIATION_PORT")
+        if "T09" in need and not callable(getattr(self.delivery, "deliver_due", None)):
+            raise TrustUnavailable("TRUST.DELIVERY_PORT")
+        return now
+
+    # ---- the gateway surface ----------------------------------------------------------------------------------------
+    def admit(self, envelope) -> dict:
+        try:
+            kind = open_envelope(envelope)[0]
+        except (IdentityError, TypeError, KeyError):
+            kind = None                                    # the kernel refuses it below, under the strictest need
+        need = required_for(kind) if kind else TIMED
+        self._require(need)
+
+        def build(state):
+            self._require(need)                            # again, under the write lock
+            return {"seq": state["size"], "prev": state["head"], "envelope": envelope}
+        _, record = self.journal.transact(build)
+        return {"admitted": True, "kind": record["kind"], "id": record["body"]["id"], "law": record["law"]}
+
+    def qualify(self, required) -> None:
+        if not isinstance(required, (list, tuple, set, frozenset)) or not set(required) <= set(CONTRACTS):
+            raise TrustUnavailable("TRUST.UNKNOWN_CONTRACT")
+        self._require(TIMED | set(required))
+
+    def view(self) -> dict:
+        """The law and its debts at one checked prefix: data for U, never a permission."""
+        now = self._require(TIMED)
+        state = self.journal.snapshot()
+        law = self.journal.kernel.law_of(state)
+        return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
+                "law": {"digest": law.digest, "effective": law.raw}, "health": self.health(required_at=now)}
+
+    def status(self) -> dict:
+        """Never raises: a fault is a visible state with what is still known (§9.4)."""
+        basis = None
+        try:
+            self._require(BASE)
+            state = self.journal.snapshot()
+            basis = {"size": state["size"], "head": state["head"], "genesis": state["domain"]}
+        except Exception as exc:
+            return {"state": "FAULT", "basis": None, "boundary": "prefix", "reason": type(exc).__name__}
+        try:
+            verdict = self.health(required_at=self._require(TIMED))
+            return {"state": verdict["state"], "basis": basis, "open": len(verdict["open"]),
+                    "escalated": len(verdict["escalated"])}
+        except Exception as exc:
+            return {"state": "FAULT", "basis": basis, "boundary": "audit", "reason": type(exc).__name__}
+
+    def health(self, *, required_at=None) -> dict:
+        kernel, a, ks = self.journal.kernel, accountability_empty(), empty()
+        for entry in self.journal.entries():
+            record, delta = kernel.decide(ks, entry)
+            apply(ks, delta)
+            self.accountability.feed(a, ks, record)
+        verdict = self.accountability.health(a, ks, required_at=required_at)
+        return {**verdict, "head": ks["head"], "size": ks["size"]}
+
+    # ---- the operator loop ------------------------------------------------------------------------------------------
+    def guard(self) -> Guard:
+        self._require(EFFECT)
+        if self.guard_signer is None:
+            raise TrustUnavailable("TRUST.GUARD_SIGNER")
+        return Guard(self.journal, self.guard_signer, self.effect_port, self.clock,
+                     qualify=lambda trusted: self._require(TIMED | set(trusted)))
+
+    def dispatch_due(self) -> dict:
+        guard, results = self.guard(), {}
+        state = self.journal.snapshot()
+        now = self._require(EFFECT)
+        for intent in sorted(state["intents"]):
+            phase = line_state(state["line"], intent, now)
+            if phase not in ("intended", "tokened"):
+                continue
+            try:
+                token = guard.issue(intent) if phase == "intended" else self.journal.snapshot()["token_of"][intent]
+                results[intent] = guard.redeem(token)
+            except Exception as exc:
+                results[intent] = {"blocked": getattr(exc, "code", type(exc).__name__)}
+        return results
+
+    def reconcile_due(self) -> dict:
+        """Ask the independent readback (T08) about every uncertain or expired effect; admit its signed answer."""
+        now = self._require(TIMED | {"T08"})
+        state, results = self.journal.snapshot(), {}
+        for intent in sorted(state["intents"]):
+            if line_state(state["line"], intent, now) not in ("uncertain", "expired"):
+                continue
+            try:
+                envelope = self.reconciliation.readback(intent, state)
+                results[intent] = self.admit(envelope) if envelope is not None else "UNKNOWN"
+            except Exception as exc:
+                results[intent] = {"blocked": getattr(exc, "code", type(exc).__name__)}
+        return results
+
+    def deliver_due(self) -> dict:
+        now = self._require(TIMED | {"T09"})
+        return self.delivery.deliver_due(self.health(required_at=now))
