@@ -32,7 +32,7 @@ from .gateway import AdmissionGateway
 from .guard import EffectPort
 from .instruments import Instrument, git
 from .journal import Journal, PinStore
-from .operator import Instruments, Prover
+from .operator import MAIN_OPS, Instruments, Prover
 from .release import code_digest
 from .service import TrustedService
 from .signing import Signer, entry
@@ -79,11 +79,12 @@ class Installation:
         self.data = TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY
         self.service = TrustedService(
             self.journal, boundary=SignedAssessment(assessment, assessors), clock=self.clock,
-            guard_signer=key(self.keys, "guard"), effect_port=EffectPort({"remediate": self.repository.remediate}),
+            guard_signer=key(self.keys, "guard"), effect_port=EffectPort({op: self.repository.remediate for op in MAIN_OPS}),
             reconciliation=Readback(self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock))
         self.instruments = Instruments(self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock),
                                        self.repo_path, self.proposals, data=self.data, world=self.world,
-                                       anchor=repo.get("anchor"))
+                                       anchor=repo.get("anchor"),
+                                       inbox=resolve(repo["inbox"]) if repo.get("inbox") else None)
         self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock)
         self.socket = resolve(c["socket"]["path"])
 

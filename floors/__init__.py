@@ -70,11 +70,18 @@ FLOORS = {
         # it are observed on this very resource, so they bind both commits of the transition.
         "remediate": {"args": {"area": "segment", "item": "segment", "base": "segment", "head": "segment"},
                       "resource": "repo:{area}:{item}/{base}/{head}", "profile": "capability"},
+        # Fast-forward main from `base` to its child `head`, a client's contribution from the hosting inbox (D23).
+        # One judged transition is one commit: the author rebases and squashes onto the current main.
+        "integrate": {"args": {"contributor": "segment", "base": "segment", "head": "segment"},
+                      "resource": "repo:contrib:{contributor}/{base}/{head}", "profile": "capability"},
     },
     "conditions": {
         "remediate-autonomous": {"all": [{"observed": ["tests", "green", "real"]},
                                          {"observed": ["reproduced", "yes", "real"]}]},
         "remediate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
+                                       {"observed": ["review", "approved", "real"]}]},
+        # A client's work never lands on its author's word: main's own tests and a signed human review, always.
+        "integrate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
                                        {"observed": ["review", "approved", "real"]}]},
     },
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.

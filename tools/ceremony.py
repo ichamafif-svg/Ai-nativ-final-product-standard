@@ -46,6 +46,7 @@ GRANTS = {
     "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*"], []),
     "agent_recipe": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-autonomous"]),
     "agent_review": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"]),
+    "agent_integrate": ("agent", ["effect:integrate"], ["repo:contrib:*"], ["integrate-reviewed"]),
     "reviewer": ("h3", ["observe", "certify:real"], ["repo:*"], []),
     "officer": ("h2", ["observe", "certify:real"], ["org:*"], []),
 }
@@ -117,6 +118,8 @@ def init(args) -> None:
         anchor = git("-C", str(source), "rev-parse", "refs/heads/main")
         git("clone", "-q", "--bare", "--no-hardlinks", str(source), str(d / "agent" / "store"))  # U owns no inode of the repository
         repository = f'kind = "git"\npath = "{source}"\nproposals = "agent/store"\nanchor = "{anchor}"'
+        if getattr(args, "inbox", None):                    # D23: clients' contributions, from the hosting gate
+            repository += f'\ninbox = "{Path(args.inbox).resolve()}"'
     assessor_public = assessor.public
     data_section = ""
     if getattr(args, "data", None):
@@ -206,7 +209,8 @@ def separate(args) -> None:
     # The guard never runs git inside U's store, so U's repository configuration never executes as the guard.
     reads = {guard: [d / "agent" / "store"], agent: []}
     if c["repository"]["kind"] == "git":                     # upload-pack checks the .git of a non-bare repository
-        reads[agent] = [Path(c["repository"]["path"]), Path(c["repository"]["path"]) / ".git"]
+        reads[agent] = [Path(c["repository"]["path"]), Path(c["repository"]["path"]) / ".git",
+                        *([Path(c["repository"]["inbox"])] if "inbox" in c["repository"] else [])]
     for user, paths in reads.items():
         for path in paths:
             subprocess.run(["runuser", "-u", user.pw_name, "--", "git", "config", "--global", "--add", "safe.directory",
@@ -226,6 +230,7 @@ def main() -> int:
     i.add_argument("--github")
     i.add_argument("--token-file")
     i.add_argument("--pins")
+    i.add_argument("--inbox", help="the hosting inbox of this repository (tools/host.py)")
     i.add_argument("--data", help="a reviewed snapshot from tools/refresh_data.py, pinned by its digest")
     a = sub.add_parser("activate")
     a.add_argument("dir")

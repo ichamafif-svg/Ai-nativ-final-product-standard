@@ -57,6 +57,12 @@ def build(config_path) -> tuple[Cycle, callable]:
                   api_key=resolve(api).read_text().strip() if api else None, publish=publish)
     cycle = Cycle(GatewayClient(resolve(c["socket"]["path"])), WorkEngine(store.parent / "work.db"), agent, ROUTES,
                   clock=lambda: int(time.time() * 1000), main=main, state_path=store.parent / "proposals.json")
+    if repo.get("inbox") and "agent_integrate" in c["grants"]:
+        from .contributions import Integrator
+        integrator = Integrator(cycle.service, signer, c["grants"]["agent_integrate"], resolve(repo["inbox"]),
+                                main=main, clock=lambda: cycle.clock(), notes=store.parent / "contributions.json")
+        run = cycle.run
+        cycle.run = lambda mode="RUN": {**run(mode), "integrate": integrator.run()}
     return cycle, refresh
 
 

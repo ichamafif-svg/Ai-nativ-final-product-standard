@@ -30,7 +30,7 @@
       "trusted/release.py",
       "trusted/daemon.py"
     ],
-    "ceiling": 1153,
+    "ceiling": 1154,
     "breaks": "safety (T): a premise or a departure that must not happen"
   },
   "restrictive": {
@@ -56,7 +56,7 @@
       "trusted/data.py",
       "trusted/github.py"
     ],
-    "ceiling": 690,
+    "ceiling": 719,
     "breaks": "safety (T06/T07/T08): a fact that opens a right, or a provider write"
   },
   "hosting": {
@@ -68,8 +68,8 @@
   },
   "_raised": {
     "date": "2026-10-10",
-    "trusted": "960 -> 1150: operator process (daemon), release identity (T01); 1150 -> 1153: GitHub API choice in the config; strict umask of the guard (T07 by Unix users)",
-    "integrations": "450 -> 672: all floor probes, pinned data (D17), GitHub adapter (D05); 672 -> 690: the same CAS over git push --force-with-lease where GraphQL is unreachable",
+    "trusted": "960 -> 1150: operator process (daemon), release identity (T01); 1150 -> 1153: GitHub API choice in the config; strict umask of the guard (T07 by Unix users); 1153 -> 1154: integrate shares the effect port of remediate (D23)",
+    "integrations": "450 -> 672: all floor probes, pinned data (D17), GitHub adapter (D05); 672 -> 690: the same CAS over git push --force-with-lease where GraphQL is unreachable; 690 -> 719: tests of clients' contributions from the inbox, integrate in readback and proof (D23)",
     "visibility": "248 -> 250: an uncovered measure asks for observation, not repair"
   }
 }

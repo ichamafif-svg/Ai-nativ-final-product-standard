@@ -86,3 +86,84 @@ class ThroughTheGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Integration(unittest.TestCase):
+    """A client's contribution reaches main only with main's tests green and a human review of that exact commit."""
+
+    def test_reviewed_green_work_lands_and_red_work_never_does(self):
+        import argparse
+        import threading
+        sys.path.insert(0, str(ROOT / "tools"))
+        sys.path.insert(0, str(ROOT / "tests"))
+        import ceremony
+        from test_install import Clock
+        from test_maintenance import FILES, demo_repository
+
+        import autonomy.__main__ as agent_process
+        import trusted.daemon as daemon
+        from surface.human import load_signer, review
+        from trusted.gateway import AdmissionGateway
+
+        root = Path(tempfile.mkdtemp())
+        repo = demo_repository(root, {**FILES, "sbom.json": "{}\n"})
+        inbox = root / "inbox.git"
+        git("init", "-q", "--bare", str(inbox))
+        (inbox / "hooks" / "update").write_text(HOOK)
+        os.chmod(inbox / "hooks" / "update", 0o755)
+        clock = Clock(1_900_000_000_000)
+        ceremony.now = daemon.now_ms = clock
+        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None,
+                                         pins=str(root / "elsewhere" / "pins.db"), inbox=str(inbox)))
+        clock.t += 3_600_100
+        ceremony.activate(argparse.Namespace(dir=str(root / "install")))
+        operator = daemon.Installation(root / "install" / "standard.toml")
+        gateway = AdmissionGateway(operator.socket, operator.service)
+        threading.Thread(target=gateway.serve_forever, daemon=True).start()
+        try:
+            cycle, refresh = agent_process.build(root / "install" / "standard.toml")
+            cycle.clock = clock
+            main = git("rev-parse", "main", cwd=repo).stdout.strip()
+
+            def contribute(author, text):
+                work = root / f"work-{author}"
+                git("clone", "-q", str(repo), str(work))
+                (work / "app.py").write_text(text)
+                git("-c", f"user.name={author}", "-c", f"user.email={author}@client", "commit", "-qam", author,
+                    cwd=work)
+                git("push", "-q", str(inbox), f"HEAD:refs/heads/{author}/change", cwd=work,
+                    env={"STANDARD_IDENTITY": author})
+                return git("rev-parse", "HEAD", cwd=work).stdout.strip()
+
+            def rounds(n=2):
+                for _ in range(n):
+                    operator.tick()
+                    refresh()
+                    clock.t += 120_000                       # past the agent's backoff
+                    cycle.run()
+                operator.tick()
+
+            def approve(author, head):
+                keys = root / "install" / "keys"
+                view = operator.service.view()
+                operator.service.admit(review(view, load_signer("h3", keys / "h3.key"),
+                                              operator.config["grants"]["reviewer"], f"contrib:{author}", main, head,
+                                              "approved", at=clock()))
+
+            red = contribute("bob", "def add(a, b):\n    return a - b\n")
+            green = contribute("alice", "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n")
+            rounds()
+            self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # no review: nothing moves
+            approve("bob", red)
+            rounds()
+            self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # reviewed but red: never
+            approve("alice", green)
+            rounds()
+            self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), green)
+            state = operator.journal.snapshot()
+            landed = [i for i in state["intents"].values() if i["op"] == "integrate"]
+            self.assertEqual([i["args"]["contributor"] for i in landed], ["alice"])
+            self.assertEqual(state["observations"]["repo:main:lineage|unjudged|scanner"]["status"], "none")
+        finally:
+            gateway.shutdown()
+            gateway.server_close()

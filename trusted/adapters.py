@@ -56,7 +56,7 @@ class Readback:
 
     def readback(self, intent_id: str, state: dict):
         it = state["intents"][intent_id]
-        if it["op"] != "remediate" or not self.repository.applied(it["args"]["head"]):
+        if it["op"] not in ("remediate", "integrate") or not self.repository.applied(it["args"]["head"]):
             return None                                      # unknown stays unknown
         body = {"id": f"rec-{uuid.uuid4().hex}", "at": max(self.clock(), state["last_at"] + 1),
                 "author": self.signer.identity, "under": self.capability, "intent": intent_id, "result": "applied"}

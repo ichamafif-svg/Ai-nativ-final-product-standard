@@ -15,6 +15,10 @@ from .data import EMPTY
 from .recipes import recipes_for
 from .signing import Signer, envelope
 
+MAIN_OPS = ("remediate", "integrate")                 # the operations that move main, by the same compare-and-swap
+AUTHOR = re.compile(r"refs/heads/([a-z0-9][a-z0-9_-]{0,63})/[^\s]+")
+REMEASURE_MS = 12 * 3_600_000
+
 
 class Instruments:
     """T06: measure main's floor targets, and every proposed transition whose base is main.
@@ -24,8 +28,9 @@ class Instruments:
     signed human review."""
 
     def __init__(self, service, instrument: instruments.Instrument, repo, proposals, *, data=EMPTY, world=None,
-                 anchor: str | None = None, install: bool = False):
+                 anchor: str | None = None, install: bool = False, inbox=None):
         self.service, self.instrument, self.repo, self.proposals = service, instrument, Path(repo), Path(proposals)
+        self.inbox, self.measured = inbox, {}
         self.data, self.world, self.install = data, world, install
         clock = instrument.clock                          # statements never fall behind the ledger's last instant
         instrument.clock = lambda: max(clock(), service.journal.snapshot()["last_at"] + 1)
@@ -37,7 +42,7 @@ class Instruments:
     def _judged(self, state) -> set:
         """Heads of remediate effects the line shows applied: the only commits allowed on main since the anchor."""
         return {it["args"]["head"] for i, it in state["intents"].items()
-                if it["op"] == "remediate" and state["line"].get(i, {}).get("state") == "proving"}
+                if it["op"] in MAIN_OPS and state["line"].get(i, {}).get("state") == "proving"}
 
     def _admit(self, envelope) -> int:
         self.service.admit(envelope)
@@ -74,7 +79,31 @@ class Instruments:
             resource = f"repo:{area}:{item}/{main}/{ref}"
             facts["tests"] = instruments.tests(self.repo, main, ref, install=self.install)
             admitted += sum(self._admit(self.instrument.observation(domain, resource, p, v)) for p, v in facts.items())
-        return {"admitted": admitted, "main": main}
+        return {"admitted": admitted + self.contributions(domain, main), "main": main}
+
+    def contributions(self, domain: str, main: str) -> int:
+        """`tests` for every inbox branch whose head is a direct child of main, on repo:contrib:{author}/{main}/{head}.
+        The author is the inbox branch's first segment, which the gate's hook binds to the pushing key. Main's own suite
+        runs against the contribution's code, so a contribution cannot weaken the tests that judge it."""
+        if not self.inbox:
+            return 0
+        admitted, now = 0, self.instrument.clock()
+        listed = instruments.git(self.repo, "ls-remote", str(self.inbox), "refs/heads/*")
+        for line in listed.splitlines():                    # read from outside: the inbox's config is the gate's
+            head, ref = line.split("\t")
+            author = AUTHOR.fullmatch(ref)
+            resource = f"repo:contrib:{author[1]}/{main}/{head}" if author else None
+            if resource is None or now - self.measured.get(resource, -REMEASURE_MS) < REMEASURE_MS:
+                continue
+            subprocess.run(["git", "-C", str(self.repo), "fetch", "-q", "--no-tags", str(self.inbox), head],
+                           capture_output=True, timeout=300)
+            parents = instruments.git(self.repo, "rev-list", "--parents", "-n", "1", head).split()
+            if parents[1:] != [main]:
+                continue                                    # not on the current main: the author rebases
+            self.measured[resource] = now
+            status = instruments.tests(self.repo, main, head, install=self.install)
+            admitted += self._admit(self.instrument.observation(domain, resource, "tests", status))
+        return admitted
 
 
 class Prover:
@@ -91,7 +120,7 @@ class Prover:
             if ob["stage"] != "proof":
                 continue
             it = state["intents"][ob["intent"]]
-            if it["op"] != "remediate" or not self.repository.applied(it["args"]["head"]):
+            if it["op"] not in MAIN_OPS or not self.repository.applied(it["args"]["head"]):
                 continue
             body = {"id": f"proof-{uuid.uuid4().hex}", "at": max(self.clock(), state["last_at"] + 1),
                     "author": self.signer.identity, "under": self.capability, "resource": it["resource"],

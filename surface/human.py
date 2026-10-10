@@ -6,6 +6,7 @@ is the stand-in for this version.
 from __future__ import annotations
 
 import base64
+import re
 import time
 import uuid
 from pathlib import Path
@@ -40,6 +41,11 @@ def review(view: dict, signer: Signer, under: str, target_id: str, base: str, he
     """A review binds the exact transition base → head of one remediable target, never a mutable pointer."""
     if verdict not in REVIEW:
         raise ValueError(f"a review is one of {REVIEW}")
+    if target_id.startswith("contrib:"):                  # contrib:AUTHOR, a client's contribution (D23)
+        author = target_id.split(":", 1)[1]
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", author):
+            raise ValueError("contrib:AUTHOR")
+        return _observation(view, signer, under, f"repo:contrib:{author}/{base}/{head}", "review", verdict, at)
     target = next(t for t in view["law"]["effective"]["targets"] if t["id"] == target_id)
     _, area, item = target["resource"].split(":", 2)
     return _observation(view, signer, under, f"repo:{area}:{item}/{base}/{head}", "review", verdict, at)
