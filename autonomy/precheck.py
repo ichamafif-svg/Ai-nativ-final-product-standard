@@ -22,17 +22,8 @@ from trusted.recipes import recipes_for
 
 from .sandbox import Sandbox
 
-LOCAL = ("secrets", "sbom", "actions", "vulns", "licenses", "deps-age", "sast")   # needs no provider and no ledger
-COUNT = re.compile(r"found:(\d+)")
-
-
-def _worse(expect: str, before: str, after: str) -> bool:
-    if after == expect or after == before:
-        return False
-    if before == expect or after.startswith("uncovered"):
-        return True
-    b, a = COUNT.fullmatch(before), COUNT.fullmatch(after)
-    return bool(b and a and int(a[1]) > int(b[1]))
+LOCAL = probes.LOCAL_PROBES
+_worse = probes._worse
 
 
 def measure(tree, targets: dict, data) -> dict:

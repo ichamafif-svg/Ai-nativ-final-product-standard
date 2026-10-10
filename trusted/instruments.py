@@ -213,6 +213,44 @@ PROBES = {"secrets": lambda t, c: secrets(t), "sbom": lambda t, c: sbom(t), "act
           "licenses": licenses, "deps-age": deps_age, "sast": sast, "branch": branch, "lineage": lineage}
 
 
+LOCAL_PROBES = ("secrets", "sbom", "actions", "vulns", "licenses", "deps-age", "sast")   # no provider, no ledger
+COUNT = re.compile(r"found:(\d+)")
+
+
+def _worse(expect: str, before: str, after: str) -> bool:
+    if after == expect or after == before:
+        return False
+    if before == expect or after.startswith("uncovered"):
+        return True
+    b, a = COUNT.fullmatch(before), COUNT.fullmatch(after)
+    return bool(b and a and int(a[1]) > int(b[1]))
+
+
+def regressions(repo, base: str, head: str, targets: dict, ctx: dict, follow_ups=frozenset()) -> tuple[str, list]:
+    """`none` only if no floor target measured on head is worse than on base. A target a recipe closes on the next
+    pass (`follow_ups`: a new pin makes the SBOM stale) is not a regression of the contribution."""
+    try:
+        b, h = Snapshot(repo, base), Snapshot(repo, head)
+        found = []
+        for tid in LOCAL_PROBES:
+            if tid not in targets or tid in follow_ups:
+                continue
+            measures = []
+            for tree in (b, h):
+                try:
+                    measures.append(PROBES[tid](tree, ctx))
+                except Exception as exc:
+                    measures.append(exc)
+            before, after = (verdict(targets[tid]["expect"], m) for m in measures)
+            if _worse(targets[tid]["expect"], before, after):
+                m = measures[1]
+                where = [] if isinstance(m, BaseException) else list(m.details or map(str, m.findings))[:10]
+                found.append(f"{tid}: {before} -> {after} {where}")
+        return verdict("none", Measure(frozenset({"floors"}), frozenset({"floors"}), tuple(found))), found
+    except Exception as exc:                               # an exception is a measure: nothing was covered
+        return verdict("none", exc), [f"{type(exc).__name__}: {str(exc)[:300]}"]
+
+
 def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = False) -> Measure:
     """Main's tests/ against the code of `code_commit`, in a fresh environment with an empty runner configuration.
     The universe is the set of tests main's suite runs on main."""

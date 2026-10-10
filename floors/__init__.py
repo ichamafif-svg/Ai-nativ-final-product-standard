@@ -80,8 +80,10 @@ FLOORS = {
                                          {"observed": ["reproduced", "yes", "real"]}]},
         "remediate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
                                        {"observed": ["review", "approved", "real"]}]},
-        # A client's work never lands on its author's word: main's own tests and a signed human review, always.
+        # A client's work never lands on its author's word: main's own tests, no new gap on any floor target, and a
+        # signed human review, always.
         "integrate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
+                                       {"observed": ["regressions", "none", "real"]},
                                        {"observed": ["review", "approved", "real"]}]},
     },
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.

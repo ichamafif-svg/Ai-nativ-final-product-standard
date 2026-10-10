@@ -95,9 +95,10 @@ class Instruments:
         tmp.replace(self.findings_path)
 
     def contributions(self, domain: str, main: str) -> int:
-        """`tests` for every inbox branch whose head is a direct child of main, on repo:contrib:{author}/{main}/{head}.
-        The author is the inbox branch's first segment, which the gate's hook binds to the pushing key. Main's own suite
-        runs against the contribution's code, so a contribution cannot weaken the tests that judge it."""
+        """`tests` and `regressions` for every inbox branch whose head is a direct child of main, on
+        repo:contrib:{author}/{main}/{head}. The author is the inbox branch's first segment, which the gate's hook binds
+        to the pushing key. Main's own suite runs against the contribution's code, so a contribution cannot weaken the
+        tests that judge it; every floor probe runs on main and on the contribution, so it cannot open a new gap."""
         if not self.inbox:
             return 0
         admitted, now = 0, self.instrument.clock()
@@ -117,6 +118,11 @@ class Instruments:
             status, details = instruments.tests_report(self.repo, main, head, install=self.install)
             self.instrument.findings[f"{resource}|tests"] = {"status": status, "details": details}
             admitted += self._admit(self.instrument.observation(domain, resource, "tests", status))
+            targets = {t["id"]: t for t in self.service.view()["law"]["effective"]["targets"]}
+            status, details = instruments.regressions(self.repo, main, head, targets, {"data": self.data},
+                                                      frozenset(recipes_for(self.data)))
+            self.instrument.findings[f"{resource}|regressions"] = {"status": status, "details": details}
+            admitted += self._admit(self.instrument.observation(domain, resource, "regressions", status))
         return admitted
 
 

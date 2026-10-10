@@ -89,9 +89,10 @@ if __name__ == "__main__":
 
 
 class Integration(unittest.TestCase):
-    """A client's contribution reaches main only with main's tests green and a human review of that exact commit."""
+    """A client's contribution reaches main only with main's tests green, no new gap on any floor target and a human
+    review of that exact commit."""
 
-    def test_reviewed_green_work_lands_and_red_work_never_does(self):
+    def test_reviewed_green_clean_work_lands_and_red_or_leaky_work_never_does(self):
         import argparse
         import threading
         sys.path.insert(0, str(ROOT / "tools"))
@@ -151,12 +152,17 @@ class Integration(unittest.TestCase):
                                               "approved", at=clock()))
 
             red = contribute("bob", "def add(a, b):\n    return a - b\n")
+            leaky = contribute("eve", 'TOKEN = "AKIA' + 'ABCDEFGHIJKLMNOP"\n\n\ndef add(a, b):\n    return a + b\n')
             green = contribute("alice", "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n")
             rounds()
             self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # no review: nothing moves
             approve("bob", red)
+            approve("eve", leaky)
             rounds()
             self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # reviewed but red: never
+            state = operator.journal.snapshot()                                          # reviewed, green, but a
+            self.assertEqual(state["observations"][f"repo:contrib:eve/{main}/{leaky}|regressions|scanner"]["status"],
+                             "found:1")                                                  # new secret: never
             approve("alice", green)
             rounds()
             self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), green)
