@@ -52,8 +52,8 @@ class Instruments:
                "judged": self._judged(self.service.journal.snapshot())}
         admitted = sum(self._admit(env) for env in self.instrument.measure_targets(domain, self.repo, main, targets, ctx))
         recipes = recipes_for(self.data)
-        for ref in instruments.git(self.proposals, "for-each-ref", "--format=%(objectname)",
-                                   "refs/standard/proposals/").split():
+        listed = instruments.git(self.repo, "ls-remote", str(self.proposals), "refs/standard/proposals/*")
+        for ref in listed.split()[::2]:                     # never run git inside U's store: its config is U's
             subprocess.run(["git", "-C", str(self.repo), "fetch", "-q", "--no-tags", str(self.proposals), ref],
                            capture_output=True, timeout=300)
             parents = instruments.git(self.repo, "rev-list", "--parents", "-n", "1", ref).split()

@@ -39,7 +39,9 @@ def qualify(config_path) -> list:
                      f"journal device {os.stat(journal.parent).st_dev}, pins device {os.stat(pins.parent).st_dev}",
                      "the pins are not on the journal's filesystem",
                      "that the two volumes are not restored together from one backup (L-04)"))
-    loose = [p.name for p in keys.glob("*.key") if p.stat().st_mode & 0o077 or p.stat().st_uid != os.getuid()]
+    sep = c.get("separation")
+    owner = __import__("pwd").getpwnam(sep["guard_user"]).pw_uid if sep else os.getuid()
+    loose = [p.name for p in keys.glob("*.key") if p.stat().st_mode & 0o077 or p.stat().st_uid != owner]
     out.append(probe("key files owner-only", not loose, loose or "all 0600, owned by this user",
                      "no other local user can read a key file", "who else holds a copy (custody, L-03)"))
     humans = [h for h in HUMANS if (keys / f"{h}.key").exists()]
@@ -71,9 +73,21 @@ def qualify(config_path) -> list:
         except Exception as exc:
             out.append(probe("T07 only the guard moves main", False, f"{type(exc).__name__}: {exc}",
                              "nothing", "the protection of main could not be read"))
+    elif not sep:
+        out.append(probe("T07 only the guard moves main", False, "local git repository, one Unix user",
+                         "nothing", "without `ceremony.py separate`, the agent's user can write the repository"))
     else:
-        out.append(probe("T07 only the guard moves main", False, "local git repository",
-                         "nothing", "a local repository has no access control: anyone with the files can write"))
+        import pwd
+        guard, agent = pwd.getpwnam(sep["guard_user"]), pwd.getpwnam(sep["agent_user"])
+        tree = Path(repo["path"])
+        writable = [str(q) for q in [tree, *tree.rglob("*")] if not q.is_symlink()
+                    and (q.stat().st_uid != guard.pw_uid or q.stat().st_mode & 0o022)]
+        ok = not writable and guard.pw_uid != agent.pw_uid and 0 not in (guard.pw_uid, agent.pw_uid)
+        out.append(probe("T07 only the guard moves main", ok,
+                         writable[:5] or f"{tree} owned by {guard.pw_name}, no group or other write; "
+                                         f"the agent runs as {agent.pw_name}",
+                         "the host's kernel refuses any write to the repository by the agent's user",
+                         "root, sudo rules that let someone become the guard, and the guard process itself"))
     return out
 
 

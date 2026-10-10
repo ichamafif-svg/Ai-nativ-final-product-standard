@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 import threading
 import time
@@ -135,6 +136,7 @@ class Installation:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    os.umask(0o027)                     # T07: what the guard writes, its group (the agent, for the socket) only reads
     if len(argv) < 2 or argv[0] not in ("serve", "tick"):
         print("usage: python -m trusted serve|tick standard.toml [interval-seconds]")
         return 2

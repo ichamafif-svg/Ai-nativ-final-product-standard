@@ -303,7 +303,7 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 150 / 1 150** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **672 / 672**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 153 / 1 153** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **690 / 690**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -806,7 +806,7 @@ Le noyau raisonne sur des signatures et des faits. Plusieurs garanties reposent 
 | Garantie | Prémisse physique | Essai qui la démontre |
 |---|---|---|
 | Quorum (G01) | Deux clés = deux personnes | Enrôlement des humains et custody des clés vérifiés par un tiers |
-| Un seul chemin vers `main` (G09, G15) | Seule la garde peut écrire | Tenter d'écrire avec chaque autre token, App ou règle de bypass existante |
+| Un seul chemin vers `main` (G09, G15) | Seule la garde peut écrire | Git local : deux utilisateurs Unix (`ceremony.py separate`), dépôt possédé par la garde sans écriture de groupe ni d'autres, umask 027 de la garde, store de l'agent cloné sans hardlinks. **Démontré** (D22). GitHub : tenter d'écrire avec chaque autre token, App ou règle de bypass existante |
 | Anti-rollback (G11) | Pins hors du domaine de restauration du journal | Restaurer le disque du journal seul, puis les deux ensemble |
 | Temps (G06) | Témoins réellement indépendants | Arrêter, décaler, compromettre un témoin |
 | Second juge (G12) | Domaine de panne distinct | Faute injectée dans un juge, l'autre bloque |
@@ -999,6 +999,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D19 | Une évaluation T émise par l'opérateur est marquée auto-évaluée et affichée comme telle ; seule une évaluation par un évaluateur épinglé indépendant compte pour la production | Arrêtée |
 | D20 | Périmètre : Python (`requirements.txt` épinglé), GitHub Actions, git, GitHub. Le reste est `uncovered` ou `NO_ROUTE`, visible (§15.4) | Arrêtée |
 | D21 | La redevabilité reste dans le processus T pour cette version ; son isolation dans un worker confiné est reportée, la limite est déclarée | Arrêtée |
+| D22 | Le produit se prouve d'abord en **git local** ; GitHub reste un adaptateur | En git local, « seule la garde déplace `main` » est tenu par deux utilisateurs Unix et vérifié par `qualify.py` ; sur GitHub il dépend de tokens, rulesets et d'une offre payante pour les dépôts privés. Les propositions de l'agent sur GitHub sont des branches `standard/proposals/*` (protégeables par ruleset) ; là où GraphQL est inaccessible, la garde fait le même CAS par `git push --force-with-lease=main:<base>` |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1026,9 +1027,12 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 
 1. Créer le dépôt de démo à partir de `demo/` : il démarre hors de ses floors (dépendance vulnérable, SBOM absent, action non épinglée, secret en dur).
 2. `python tools/refresh_data.py requirements.txt --actions actions/checkout@v4 actions/setup-python@v5 > data.json`, puis relire l'instantané.
-3. `python tools/ceremony.py init DIR --github OWNER/NAME --token-file F --pins /autre/volume/pins.db --data data.json` : clés, loi, genèse, propositions de capacités, auto-évaluation, instantané épinglé par son digest.
+3. `python tools/ceremony.py init DIR --repo /srv/standard/repo --pins /autre/volume/pins.db --data data.json` (ou `--github OWNER/NAME --token-file F`) : clés, loi, genèse, propositions de capacités, auto-évaluation, instantané épinglé par son digest.
 4. Une heure plus tard (FLOOR-0) : `python tools/ceremony.py activate DIR`.
-5. Lancer les deux processus. `python tools/qualify.py DIR/standard.toml` liste ce que la démo ne tient pas physiquement.
+5. En root : `python tools/ceremony.py separate DIR --guard-user standard-guard --agent-user standard-agent` (l'agent doit être dans le groupe de la garde pour joindre le socket). La garde possède l'installation, le dépôt et toutes les clés sauf celle de l'agent ; l'agent ne possède que `DIR/agent`.
+6. Lancer `python -m trusted serve DIR/standard.toml` sous l'utilisateur garde et `python -m autonomy run DIR/standard.toml` sous l'utilisateur agent, chacun avec son propre `HOME`. `python tools/qualify.py DIR/standard.toml` liste ce que la démo ne tient pas physiquement.
+
+En git local, T07 est tenu par le noyau de l'hôte : l'agent ne peut ni verrouiller `refs/heads/main`, ni lire la clé de la garde, ni ouvrir le journal. La garde ne lance jamais git *dans* le store de l'agent (elle le lit de l'extérieur par `ls-remote`/`fetch`), pour que la configuration git écrite par U ne s'exécute jamais sous l'identité de la garde. Restent hors preuve : root, les règles sudo qui permettent de devenir la garde, et le processus de la garde lui-même.
 
 Côté GitHub, l'installation doit garantir que seule la garde déplace `main` (ruleset avec la garde seule en bypass) et que l'agent ne peut pousser que les branches `standard/proposals/*` (une règle de ruleset sur un motif de branche, exprimable chez GitHub ; un ref hors `refs/heads` ne l'est pas). C'est T07 : `qualify.py` le vérifie en partie et dit le reste.
 
@@ -1112,9 +1116,9 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Frontière durable (T) | Fait : journal, pins, second juge, garde, passerelle, horloge, livraison |
 | Preuves qualifiables | Fait pour les cibles retenues (§15.3) ; données tierces épinglées (D17) |
 | Travail unifié (U) | Fait : projection, Work Engine, agent, cycle, surface, revue et attestation humaines |
-| Installation | Fait : processus opérateur et agent, cérémonie en deux phases, qualification, adaptateur GitHub |
-| Jalon investisseur (D15) | Prêt à installer sur un dépôt GitHub dédié ; l'adaptateur GitHub n'a pas encore été exercé contre GitHub réel |
-| Garanties physiques (§15.2) | **Non démontrées** : exigent une installation avec des humains, des témoins et un évaluateur réellement distincts |
+| Installation | Fait : processus opérateur et agent sous deux utilisateurs Unix, cérémonie en deux phases, séparation, qualification, adaptateur GitHub |
+| Jalon investisseur (D15) | Démontré en git local avec T07 physique (qualify : PASS) ; sur GitHub réel, une réparation SBOM a atteint `main` de bout en bout, mais par les accès de la session et non par un jeton de garde distinct |
+| Garanties physiques (§15.2) | T07 **démontré** en git local. Les autres **non démontrées** : exigent des humains, des témoins, un volume de pins et un évaluateur réellement distincts |
 | Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |
 
 ---

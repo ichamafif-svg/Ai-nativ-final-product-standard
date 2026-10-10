@@ -35,7 +35,7 @@ def build(config_path) -> tuple[Cycle, callable]:
     path = Path(config_path).resolve()
     c, base = tomllib.loads(path.read_text()), path.parent
     resolve = lambda p: (base / p).resolve()
-    keyfile = resolve(c["keys"]["dir"]) / "agent.key"
+    keyfile = resolve(c.get("agent", {}).get("key", f'{c["keys"]["dir"]}/agent.key'))
     if keyfile.stat().st_mode & 0o077:
         raise PermissionError(f"{keyfile} must be readable by its owner only")
     signer = Signer("agent", Ed25519PrivateKey.from_private_bytes(base64.b64decode(keyfile.read_text().strip())))

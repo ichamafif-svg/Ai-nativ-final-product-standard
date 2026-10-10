@@ -4,6 +4,7 @@
     python tools/ceremony.py init DIR --github OWNER/NAME --token-file F [--pins PATH]
     ... at least one hour later ...
     python tools/ceremony.py activate DIR
+    python tools/ceremony.py separate DIR --guard-user U --agent-user V      (as root, before serving)
 
 `init` writes keys, the client law, the genesis, the witnesses' first checkpoint, the grant proposals, a
 self-assessment and DIR/standard.toml. `activate` anchors time again and activates the grants. The genesis grants
@@ -71,7 +72,8 @@ def init(args) -> None:
     d = Path(args.dir).resolve()
     (d / "keys").mkdir(parents=True)
     os.chmod(d / "keys", 0o700)
-    signers = {i: new_key(d / "keys" / f"{i}.key") for i in IDENTITIES}
+    (d / "agent").mkdir()                                  # U's own directory: its key, its store, its notes
+    signers = {i: new_key(d / ("agent" if i == "agent" else "keys") / f"{i}.key") for i in IDENTITIES}
     assessor = new_key(d / "keys" / "assessor.key")
     root = {"threshold": 2, "identities": {i: {"kind": k, "keys": [signers[i].root_key()]} for i, k in IDENTITIES.items()}}
     law = {"format": "standard-client/1", "floors": RELEASE.digest,
@@ -107,14 +109,14 @@ def init(args) -> None:
         mirror = d / "mirror"
         git("clone", "-q", "--mirror", f"https://github.com/{args.github}.git", str(mirror))
         anchor = git("-C", str(mirror), "rev-parse", "refs/heads/main")
-        git("clone", "-q", "--bare", f"https://github.com/{args.github}.git", str(d / "agent-store"))
+        git("clone", "-q", "--bare", f"https://github.com/{args.github}.git", str(d / "agent" / "store"))
         repository = (f'kind = "github"\nname = "{args.github}"\ntoken_file = "{Path(args.token_file).resolve()}"\n'
                       f'mirror = "mirror"\nanchor = "{anchor}"')
     else:
         source = Path(args.repo).resolve()
         anchor = git("-C", str(source), "rev-parse", "refs/heads/main")
-        git("clone", "-q", "--bare", str(source), str(d / "agent-store"))
-        repository = f'kind = "git"\npath = "{source}"\nproposals = "agent-store"\nanchor = "{anchor}"'
+        git("clone", "-q", "--bare", "--no-hardlinks", str(source), str(d / "agent" / "store"))  # U owns no inode of the repository
+        repository = f'kind = "git"\npath = "{source}"\nproposals = "agent/store"\nanchor = "{anchor}"'
     assessor_public = assessor.public
     data_section = ""
     if getattr(args, "data", None):
@@ -146,7 +148,8 @@ assessors = {{ operator = "{assessor_public}" }}
 path = "admission.sock"
 
 [agent]
-store = "agent-store"
+key = "agent/agent.key"
+store = "agent/store"
 {data_section}''')
     print(f"constituted {d}: genesis {domain}. Activate the grants after {time.ctime((journal.snapshot()["last_at"] + 3_600_000) / 1000)}:")
     print(f"    python tools/ceremony.py activate {d}")
@@ -173,6 +176,47 @@ def activate(args) -> None:
     print("grants active:", ", ".join(c["grants"]))
 
 
+def separate(args) -> None:
+    """Give K/T and U distinct Unix users (run as root). The guard owns the installation, the maintained repository and
+    every key but the agent's; the agent owns only DIR/agent and reads the rest. The kernel of the host enforces it."""
+    import grp
+    import pwd
+    import tomllib
+    d = Path(args.dir).resolve()
+    c = tomllib.loads((d / "standard.toml").read_text())
+    guard, agent = pwd.getpwnam(args.guard_user), pwd.getpwnam(args.agent_user)
+    if guard.pw_uid == agent.pw_uid or 0 in (guard.pw_uid, agent.pw_uid):
+        raise SystemExit("two distinct, unprivileged users")
+    if guard.pw_name not in grp.getgrgid(agent.pw_gid).gr_mem and agent.pw_name not in grp.getgrgid(guard.pw_gid).gr_mem:
+        print(f"note: add {agent.pw_name} to group {grp.getgrgid(guard.pw_gid).gr_name} so it can reach the socket")
+    trees = [d, Path(c["ledger"]["pins"]).parent]
+    if c["repository"]["kind"] == "git":
+        trees.append(Path(c["repository"]["path"]))
+    for tree in trees:
+        for p in [tree, *tree.rglob("*")]:
+            os.chown(p, guard.pw_uid, guard.pw_gid, follow_symlinks=False)
+            if not p.is_symlink():
+                os.chmod(p, p.stat().st_mode & ~0o022)       # nobody but the guard writes
+    for p in [d / "agent", *(d / "agent").rglob("*")]:
+        os.chown(p, agent.pw_uid, guard.pw_gid, follow_symlinks=False)
+        if p.is_dir():
+            os.chmod(p, 0o2750)                              # the guard reads proposals, never writes them
+    os.chmod(d / "agent" / "agent.key", 0o600)
+    # Each side reads the other's repository from outside only (fetch, ls-remote): git must be told to accept the owner.
+    # The guard never runs git inside U's store, so U's repository configuration never executes as the guard.
+    reads = {guard: [d / "agent" / "store"], agent: []}
+    if c["repository"]["kind"] == "git":                     # upload-pack checks the .git of a non-bare repository
+        reads[agent] = [Path(c["repository"]["path"]), Path(c["repository"]["path"]) / ".git"]
+    for user, paths in reads.items():
+        for path in paths:
+            subprocess.run(["runuser", "-u", user.pw_name, "--", "git", "config", "--global", "--add", "safe.directory",
+                            str(path)], check=True)
+    if "separation" not in c:
+        with open(d / "standard.toml", "a") as f:
+            f.write(f'\n[separation]\nguard_user = "{guard.pw_name}"\nagent_user = "{agent.pw_name}"\n')
+    print(f"separated: {guard.pw_name} runs `python -m trusted serve`, {agent.pw_name} runs `python -m autonomy run`")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -185,13 +229,19 @@ def main() -> int:
     i.add_argument("--data", help="a reviewed snapshot from tools/refresh_data.py, pinned by its digest")
     a = sub.add_parser("activate")
     a.add_argument("dir")
+    s = sub.add_parser("separate")
+    s.add_argument("dir")
+    s.add_argument("--guard-user", required=True)
+    s.add_argument("--agent-user", required=True)
     args = parser.parse_args()
     if args.command == "init":
         if bool(args.repo) == bool(args.github) or (args.github and not args.token_file):
             parser.error("give --repo, or --github with --token-file")
         init(args)
-    else:
+    elif args.command == "activate":
         activate(args)
+    else:
+        separate(args)
     return 0
 
 

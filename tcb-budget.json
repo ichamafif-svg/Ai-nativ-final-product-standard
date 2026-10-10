@@ -30,7 +30,7 @@
       "trusted/release.py",
       "trusted/daemon.py"
     ],
-    "ceiling": 1151,
+    "ceiling": 1153,
     "breaks": "safety (T): a premise or a departure that must not happen"
   },
   "restrictive": {
@@ -61,7 +61,7 @@
   },
   "_raised": {
     "date": "2026-10-10",
-    "trusted": "960 -> 1150: operator process (daemon), release identity (T01); 1150 -> 1151: GitHub API choice in the config",
+    "trusted": "960 -> 1150: operator process (daemon), release identity (T01); 1150 -> 1153: GitHub API choice in the config; strict umask of the guard (T07 by Unix users)",
     "integrations": "450 -> 672: all floor probes, pinned data (D17), GitHub adapter (D05); 672 -> 690: the same CAS over git push --force-with-lease where GraphQL is unreachable",
     "visibility": "248 -> 250: an uncovered measure asks for observation, not repair"
   }
