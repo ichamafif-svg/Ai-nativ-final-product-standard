@@ -5,6 +5,7 @@ statements through the same journal and service as anyone else: nothing here byp
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import uuid
@@ -28,9 +29,9 @@ class Instruments:
     signed human review."""
 
     def __init__(self, service, instrument: instruments.Instrument, repo, proposals, *, data=EMPTY, world=None,
-                 anchor: str | None = None, install: bool = False, inbox=None):
+                 anchor: str | None = None, install: bool = False, inbox=None, findings=None):
         self.service, self.instrument, self.repo, self.proposals = service, instrument, Path(repo), Path(proposals)
-        self.inbox, self.measured = inbox, {}
+        self.inbox, self.measured, self.findings_path = inbox, {}, findings
         self.data, self.world, self.install = data, world, install
         clock = instrument.clock                          # statements never fall behind the ledger's last instant
         instrument.clock = lambda: max(clock(), service.journal.snapshot()["last_at"] + 1)
@@ -77,9 +78,21 @@ class Instruments:
                 continue
             _, area, item = targets[tid]["resource"].split(":", 2)
             resource = f"repo:{area}:{item}/{main}/{ref}"
-            facts["tests"] = instruments.tests(self.repo, main, ref, install=self.install)
+            facts["tests"], details = instruments.tests_report(self.repo, main, ref, install=self.install)
+            self.instrument.findings[f"{resource}|tests"] = {"status": facts["tests"], "details": details}
             admitted += sum(self._admit(self.instrument.observation(domain, resource, p, v)) for p, v in facts.items())
-        return {"admitted": admitted + self.contributions(domain, main), "main": main}
+        admitted += self.contributions(domain, main)
+        self.publish()
+        return {"admitted": admitted, "main": main}
+
+    def publish(self) -> None:
+        """Findings for whoever repairs (agent, human), readable by the agent's group. Information, never a fact."""
+        if self.findings_path is None:
+            return
+        tmp = Path(f"{self.findings_path}.tmp")
+        tmp.write_text(json.dumps(self.instrument.findings, indent=1, sort_keys=True))
+        tmp.chmod(0o640)
+        tmp.replace(self.findings_path)
 
     def contributions(self, domain: str, main: str) -> int:
         """`tests` for every inbox branch whose head is a direct child of main, on repo:contrib:{author}/{main}/{head}.
@@ -101,7 +114,8 @@ class Instruments:
             if parents[1:] != [main]:
                 continue                                    # not on the current main: the author rebases
             self.measured[resource] = now
-            status = instruments.tests(self.repo, main, head, install=self.install)
+            status, details = instruments.tests_report(self.repo, main, head, install=self.install)
+            self.instrument.findings[f"{resource}|tests"] = {"status": status, "details": details}
             admitted += self._admit(self.instrument.observation(domain, resource, "tests", status))
         return admitted
 

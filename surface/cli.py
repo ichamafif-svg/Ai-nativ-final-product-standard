@@ -6,6 +6,10 @@
     python -m surface [--socket PATH] law SECTION/ID    one declaration of the effective law (floors or client)
     python -m surface review TARGET BASE HEAD --identity ID --key FILE --under GRANT [--changes-requested]
     python -m surface attest TARGET --identity ID --key FILE --under GRANT
+    python -m surface dossier HEAD --repo PATH          what a reviewer reads before signing: the agent's dossier
+
+`--findings FILE` adds the instruments' findings (where the gap is) to `context`; `--memory FILE` adds to `tasks` the
+obligations the agent gave up on. Both are information, never facts.
 
 Plain text bound to the prefix and the law digest. It reads through the admission gateway only: nothing printed
 here is a permission, and a signed envelope is the only thing an agent can submit.
@@ -49,7 +53,7 @@ def tasks(view: dict, plan: dict) -> str:
     return "\n".join(lines) if plan["tasks"] else lines[0] + "\nno open work"
 
 
-def context(view: dict, plan: dict, task_id: str) -> str:
+def context(view: dict, plan: dict, task_id: str, findings: dict | None = None) -> str:
     task = next((t for t in plan["tasks"] if t["id"] == task_id), None)
     if task is None:
         return f"no task {task_id} at this prefix"
@@ -69,8 +73,27 @@ def context(view: dict, plan: dict, task_id: str) -> str:
                     lines.append(f"  condition {name}: {json.dumps(cond['all'])}")
     for c in task["routes"]:
         lines.append(f"route {c['route']}: {c['state']} (T {', '.join(c['required_t'])})")
+    if target and findings is not None:
+        found = findings.get(f"{target['resource']}|{target['property']}")
+        if found:
+            lines.append(f"instrument reports {found['status']}; where (information, not a fact):")
+            lines += [f"  {d.splitlines()[0][:200]}" for d in found["details"][:20]]
     lines.append("submit only a signed envelope; the kernel decides.")
     return "\n".join(lines)
+
+
+def dossier(repo, head: str) -> str:
+    import subprocess
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout
+    return git("log", "-1", "--format=%H%n%an <%ae>%n%n%B", head) + git("show", "--stat", "--format=", head)
+
+
+def abandoned(memory: dict) -> str:
+    gone = {t: m["abandoned"] for t, m in memory.items() if m.get("abandoned")}
+    if not gone:
+        return ""
+    return "\nthe agent gave up on (people must decide):\n" + "\n".join(
+        f"  {t} on {a['base'][:12]}:\n    " + a["dossier"].replace("\n", "\n    ")[:1500] for t, a in sorted(gone.items()))
 
 
 def declaration(view: dict, ref: str) -> str:
@@ -87,7 +110,7 @@ def declaration(view: dict, ref: str) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m surface")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
-    parser.add_argument("command", choices=("status", "tasks", "context", "law", "review", "attest"))
+    parser.add_argument("command", choices=("status", "tasks", "context", "law", "review", "attest", "dossier"))
     parser.add_argument("ref", nargs="?")
     parser.add_argument("base", nargs="?")
     parser.add_argument("head", nargs="?")
@@ -95,7 +118,13 @@ def main(argv=None) -> int:
     parser.add_argument("--key")
     parser.add_argument("--under")
     parser.add_argument("--changes-requested", action="store_true")
+    parser.add_argument("--findings")
+    parser.add_argument("--memory")
+    parser.add_argument("--repo")
     args = parser.parse_args(argv)
+    if args.command == "dossier":
+        print(dossier(args.repo or ".", args.ref or "HEAD"))
+        return 0
     client = GatewayClient(args.socket)
     try:
         view = client.view()
@@ -118,9 +147,10 @@ def main(argv=None) -> int:
     if args.command == "status":
         print(status(view))
     elif args.command == "tasks":
-        print(tasks(view, plan))
+        print(tasks(view, plan) + (abandoned(json.loads(open(args.memory).read())) if args.memory else ""))
     elif args.command == "context":
-        print(context(view, plan, args.ref or (plan["tasks"][0]["id"] if plan["tasks"] else "")))
+        print(context(view, plan, args.ref or (plan["tasks"][0]["id"] if plan["tasks"] else ""),
+                      json.loads(open(args.findings).read()) if args.findings else None))
     else:
         print(declaration(view, args.ref or ""))
     return 0

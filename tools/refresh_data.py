@@ -40,10 +40,25 @@ def advisories(name, version) -> list:
     return out
 
 
-def package(name) -> dict:
-    info = get(f"https://pypi.org/pypi/{name}/json")["info"]
+def package(name, pinned: str | None = None) -> dict:
+    """Metadata, plus what an upgrade needs: the releases after the pin and where their changes are written."""
+    reply = get(f"https://pypi.org/pypi/{name}/json")
+    info = reply["info"]
+    urls = {k.lower(): v for k, v in (info.get("project_urls") or {}).items()}
+    changelog = next((v for k, v in urls.items() if any(w in k for w in ("changelog", "changes", "release", "history"))),
+                     None)
+    newer = []
+    if pinned is not None:
+        from packaging.version import InvalidVersion, Version
+        for v, files in reply.get("releases", {}).items():
+            try:
+                if Version(v) > Version(pinned) and not Version(v).is_prerelease and files:
+                    newer.append((Version(v), v, min(f["upload_time"] for f in files)[:10]))
+            except InvalidVersion:
+                continue
     return {"latest": info["version"], "license": info.get("license_expression") or info.get("license") or "",
-            "classifiers": [c for c in info.get("classifiers", []) if c.startswith("License ::")]}
+            "classifiers": [c for c in info.get("classifiers", []) if c.startswith("License ::")],
+            "changelog": changelog, "releases": [{"version": v, "date": d} for _, v, d in sorted(newer)][-30:]}
 
 
 def snapshot(requirements: Path, actions=()) -> dict:
@@ -60,7 +75,7 @@ def snapshot(requirements: Path, actions=()) -> dict:
         repo, tag = ref.split("@", 1)
         resolved[ref] = get(f"https://api.github.com/repos/{repo}/commits/{tag}")["sha"]
     return {"format": "standard-data/1", "taken_at": int(time.time() * 1000), "advisories": adv,
-            "packages": {n.lower(): package(n) for n, _ in pins}, "actions": resolved}
+            "packages": {n.lower(): package(n, v) for n, v in pins}, "actions": resolved}
 
 
 def main() -> int:

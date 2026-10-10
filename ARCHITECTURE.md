@@ -303,7 +303,7 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 153 / 1 153** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **690 / 690**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**, passerelle d'hébergement **71 / 71**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 155 / 1 155** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **756 / 756**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**, passerelle d'hébergement **71 / 71**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -695,6 +695,24 @@ Pour certains risques, un contrôle IA parallèle, caché de l'agent, peut être
 
 ---
 
+### 11.8 Ce que l'agent reçoit pour bien coder (D25)
+
+Le juge reste séparé ; l'agent reçoit tout ce qui l'aide à réussir et rien de ce qui l'aiderait à contourner. Rien de ce qui suit n'ouvre un droit.
+
+| Besoin | Pièce | Où |
+|---|---|---|
+| Savoir **où** est l'écart | Les instruments publient leurs constats à côté des faits : `chemin:ligne:règle`, test en échec et sa trace. Un secret est localisé, jamais cité. Fichier `findings.json` lisible par le groupe de l'agent ; `surface --findings … context` | T06 (publication), U (lecture) |
+| Savoir **pourquoi** le juge a refusé | Le verdict des tests mesuré par le scanner sur la proposition exacte ; un rouge devient une leçon et la proposition est refaite | `autonomy/cycle.py` |
+| Exécuter sans risque | Bac à sable : `unshare -rn` (aucun réseau), environnement vide, `HOME` jetable, limite mémoire et délai, arbre détaché supprimé ensuite | `autonomy/sandbox.py` |
+| Ne pas ouvrir un autre écart | Précontrôle de **toute la loi** sur le candidat : toutes les sondes locales avant/après, la suite de `main` dans le bac à sable, ruff (erreurs réelles) et mypy sur les fichiers modifiés. Une régression qu'une recette referme au tour suivant (SBOM périmé après une montée de version) est un suivi, pas un blocage | `autonomy/precheck.py` |
+| Ne pas tourner en rond | Mémoire par obligation (tentative, base, issue, cause) relue avant chaque essai ; budget de tentatives par base de `main` ; au-delà l'agent s'arrête et laisse un dossier (`surface --memory … tasks`). L'escalade du registre reste celle de l'échéance : l'abandon de l'agent est visible, pas un fait | `autonomy/memory.py` |
+| Comprendre le dépôt | Carte AST : modules, définitions, imports, qui appelle quoi ; les appelants des fichiers en cause sont donnés au modèle | `autonomy/repomap.py` |
+| Monter une dépendance | L'instantané figé porte aussi les versions publiées après l'épingle, leur date et l'URL du changelog | `tools/refresh_data.py` |
+| Faciliter la revue | Chaque proposition à relire porte un dossier dans son message de commit : pourquoi, quoi, ce que l'agent a vérifié et comment, risques ; `surface dossier HEAD --repo …` | `autonomy/agent.py` |
+| Choisir le modèle | Porte unique vers les LLM (Anthropic, ou tout point compatible OpenAI) ; niveau `small` ou `frontier` selon la cible ; tout secret détecté masqué ; une ligne de journal par envoi (fournisseur, modèle, octets, masquages, SHA-256 du prompt, jamais le contenu) ; une réponse qui écrit un masque est refusée | `autonomy/llm.py` |
+
+Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes au modèle, nouveau candidat ; il ne propose que ce qui passe ses propres contrôles. Le juge mesure ensuite le commit exact, sous une autre identité.
+
 ## 12. Floors de la release
 
 Les floors portent la direction (autonomie, sécurité, conformité) dans le **même langage** qu'une loi client.
@@ -1002,6 +1020,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D22 | Le produit se prouve d'abord en **git local** ; GitHub reste un adaptateur | En git local, « seule la garde déplace `main` » est tenu par deux utilisateurs Unix et vérifié par `qualify.py` ; sur GitHub il dépend de tokens, rulesets et d'une offre payante pour les dépôts privés. Les propositions de l'agent sur GitHub sont des branches `standard/proposals/*` (protégeables par ruleset) ; là où GraphQL est inaccessible, la garde fait le même CAS par `git push --force-with-lease=main:<base>` |
 | D23 | **Produit souverain** : notre interface, nos serveurs git, nos agents, des LLM frontier par API seulement quand une recette ne suffit pas. GitHub n'est plus qu'un adaptateur facultatif | Trois chantiers. (1) **Hébergement** : les dépôts clients vivent chez nous ; les clients passent par une passerelle SSH (commande forcée) qui lit le dépôt canonique et n'écrit que dans une boîte de dépôt, sous `refs/heads/<identité>/*` ; `main` ne bouge que par le CAS de la garde. (2) **Interface** : une application web au-dessus de `surface/` ; aucune clé humaine sur le serveur (signature côté navigateur ou clé matérielle), sinon le quorum humain est du théâtre. (3) **LLM** : une seule porte d'egress, multi-fournisseurs, avec masquage des secrets et journal de chaque envoi (R15). Conséquence de périmètre : la cible GitHub Actions de D20 devient secondaire ; la CI qui exécute les tests est la nôtre et entre dans la TCB |
 | D24 | Le travail d'un client entre dans `main` par une opération de la loi, `integrate`, jamais par un droit d'écriture | Même ligne d'effet que `remediate` (CAS de la garde, readback, preuve, lignée) ; condition `integrate-reviewed` = tests de `main` verts sur le code de la contribution + revue humaine signée de cette transition exacte. Un commit par contribution, directement enfant du `main` courant, pour que chaque commit de `main` reste la tête d'un effet jugé. Le relecteur doit être une autre personne que l'auteur : tenu par l'organisation (les identités de l'hébergement ne sont pas des humains de la loi), pas encore par le noyau |
+| D25 | L'agent reçoit des **aides**, jamais des droits : constats localisés, verdicts du juge, bac à sable sans réseau, précontrôle de toute la loi, mémoire et budget, carte du dépôt, données de mise à jour, dossier du relecteur, porte LLM unique | Un agent qui oublie ses exigences en route est rejugé à chaque transition par la loi entière ; ces aides servent à ce qu'il réussisse du premier coup. Le précontrôle et le bac à sable ne prouvent rien : le juge reste séparé (§11.8) |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1055,7 +1074,8 @@ trusted/     T — journal, pins, garde, adaptateurs d'effet, readback, horloge,
              livraison, second juge (budget restrictif), passerelle d'admission,
              instruments T06 et recettes (ils attestent des faits qui ouvrent des droits).
 floors/      Floors de la release, déclaratifs, couverts par le digest.
-autonomy/    U — découverte, projection, Work Engine, agents, recettes, intégrations.
+autonomy/    U — découverte, projection, Work Engine, agent, cycle, bac à sable, précontrôle,
+             mémoire, carte du dépôt, porte LLM, contributions.
 surface/     Interface humaine, point d'entrée agent (`python -m surface`).
 compliance/  Projection clauses ISO/NIS2/DORA (hors TCB, lecture seule).
 tests/       Un test par règle du registre §17, un par garantie G01–G16,
@@ -1124,7 +1144,8 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Installation | Fait : processus opérateur et agent sous deux utilisateurs Unix, cérémonie en deux phases, séparation, qualification, adaptateur GitHub |
 | Hébergement (D23, chantier 1) | Fait : passerelle SSH à commande forcée, canonique à la garde, boîte de dépôt par client, opération `integrate` (D24) ; démontré avec sshd réel : contribution poussée, tests mesurés, refus sans revue, revue signée, intégration par la garde, lignée intacte ; qualify : PASS |
 | Interface (D23, chantier 2) | À faire : application web au-dessus de `surface/`, signature humaine hors serveur |
-| Porte LLM (D23, chantier 3) | Partielle : appel Claude dans l'agent, masquage des secrets ; reste multi-fournisseurs et journal d'egress |
+| Porte LLM (D23, chantier 3) | Fait : multi-fournisseurs (Anthropic, compatible OpenAI), niveaux, masquage, journal d'egress (§11.8) |
+| Outillage de l'agent (D25) | Fait et testé : constats, bac à sable, précontrôle, mémoire et budget, carte, dossier ; démontré en direct sous utilisateurs séparés. Non démontré : la boucle avec un vrai modèle (pas de clé dans la session) |
 | Jalon investisseur (D15) | Démontré en git local avec T07 physique (qualify : PASS) ; sur GitHub réel, une réparation SBOM a atteint `main` de bout en bout, mais par les accès de la session et non par un jeton de garde distinct |
 | Garanties physiques (§15.2) | T07 **démontré** en git local. Les autres **non démontrées** : exigent des humains, des témoins, un volume de pins et un évaluateur réellement distincts |
 | Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |

@@ -84,7 +84,8 @@ class Installation:
         self.instruments = Instruments(self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock),
                                        self.repo_path, self.proposals, data=self.data, world=self.world,
                                        anchor=repo.get("anchor"),
-                                       inbox=resolve(repo["inbox"]) if repo.get("inbox") else None)
+                                       inbox=resolve(repo["inbox"]) if repo.get("inbox") else None,
+                                       findings=self.path.parent / "findings.json")
         self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock)
         self.socket = resolve(c["socket"]["path"])
 

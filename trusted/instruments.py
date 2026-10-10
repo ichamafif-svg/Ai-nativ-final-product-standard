@@ -13,6 +13,9 @@ Rules carried from the findings register:
 - tests run main's suite against the head's code with an empty runner configuration (M2-r2); their verdict is
   necessary, never sufficient (§11.4);
 - `reproduced` recomputes a recipe from the base and compares the whole tree, modes and gitlinks included.
+
+Findings (path:line:rule, a failing test and its trace) are published beside the facts to help whoever repairs. They
+are information, never a fact: they open no right, and a secret's finding names where it is, never its value.
 """
 from __future__ import annotations
 
@@ -43,6 +46,7 @@ class Measure:
     universe: frozenset
     covered: frozenset
     findings: tuple = ()
+    details: tuple = ()                                    # what helps a repair: locations, traces; never a verdict
 
 
 def verdict(expect: str, measure) -> str:
@@ -107,13 +111,16 @@ def lock(tree) -> dict:
 
 
 def secrets(tree) -> Measure:
-    files, covered, hits = tree.paths(), set(), []
-    for p in files:
+    files, covered, hits, where = tree.paths(), set(), [], []
+    for p in sorted(files):
         data = tree.read(p)
         if len(data) < MAX_FILE:
             covered.add(p)
-            hits += [p for rx in SECRETS if rx.search(data)]
-    return Measure(frozenset(files), frozenset(covered), tuple(hits))
+            for rule, rx in enumerate(SECRETS):
+                lines = sorted({data.count(b"\n", 0, m.start()) + 1 for m in rx.finditer(data)})
+                hits += [p] if lines else []
+                where += [f"{p}:{n}:secret-rule-{rule}" for n in lines]
+    return Measure(frozenset(files), frozenset(covered), tuple(hits), tuple(where))
 
 
 def sbom(tree) -> Measure:
@@ -176,8 +183,10 @@ def sast(tree, ctx) -> Measure:
                        cwd=work, capture_output=True, timeout=900)
     data = json.loads(r.stdout)
     covered = {k.removeprefix("./") for k in data["metrics"] if k != "_totals"} - {e["filename"] for e in data["errors"]}
-    return Measure(frozenset(files), frozenset(covered) & frozenset(files),
-                   tuple(x["test_id"] for x in data["results"] if x["issue_severity"] == "HIGH"))
+    high = [x for x in data["results"] if x["issue_severity"] == "HIGH"]
+    return Measure(frozenset(files), frozenset(covered) & frozenset(files), tuple(x["test_id"] for x in high),
+                   tuple(f"{x['filename'].removeprefix('./')}:{x['line_number']}:{x['test_id']} {x['issue_text']}"
+                         for x in high))
 
 
 def branch(tree, ctx) -> Measure:
@@ -227,15 +236,17 @@ def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = Fals
                        cwd=code, env=env, capture_output=True, timeout=1800)
         if not report.exists():
             raise RuntimeError("no test report")
-        names, failed = set(), []
+        names, failed, traces = set(), [], []
         for case in ET.parse(report).iter("testcase"):
             if any(child.tag == "skipped" for child in case):
                 continue
             name = f"{case.get('classname')}::{case.get('name')}"
             names.add(name)
-            if any(child.tag in ("failure", "error") for child in case):
+            bad = [child for child in case if child.tag in ("failure", "error")]
+            if bad:
                 failed.append(name)
-        return Measure(frozenset(), frozenset(names), tuple(failed))
+                traces.append(f"{name}\n{(bad[0].get('message') or '')[:300]}\n{(bad[0].text or '')[-1500:]}")
+        return Measure(frozenset(), frozenset(names), tuple(failed), tuple(traces))
     finally:
         for target in (code, suite):
             git(repo, "worktree", "remove", "--force", str(target), check=False)
@@ -243,12 +254,19 @@ def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = Fals
 
 def tests(repo, base: str, head: str, *, install: bool = False) -> str:
     """`green` only if every test main's suite runs on base also runs and passes on head."""
+    return tests_report(repo, base, head, install=install)[0]
+
+
+def tests_report(repo, base: str, head: str, *, install: bool = False) -> tuple[str, list]:
+    """(status, details): the failing tests with their traces, and main's tests the head no longer runs."""
     try:
         on_base = run_suite(repo, base, base, install=install)
         on_head = run_suite(repo, base, head, install=install)
-        return verdict("green", Measure(on_base.covered, on_head.covered & on_base.covered, on_head.findings))
+        lost = [f"{n}\nruns on main, not on this head" for n in sorted(on_base.covered - on_head.covered)]
+        status = verdict("green", Measure(on_base.covered, on_head.covered & on_base.covered, on_head.findings))
+        return status, [*on_head.details, *lost][:20]
     except Exception as exc:                               # an exception is a measure: nothing was covered
-        return verdict("green", exc)
+        return verdict("green", exc), [f"{type(exc).__name__}: {str(exc)[:500]}"]
 
 
 def reproduced(repo, base: str, head: str, recipe) -> str:
@@ -278,6 +296,7 @@ class Instrument:
 
     def __init__(self, signer: Signer, capability: str, clock):
         self.signer, self.capability, self.clock = signer, capability, clock
+        self.findings = {}                                  # "resource|property" -> details of the last measure
 
     def observation(self, domain: str, resource: str, prop: str, status: str, level: str = "real") -> dict:
         body = {"id": f"obs-{uuid.uuid4().hex}", "at": self.clock(), "author": self.signer.identity,
@@ -301,4 +320,8 @@ class Instrument:
                 measure = probe(tree, ctx)
             except Exception as exc:
                 measure = exc
-            yield self.observation(domain, target["resource"], target["property"], verdict(target["expect"], measure))
+            status = verdict(target["expect"], measure)
+            self.findings[f"{target['resource']}|{target['property']}"] = {"status": status, "details": (
+                [f"{type(measure).__name__}: {str(measure)[:300]}"] if isinstance(measure, BaseException)
+                else list(measure.details or map(str, measure.findings))[:50])}
+            yield self.observation(domain, target["resource"], target["property"], status)

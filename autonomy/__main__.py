@@ -22,6 +22,8 @@ from trusted.gateway import GatewayClient
 from trusted.signing import Signer
 
 from . import Agent, Cycle, Route, WorkEngine
+from .llm import Gate
+from .memory import Memory
 
 ROUTES = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"}))]
 
@@ -52,11 +54,14 @@ def build(config_path) -> tuple[Cycle, callable]:
         publish = lambda head: git(store, "push", "-q", "origin", f"{head}:refs/heads/standard/proposals/{head}")
     data = c.get("data")
     api = agent_cfg.get("api_key_file")
+    llm = Gate.from_config(c["llm"], resolve, store.parent / "egress.log") if c.get("llm") else None
     agent = Agent(signer, {"recipe": c["grants"]["agent_recipe"], "review": c["grants"]["agent_review"]}, store,
                   data=TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY,
-                  api_key=resolve(api).read_text().strip() if api else None, publish=publish)
+                  api_key=resolve(api).read_text().strip() if api and not llm else None, publish=publish, llm=llm)
     cycle = Cycle(GatewayClient(resolve(c["socket"]["path"])), WorkEngine(store.parent / "work.db"), agent, ROUTES,
-                  clock=lambda: int(time.time() * 1000), main=main, state_path=store.parent / "proposals.json")
+                  clock=lambda: int(time.time() * 1000), main=main, state_path=store.parent / "proposals.json",
+                  findings=path.parent / "findings.json",
+                  memory=Memory(store.parent / "memory.json", budget=int(agent_cfg.get("attempts", 3))))
     if repo.get("inbox") and "agent_integrate" in c["grants"]:
         from .contributions import Integrator
         integrator = Integrator(cycle.service, signer, c["grants"]["agent_integrate"], resolve(repo["inbox"]),
