@@ -27,6 +27,8 @@ def needs(target: dict, observation, rank: dict, at: int, covered: bool) -> list
     if observation is None:
         return out + ["observe"]
     stale = observation["at"] + target["fresh_ms"] < at
+    if observation["status"].startswith("uncovered"):
+        return out + ["observe"]                       # the instrument could not see everything: restore coverage
     if observation["status"] != target["expect"]:
         return out + (["observe"] if stale else []) + ["repair"]
     low = rank[observation["level"]] < rank[target["min_level"]]

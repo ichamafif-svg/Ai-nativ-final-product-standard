@@ -124,37 +124,84 @@ def sbom(tree) -> Measure:
     return Measure(frozenset(pins), frozenset(pins), tuple(n for n, v in sorted(pins.items()) if (n, v) not in listed))
 
 
-def actions(tree) -> Measure:
+def _uses(tree) -> tuple[list, list]:
     files = sorted(p for p in tree.paths() if WORKFLOW.fullmatch(p))
-    loose = []
-    for p in files:
-        for m in re.finditer(rb"(?m)^\s*-?\s*uses:\s*['\"]?([^\s'\"#]+)", tree.read(p)):
-            use = m[1].decode()
-            if not use.startswith("./") and not re.search(r"@[0-9a-f]{40}$", use):
-                loose.append(use)
+    uses = [m[1].decode() for p in files
+            for m in re.finditer(rb"(?m)^\s*-?\s*uses:\s*['\"]?([^\s'\"#]+)", tree.read(p))]
+    return files, [u for u in uses if not u.startswith("./")]
+
+
+def actions(tree, ctx) -> Measure:
+    files, uses = _uses(tree)
     if not files:
         return Measure(frozenset({"<no workflow>"}), frozenset({"<no workflow>"}))     # nothing to pin is covered
-    return Measure(frozenset(files), frozenset(files), tuple(loose))
+    return Measure(frozenset(files), frozenset(files), tuple(u for u in uses if not re.search(r"@[0-9a-f]{40}$", u)))
 
 
-def vulns(tree) -> Measure:
-    pins = lock(tree)
-    r = subprocess.run([sys.executable, "-m", "pip_audit", "-r", "/dev/stdin", "--no-deps", "--disable-pip", "-f",
-                        "json", "--progress-spinner", "off"], input=tree.read("requirements.txt"),
-                       capture_output=True, timeout=900)
-    deps = json.loads(r.stdout)["dependencies"]
-    audited = {d["name"].lower() for d in deps if "skip_reason" not in d}
-    return Measure(frozenset(pins), frozenset(audited & set(pins)), tuple(v["id"] for d in deps for v in d.get("vulns", [])))
+def vulns(tree, ctx) -> Measure:
+    """Covered: every pin the pinned advisory snapshot audited. Findings: their advisories."""
+    pins, adv = lock(tree), ctx["data"].advisories
+    covered = {n for n, v in pins.items() if f"{n}=={v}" in adv}
+    return Measure(frozenset(pins), frozenset(covered),
+                   tuple(a["id"] for n, v in sorted(pins.items()) for a in adv.get(f"{n}=={v}", [])))
+
+
+PERMISSIVE = {"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "PSF-2.0", "MPL-2.0", "Unlicense", "Zlib"}
+
+
+def licenses(tree, ctx) -> Measure:
+    """The license expression of each exact pin, interpreted by a pinned policy, never by substring (R14)."""
+    pins, pkgs = lock(tree), ctx["data"].packages
+    covered = {n for n in pins if n in pkgs}
+    return Measure(frozenset(pins), frozenset(covered),
+                   tuple(n for n in sorted(covered) if pkgs[n].get("license") not in PERMISSIVE))
+
+
+def deps_age(tree, ctx) -> Measure:
+    pins, pkgs = lock(tree), ctx["data"].packages
+    major = lambda v: int(v.split(".")[0]) if v.split(".")[0].isdigit() else None
+    covered = {n for n in pins if n in pkgs and major(pins[n]) is not None and major(pkgs[n]["latest"]) is not None}
+    return Measure(frozenset(pins), frozenset(covered),
+                   tuple(n for n in sorted(covered) if major(pkgs[n]["latest"]) > major(pins[n])))
+
+
+def sast(tree, ctx) -> Measure:
+    """bandit on the snapshot's Python files, `# nosec` ignored: the measured code does not configure its instrument."""
+    files = sorted(p for p in tree.paths() if p.endswith(".py"))
+    work = Path(tempfile.mkdtemp())
+    for p in files:
+        (work / p).parent.mkdir(parents=True, exist_ok=True)
+        (work / p).write_bytes(tree.read(p))
+    r = subprocess.run([sys.executable, "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", *files],
+                       cwd=work, capture_output=True, timeout=900)
+    data = json.loads(r.stdout)
+    covered = {k.removeprefix("./") for k in data["metrics"] if k != "_totals"} - {e["filename"] for e in data["errors"]}
+    return Measure(frozenset(files), frozenset(covered) & frozenset(files),
+                   tuple(x["test_id"] for x in data["results"] if x["issue_severity"] == "HIGH"))
+
+
+def branch(tree, ctx) -> Measure:
+    """Only the guard may move main: the provider reports the protections in force."""
+    need = frozenset({"update", "deletion", "non_fast_forward"})
+    return Measure(need, need, tuple(sorted(need - ctx["world"].protections())))
+
+
+def lineage(tree, ctx) -> Measure:
+    """Every commit on main since the anchor is the head of a judged, applied effect: nothing reached main around it."""
+    history = git(tree.repo, "rev-list", "--first-parent", f"{ctx['anchor']}..{tree.commit}").split()
+    universe = frozenset(history) or frozenset({tree.commit})
+    return Measure(universe, universe, tuple(c for c in history if c not in ctx["judged"]))
 
 
 def inventory(tree) -> Measure:
-    """Coverage of the declared universe: every tracked path is readable as a blob or a declared gitlink/symlink."""
+    """Coverage of the declared universe: every tracked path is a readable blob or a declared gitlink."""
     universe = frozenset(tree.entries)
-    covered = frozenset(p for p, (mode, kind, _) in tree.entries.items() if kind in ("blob", "commit"))
-    return Measure(universe, covered)
+    return Measure(universe, frozenset(p for p, (_, kind, _) in tree.entries.items() if kind in ("blob", "commit")))
 
 
-PROBES = {"secrets": secrets, "sbom": sbom, "actions": actions, "vulns": vulns}
+DATA_PROBES = ("vulns", "licenses", "deps-age")
+PROBES = {"secrets": lambda t, c: secrets(t), "sbom": lambda t, c: sbom(t), "actions": actions, "vulns": vulns,
+          "licenses": licenses, "deps-age": deps_age, "sast": sast, "branch": branch, "lineage": lineage}
 
 
 def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = False) -> Measure:
@@ -237,17 +284,21 @@ class Instrument:
                 "under": self.capability, "resource": resource, "property": prop, "status": status, "level": level}
         return envelope(domain, "observation", body, [self.signer])
 
-    def measure_targets(self, domain: str, repo, commit: str, targets: dict) -> list:
-        """Signed observations of every probed floor target at one snapshot of main."""
+    def measure_targets(self, domain: str, repo, commit: str, targets: dict, ctx: dict):
+        """Signed observations, one at a time, of every probed floor target at one snapshot of main.
+        ctx: data, world, anchor, judged.
+        A probe without its context raises, and an exception is `uncovered`: never a silent pass."""
         tree = Snapshot(repo, commit)
-        out = [self.observation(domain, "repo:inventory:all", "coverage", verdict("complete", inventory(tree)))]
+        yield self.observation(domain, "repo:inventory:all", "coverage", verdict("complete", inventory(tree)))
         for tid, probe in PROBES.items():
             target = targets.get(tid)
             if target is None:
                 continue
             try:
-                measure = probe(tree)
+                data = ctx.get("data")
+                if tid in DATA_PROBES and (data is None or not data.fresh(self.clock(), target["fresh_ms"])):
+                    raise LookupError("the pinned data snapshot is older than the target's freshness")
+                measure = probe(tree, ctx)
             except Exception as exc:
                 measure = exc
-            out.append(self.observation(domain, target["resource"], target["property"], verdict(target["expect"], measure)))
-        return out
+            yield self.observation(domain, target["resource"], target["property"], verdict(target["expect"], measure))

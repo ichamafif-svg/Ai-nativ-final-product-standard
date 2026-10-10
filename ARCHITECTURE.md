@@ -303,7 +303,7 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **960 / 960**, intégrations T06/T07/T08 (instruments, recettes, adaptateurs, passes opérateur) **450 / 450**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **248 / 248**. TCB locale : 4 538 lignes, intégrations comprises ; le prototype hybride en comptait 4 507 sans elles. Les trois derniers plafonds sont des cliquets.
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 150 / 1 150** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **672 / 672**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -673,12 +673,12 @@ Une réparation passe sans humain **seulement** si :
 - `tests = green` sur la transition exacte `base → head`, **et**
 - `reproduced = yes` : un instrument indépendant a recalculé exactement son contenu depuis la base et des données de confiance (recette reproductible).
 
-Sinon, elle exige `review = approved`, signé par un reviewer habilité, lié au head exact (jamais à un pointeur mutable) [M2-r2]. Le sujet de l'effet est la transition `repo:{area}:{item}/{base}/{head}` ; les faits qui l'autorisent portent sur cette ressource exacte. La comparaison d'arbres inclut chemins, contenus, **modes et gitlinks**.
+Sinon, elle exige `review = approved`, signé par un reviewer habilité, lié au head exact (jamais à un pointeur mutable) [M2-r2]. Le reviewer est un humain de la racine, distinct de l'agent, avec la capacité `observe` + `certify:real` ; il signe avec sa propre clé depuis la surface (`python -m surface review`). L'agent nomme la cible dans le commit (`Standard-Target:`) : c'est une donnée non fiable qui sert seulement à nommer la ressource ; les faits restent liés à la transition exacte. Le sujet de l'effet est la transition `repo:{area}:{item}/{base}/{head}` ; les faits qui l'autorisent portent sur cette ressource exacte. La comparaison d'arbres inclut chemins, contenus, **modes et gitlinks**.
 
 ### 11.5 Point d'entrée agent
 
 - `python -m surface` : tâche courante, loi effective (floors + client) et routes T, en texte lisible lié au préfixe et au digest. L'agent ne lit ni README ni sérialisation de la constitution.
-- `context --task ID`, `context --law SECTION/ID`, `law-source --source .standard/law.toml`, `discover`, `status`, `claim`, `submit`, `attempt`, `run`, `watch`.
+- `status`, `tasks`, `context TASK_ID`, `law SECTION/ID` pour lire ; `review TARGET BASE HEAD` et `attest TARGET` pour qu'un humain signe, avec sa propre clé, une revue ou une attestation.
 - `submit` recontrôle route et préfixe, refuse une enveloppe qui ne traite pas exactement la tâche et sa ressource, puis la confie au **seul** chemin d'admission.
 - Un travailleur externe lit la vue sur stdin et renvoie une enveloppe signée par son identité U sur stdout. Aucun retour ne ferme une dette ni ne déclenche un effet.
 - `AGENTS.md` à la racine signale ce point d'entrée.
@@ -783,7 +783,9 @@ G04 n'implique pas que chaque effet physique correspond à une transition : G09/
 
 ---
 
-## 15. Limites établies
+## 15. Limites : établies et choisies
+
+### 15.1 Limites établies
 
 | | Limite | Statut | Conséquence |
 |---|---|---|---|
@@ -796,6 +798,45 @@ G04 n'implique pas que chaque effet physique correspond à une transition : G09/
 **Non établi (ouvert)** : effet distant exactement-une-fois sous ambiguïté fournisseur ; fencing multi-hôte ; indépendance de deux juges déployés ; vérité et couverture réelles des sources ; stabilité des dettes sous réparations répétées et renommages ; custody des clés au bootstrap ; absence vérifiée d'egress alternatif.
 
 Autres limites assumées : pas de preuve formelle de convergence ; pas de consensus multi-hôte ; une signature fournisseur ne prouve pas qu'une personne a reçu l'alerte ; la conformité ne se déduit pas de `PROVEN` ; le système fait confiance au noyau Linux pour l'isolation interne ; un appel synchrone bloqué retarde les écritures (l'adaptateur doit borner ses I/O).
+
+### 15.2 Ce que « garantie physique » veut dire ici
+
+Le noyau raisonne sur des signatures et des faits. Plusieurs garanties reposent sur des propriétés du monde réel qu'il ne peut pas voir. Elles ne sont démontrées que **sur une installation précise**, par des essais réels :
+
+| Garantie | Prémisse physique | Essai qui la démontre |
+|---|---|---|
+| Quorum (G01) | Deux clés = deux personnes | Enrôlement des humains et custody des clés vérifiés par un tiers |
+| Un seul chemin vers `main` (G09, G15) | Seule la garde peut écrire | Tenter d'écrire avec chaque autre token, App ou règle de bypass existante |
+| Anti-rollback (G11) | Pins hors du domaine de restauration du journal | Restaurer le disque du journal seul, puis les deux ensemble |
+| Temps (G06) | Témoins réellement indépendants | Arrêter, décaler, compromettre un témoin |
+| Second juge (G12) | Domaine de panne distinct | Faute injectée dans un juge, l'autre bloque |
+
+Le code fournit des **sondes de qualification** (`tools/qualify.py`) qui vérifient ce qui est vérifiable localement et listent explicitement ce qu'elles ne prouvent pas. Une évaluation T signée par l'opérateur lui-même est marquée **auto-évaluée** : elle fait tourner le système, elle ne qualifie rien.
+
+### 15.3 Couverture retenue
+
+La couverture n'est pas « tout ». Elle se choisit cible par cible, avec une route honnête pour chacune :
+
+| Route | Cibles | Pourquoi ce choix |
+|---|---|---|
+| **Autonome** (recette reproductible + tests) | `sbom`, `vulns`, `actions` | Le correctif est une fonction déterministe de la base et de données épinglées : un instrument indépendant peut le recalculer octet pour octet |
+| **Revue humaine signée** (proposition de l'agent) | `secrets`, `sast`, `ci`, `deps-age`, `licenses` | Le correctif demande du jugement : aucun instrument ne peut le reproduire, donc un humain habilité signe la revue de la transition exacte |
+| **Humaine** (réglage ou attestation) | `branch`, `lineage`, `soa`, 18 mesures organisationnelles | Ce sont des réglages du fournisseur ou des faits d'organisation : Standard mesure ou recueille l'attestation, ne répare pas |
+
+L'agent fait seul tout ce qui ne demande que du calcul : mesurer pour lui-même, proposer, soumettre. Il ne certifie jamais son propre résultat (F0-8) ; c'est un instrument distinct, automatique lui aussi, qui atteste.
+
+### 15.4 Limites choisies
+
+Ce que Standard **ne prétend pas** couvrir dans cette version, volontairement :
+
+- **Écosystèmes.** Dépendances Python via un `requirements.txt` à épinglage exact, workflows GitHub Actions, dépôts git. Tout autre manifeste rend la cible `uncovered`, visible, jamais verte par défaut.
+- **Fournisseurs.** GitHub et git local. Un autre fournisseur est `NO_ROUTE` jusqu'à ce qu'un adaptateur avec une primitive atomique existe.
+- **Données de sécurité.** Les avis de vulnérabilités, métadonnées de paquets et résolutions d'actions sont des **instantanés épinglés par digest**, rafraîchis par l'opérateur. Une faille publiée après l'instantané n'existe pas pour Standard jusqu'au rafraîchissement ; la fraîcheur de l'instantané est bornée par celle de la cible.
+- **Vérité des outils.** pip-audit, bandit ou la base d'avis peuvent se tromper ; Standard garantit qu'ils ont été appliqués à l'univers complet et au bon sujet, pas qu'ils sont exacts (L-01).
+- **Tests.** Une suite verte est nécessaire, jamais suffisante : elle ne couvre que ce qu'elle teste.
+- **Conformité.** Standard produit des preuves et des écarts rattachés aux clauses ISO 27001, NIS2 et DORA. Il ne certifie pas.
+- **Installation.** Un seul hôte, un seul writer (D06). Les témoins et l'évaluateur d'une démo tournent chez l'opérateur : la démo est auto-évaluée.
+- **Redevabilité.** Elle tourne dans le processus T, pas dans un worker confiné. Son défaut ne peut que masquer ou inventer un écart (budget visibilité), et `status` le montre en `FAULT`.
 
 ---
 
@@ -952,6 +993,12 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D13 | Deux hébergements (dépôt seul, service géré) sur le même protocole (§19) | Arrêtée |
 | D14 | Le refacto part du code existant (constitution 0.6, noyau hybride) et le reconstruit dans ce dépôt selon §20 ; aucune compatibilité de genèse | Arrêtée |
 | D15 | Jalon investisseur : maintenance + sécurité + conformité ensemble, démo sur un dépôt dédié, agents Claude via API, ISO 27001 + NIS2 + DORA | Arrêtée |
+| D16 | Trois routes de réparation par cible (§15.3) : autonome seulement si reproductible ; revue humaine signée pour un correctif de jugement ; humaine pour réglages et organisation | Arrêtée |
+| D17 | Données de sécurité tierces = instantanés épinglés par digest, partagés par l'agent et l'instrument, rafraîchis par l'opérateur | Arrêtée |
+| D18 | La genèse n'accorde aucune capacité : la cérémonie se fait en deux phases, séparées par le délai attesté de FLOOR-0 (1 h). FLOOR-0 n'est pas affaibli pour une démo | Arrêtée |
+| D19 | Une évaluation T émise par l'opérateur est marquée auto-évaluée et affichée comme telle ; seule une évaluation par un évaluateur épinglé indépendant compte pour la production | Arrêtée |
+| D20 | Périmètre : Python (`requirements.txt` épinglé), GitHub Actions, git, GitHub. Le reste est `uncovered` ou `NO_ROUTE`, visible (§15.4) | Arrêtée |
+| D21 | La redevabilité reste dans le processus T pour cette version ; son isolation dans un worker confiné est reportée, la limite est déclarée | Arrêtée |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -964,6 +1011,28 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
   - **Service géré** : le produit commercial. Mêmes objets, même admission, même journal ; T qualifiés et opérés par Standard.
 - **Interface native** : WorkItems, décisions humaines, couverture, escalades. Les empreintes et protocoles restent accessibles pour l'audit, pas comme UX principale.
 - **Objectif double** : séduire un investisseur, rester crédible devant des ingénieurs de haut niveau. D'où la règle : chaque affirmation publique porte son statut (§0).
+
+### 19.1 Deux processus, une installation
+
+| Processus | Commande | Ce qu'il détient | Ce qu'il ne voit jamais |
+|---|---|---|---|
+| **Opérateur (K + T)** | `python -m trusted serve standard.toml` | Journal, pins, clés de la garde, des instruments, de l'oracle ; jeton fournisseur ; passerelle | Clé de l'agent, clé API du modèle |
+| **Agent (U)** | `python -m autonomy run standard.toml` | Sa propre clé, son dépôt de propositions, la clé API Claude | Journal, pins, clé de la garde, jeton d'écriture |
+| **Humains** | `python -m surface review / attest` | Leur propre clé | Tout le reste |
+
+À chaque passe, l'opérateur fait témoigner le temps (démo seulement), mesure `main` et les propositions, fait partir les effets admis, réconcilie et prouve. L'agent projette les dettes, fabrique ses propositions et soumet ses intentions.
+
+### 19.2 Installer une démo
+
+1. Créer le dépôt de démo à partir de `demo/` : il démarre hors de ses floors (dépendance vulnérable, SBOM absent, action non épinglée, secret en dur).
+2. `python tools/refresh_data.py requirements.txt --actions actions/checkout@v4 actions/setup-python@v5 > data.json`, puis relire l'instantané.
+3. `python tools/ceremony.py init DIR --github OWNER/NAME --token-file F --pins /autre/volume/pins.db --data data.json` : clés, loi, genèse, propositions de capacités, auto-évaluation, instantané épinglé par son digest.
+4. Une heure plus tard (FLOOR-0) : `python tools/ceremony.py activate DIR`.
+5. Lancer les deux processus. `python tools/qualify.py DIR/standard.toml` liste ce que la démo ne tient pas physiquement.
+
+Côté GitHub, l'installation doit garantir que seule la garde déplace `main` (ruleset avec la garde seule en bypass) et que l'agent ne peut pousser que `refs/standard/proposals/*`. C'est T07 : `qualify.py` le vérifie en partie et dit le reste.
+
+Ce que la démo montre : la loi refuse, attend les faits indépendants, autorise un départ unique, prouve l'effet et ferme la dette, sans humain pour les réparations reproductibles et avec une revue signée pour les autres. Ce qu'elle ne montre pas : les garanties physiques (§15.2), puisqu'un seul opérateur tient toutes les clés.
 
 ---
 
@@ -983,6 +1052,8 @@ surface/     Interface humaine, point d'entrée agent (`python -m surface`).
 compliance/  Projection clauses ISO/NIS2/DORA (hors TCB, lecture seule).
 tests/       Un test par règle du registre §17, un par garantie G01–G16,
              les dix scénarios de §21.1, le différentiel des deux juges.
+tools/       Contrôle des couches et budgets, cérémonie, qualification, données.
+demo/        Le dépôt de démonstration, hors de ses floors au départ.
 ```
 
 **Règles d'import, vérifiées automatiquement à chaque commit :**
@@ -1033,15 +1104,18 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 7. Revue contradictoire par un autre oracle.
 8. Exhaustion raisonnable : constats regroupés par cause racine ; aucune absence absolue de faille revendiquée.
 
-### 21.4 Ordre de réalisation dans ce dépôt
+### 21.4 État de réalisation
 
-1. **Sceller la sémantique** : schémas, identités, invalidations, matrice de couverture des cinq contrats ; le registre §17 devient la première suite de tests.
-2. **Noyau** : jugement unique, transition et temps complets ; différentiel contre l'ancien noyau.
-3. **Frontière durable** : journal, pins, second juge, garde, passerelle ; aucun effet réel autonome avant cette porte.
-4. **Preuves qualifiables** : CI, dépendances, secrets, attestations ; sujet figé, méthode, couverture.
-5. **Travail unifié** : toutes les cibles effectives, échéances continues, routes, `FAULT` ; une seule vue.
-6. **Jalon investisseur (D15)** sur dépôt dédié.
-7. **Validation système** : injections de fautes, changements de loi, crashs, fournisseur réel.
+| Porte | État |
+|---|---|
+| Sémantique et noyau (K) | Fait : jugement unique, six mécanismes, loi, redevabilité |
+| Frontière durable (T) | Fait : journal, pins, second juge, garde, passerelle, horloge, livraison |
+| Preuves qualifiables | Fait pour les cibles retenues (§15.3) ; données tierces épinglées (D17) |
+| Travail unifié (U) | Fait : projection, Work Engine, agent, cycle, surface, revue et attestation humaines |
+| Installation | Fait : processus opérateur et agent, cérémonie en deux phases, qualification, adaptateur GitHub |
+| Jalon investisseur (D15) | Prêt à installer sur un dépôt GitHub dédié ; l'adaptateur GitHub n'a pas encore été exercé contre GitHub réel |
+| Garanties physiques (§15.2) | **Non démontrées** : exigent une installation avec des humains, des témoins et un évaluateur réellement distincts |
+| Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |
 
 ---
 

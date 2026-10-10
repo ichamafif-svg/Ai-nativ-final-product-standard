@@ -16,6 +16,7 @@ from autonomy import Agent, Cycle, Route, WorkEngine, project
 from trusted import EffectPort, Journal, PinStore, Signer, TrustedService
 from trusted.adapters import GitRepository, Readback
 from trusted.instruments import Instrument
+from trusted.data import TrustedData
 from trusted.operator import Instruments, Prover
 
 
@@ -30,25 +31,36 @@ class Verified:
         return None
 
 
-def demo_repository(root: Path) -> Path:
+FILES = {
+    "requirements.txt": "packaging==24.1\n",
+    "app.py": "def add(a, b):\n    return a + b\n",
+    "tests/test_app.py": "from app import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n",
+}
+
+
+def demo_repository(root: Path, files=FILES) -> Path:
     repo = root / "repo"
     repo.mkdir()
     sh(repo, "git", "init", "-q", "-b", "main")
     sh(repo, "git", "config", "user.email", "dev@example.org")
     sh(repo, "git", "config", "user.name", "dev")
-    (repo / "requirements.txt").write_text("packaging==24.1\n")
-    (repo / "app.py").write_text("def add(a, b):\n    return a + b\n")
-    (repo / "tests").mkdir()
-    (repo / "tests" / "test_app.py").write_text("from app import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n")
+    for path, text in files.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
     sh(repo, "git", "add", "-A")
     sh(repo, "git", "commit", "-q", "-m", "initial")
     return repo
 
 
-class Maintenance(unittest.TestCase):
+class Stand(unittest.TestCase):
+    """A whole installation on one host. Subclasses may change FILES, DATA (a callable of time) and ASK."""
+    FILES = FILES
+    DATA = None
+    ASK = None
+
     def setUp(self):
-        root = Path(tempfile.mkdtemp())
-        self.repo = demo_repository(root)
+        root = self.root = Path(tempfile.mkdtemp())
+        self.repo = demo_repository(root, self.FILES)
         self.store = root / "proposals"
         sh(root, "git", "clone", "-q", "--bare", str(self.repo), str(self.store))
 
@@ -57,7 +69,11 @@ class Maintenance(unittest.TestCase):
         L = self.L = Ledger(law=law)
         self.scanner_cap = L.grant("scanner", ["observe", "certify:real"], ["repo:*"])
         self.agent_cap = L.grant("agent", ["effect:remediate"], ["repo:*"], conditions=["remediate-autonomous"])
+        self.review_cap = L.grant("agent", ["effect:remediate"], ["repo:*"], conditions=["remediate-reviewed"])
         self.oracle_cap = L.grant("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*"])
+        self.reviewer_cap = L.grant("h3", ["observe", "certify:real"], ["repo:*"])
+        self.officer_cap = L.grant("h2", ["observe", "certify:real"], ["org:*"])
+        self.agent_observe_cap = L.grant("agent", ["observe", "certify:real"], ["repo:*"])
 
         pins = PinStore(root / "pins" / "pins.db", create=True)
         self.journal = Journal(root / "journal.db", L.kernel, pins, L.state["domain"], create=True)
@@ -66,18 +82,22 @@ class Maintenance(unittest.TestCase):
 
         self.t = L.state["last_at"]
         clock = self.clock
+        self.data = self.DATA(self.t) if self.DATA else TrustedData({"format": "standard-data/1", "taken_at": self.t})
         signer = lambda ident: Signer(ident, L.keys.private[ident][1])
         git_repo = GitRepository(self.repo, self.store)
         self.service = TrustedService(
             self.journal, boundary=Verified(), clock=clock, guard_signer=signer("guard"),
             effect_port=EffectPort({"remediate": git_repo.remediate}),
             reconciliation=Readback(git_repo, signer("oracle"), self.oracle_cap, clock))
+        self.world = type("World", (), {"protections": lambda _: set()})()
         self.instruments = Instruments(self.service, Instrument(signer("scanner"), self.scanner_cap, clock),
-                                       self.repo, self.store)
+                                       self.repo, self.store, data=self.data, world=self.world)
+        self.signer = signer
         self.prover = Prover(self.service, git_repo, signer("oracle"), self.oracle_cap, clock)
         routes = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
                   Route("scanner", "RUN", "repo:*", frozenset({"observe", "cover", "prove"}))]
-        self.cycle = Cycle(self.service, WorkEngine(root / "work.db"), Agent(signer("agent"), self.agent_cap, self.store),
+        self.cycle = Cycle(self.service, WorkEngine(root / "work.db"), Agent(signer("agent"), {"recipe": self.agent_cap, "review": self.review_cap},
+                                 self.store, data=self.data, api_key="test" if self.ASK else None, ask=self.ASK),
                            routes, clock=clock, main=lambda: sh(self.repo, "git", "rev-parse", "main"),
                            state_path=root / "proposals.json", backoff_ms=0)
 
@@ -99,6 +119,9 @@ class Maintenance(unittest.TestCase):
     def obligation(self, target):
         verdict = self.health()
         return next((o for o in verdict["open"] + verdict["escalated"] if o["obligation"] == f"target:{target}"), None)
+
+
+class Maintenance(Stand):
 
     def test_an_sbom_gap_is_repaired_autonomously_and_proven(self):
         base = sh(self.repo, "git", "rev-parse", "main")

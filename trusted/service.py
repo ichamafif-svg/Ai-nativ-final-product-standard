@@ -6,7 +6,7 @@ qualifies exactly the T contracts it depends on; a missing contract stops that o
 """
 from __future__ import annotations
 
-from kernel import Accountability, apply, empty
+from kernel import Accountability, apply, digest, empty
 from kernel.accountability import empty as accountability_empty
 from kernel.floor0 import line_state
 from kernel.identity import IdentityError, open_envelope
@@ -78,7 +78,12 @@ class TrustedService:
         state = self.journal.snapshot()
         law = self.journal.kernel.law_of(state)
         return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
-                "law": {"digest": law.digest, "effective": law.raw}, "health": self.health(required_at=now)}
+                "law": {"digest": law.digest, "effective": law.raw}, "health": self.health(required_at=now),
+                "assessment": self.assessment()}
+
+    def assessment(self) -> str:
+        """INDEPENDENT only when an independent, pinned assessor qualified this installation (D19)."""
+        return "INDEPENDENT" if getattr(self.boundary, "independent", False) else "SELF_ASSESSED"
 
     def status(self) -> dict:
         """Never raises: a fault is a visible state with what is still known (§9.4)."""
@@ -92,16 +97,22 @@ class TrustedService:
         try:
             verdict = self.health(required_at=self._require(TIMED))
             return {"state": verdict["state"], "basis": basis, "open": len(verdict["open"]),
-                    "escalated": len(verdict["escalated"])}
+                    "escalated": len(verdict["escalated"]), "assessment": self.assessment()}
         except Exception as exc:
             return {"state": "FAULT", "basis": basis, "boundary": "audit", "reason": type(exc).__name__}
 
     def health(self, *, required_at=None) -> dict:
-        kernel, a, ks = self.journal.kernel, accountability_empty(), empty()
-        for entry in self.journal.entries():
+        """The accountability fold, kept across calls: only entries not yet folded are judged again. If the journal
+        no longer extends what was folded, the fold restarts from genesis."""
+        kernel, entries = self.journal.kernel, self.journal.entries()
+        a, ks, n = getattr(self, "_fold", (None, None, 0))
+        if a is None or n > len(entries) or (n and digest(entries[n - 1]) != ks["head"]):
+            a, ks, n = accountability_empty(), empty(), 0
+        for entry in entries[n:]:
             record, delta = kernel.decide(ks, entry)
             apply(ks, delta)
             self.accountability.feed(a, ks, record)
+        self._fold = (a, ks, len(entries))
         verdict = self.accountability.health(a, ks, required_at=required_at)
         return {**verdict, "head": ks["head"], "size": ks["size"]}
 

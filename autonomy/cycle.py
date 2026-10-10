@@ -51,7 +51,8 @@ class Cycle:
                 p = proposals[key]
                 if not p["submitted"]:
                     at = max(now, view["health"]["as_of"] + 1)
-                    self.service.admit(self.agent.intent(view["prefix"]["genesis"], at, area, item, base, p["head"]))
+                    self.service.admit(self.agent.intent(view["prefix"]["genesis"], at, area, item, base, p["head"],
+                                                         p["route"]))
                     p["submitted"] = True
                     report["submitted"][task["target"]] = "admitted"
             except AgentError as exc:

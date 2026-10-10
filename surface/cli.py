@@ -4,6 +4,8 @@
     python -m surface [--socket PATH] tasks             the work the law asks for, most urgent first
     python -m surface [--socket PATH] context TASK_ID   one task: its debt, its law, the T its routes need
     python -m surface [--socket PATH] law SECTION/ID    one declaration of the effective law (floors or client)
+    python -m surface review TARGET BASE HEAD --identity ID --key FILE --under GRANT [--changes-requested]
+    python -m surface attest TARGET --identity ID --key FILE --under GRANT
 
 Plain text bound to the prefix and the law digest. It reads through the admission gateway only: nothing printed
 here is a permission, and a signed envelope is the only thing an agent can submit.
@@ -85,8 +87,14 @@ def declaration(view: dict, ref: str) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m surface")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
-    parser.add_argument("command", choices=("status", "tasks", "context", "law"))
+    parser.add_argument("command", choices=("status", "tasks", "context", "law", "review", "attest"))
     parser.add_argument("ref", nargs="?")
+    parser.add_argument("base", nargs="?")
+    parser.add_argument("head", nargs="?")
+    parser.add_argument("--identity")
+    parser.add_argument("--key")
+    parser.add_argument("--under")
+    parser.add_argument("--changes-requested", action="store_true")
     args = parser.parse_args(argv)
     client = GatewayClient(args.socket)
     try:
@@ -94,6 +102,18 @@ def main(argv=None) -> int:
     except Exception as exc:
         print(f"Standard is not reachable or not qualified here ({exc}). Nothing is attested or authorized.")
         return 2
+    if args.command in ("review", "attest"):
+        from .human import attest, load_signer, review
+        signer = load_signer(args.identity, args.key)
+        statement = (review(view, signer, args.under, args.ref, args.base, args.head,
+                            "changes_requested" if args.changes_requested else "approved")
+                     if args.command == "review" else attest(view, signer, args.under, args.ref))
+        try:
+            print(json.dumps(client.admit(statement)))
+        except Exception as exc:
+            print(f"refused: {exc}")
+            return 1
+        return 0
     plan = project(view, DEFAULT_ROUTES, client.qualify)
     if args.command == "status":
         print(status(view))

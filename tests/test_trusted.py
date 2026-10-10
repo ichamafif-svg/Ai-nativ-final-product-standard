@@ -223,7 +223,8 @@ class Boundary(unittest.TestCase):
 
     def assessment(self, contracts, **override):
         sk = Ed25519PrivateKey.generate()
-        payload = {"schema": SignedAssessment.SCHEMA, "assessor": "lab", "release": CODE, "genesis": "g",
+        payload = {"schema": SignedAssessment.SCHEMA, "assessor": "lab", "independent": True, "release": CODE,
+                   "genesis": "g",
                    "ledger": digest("/ledger"), "issued_at": 10, "expires_at": 1000, "contracts": contracts, **override}
         bundle = {"payload": payload, "signature": base64.b64encode(sk.sign(ASSESSMENT_PREFIX + canon(payload))).decode()}
         return SignedAssessment(bundle, {"lab": raw_public(sk)})

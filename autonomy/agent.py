@@ -6,8 +6,9 @@ the target's write scope. The agent holds only its own key; it never writes to t
 commit may land is decided by the law, from facts independent instruments observe about this exact transition:
 a recipe's output can become autonomous (`reproduced`); a model's judgment needs a signed human review.
 
-Sending repository context to a model is itself an effect of data egress (§7.4): files where a secret is detected
-never leave, and the secrets target is never sent to a model at all.
+Sending repository context to a model is itself an effect of data egress (§7.4, R15): a detected secret never leaves.
+For the secrets target the model sees the files with every detected value replaced by a redaction mark, and a reply
+that still contains the mark is refused.
 """
 from __future__ import annotations
 
@@ -21,7 +22,8 @@ import uuid
 from pathlib import Path
 
 from trusted.instruments import SECRETS, Snapshot
-from trusted.recipes import RECIPES
+from trusted.data import EMPTY
+from trusted.recipes import recipes_for
 from trusted.signing import Signer, envelope
 
 API = "https://api.anthropic.com/v1/messages"
@@ -31,7 +33,7 @@ SOURCE = rf"(?!tests/)(?!\.github/)({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md)"
 DEPENDENCIES = r"requirements[A-Za-z0-9_.-]*\.txt|sbom\.json"
 WRITE_SCOPE = {
     "vulns": DEPENDENCIES, "licenses": DEPENDENCIES, "sbom": r"sbom\.json", "deps-age": rf"{DEPENDENCIES}|{SOURCE}",
-    "sast": SOURCE, "ci": SOURCE, "actions": rf"\.github/workflows/{SEGMENT}\.ya?ml",
+    "sast": SOURCE, "ci": SOURCE, "secrets": SOURCE, "actions": rf"\.github/workflows/{SEGMENT}\.ya?ml",
 }
 TASKS = {
     "vulns": "Upgrade the vulnerable pinned dependencies in requirements.txt to the lowest fixed versions; keep exact pins.",
@@ -40,8 +42,9 @@ TASKS = {
     "sast": "Fix the high-severity issues reported by bandit without changing behaviour.",
     "ci": "Make the failing test suite pass by fixing the code, never by weakening tests.",
     "actions": "Pin every GitHub Action to a full commit SHA, with the version in a comment.",
+    "secrets": "Remove every hard-coded secret marked <REDACTED>: read it from an environment variable instead.",
 }
-NEVER_TO_A_MODEL = {"secrets"}
+REDACTED = b"<REDACTED>"
 
 
 class AgentError(ValueError):
@@ -76,14 +79,19 @@ def commit_files(store, base: str, files: dict, message: str) -> str:
     return head
 
 
-def model_context(tree, limit: int = 120_000) -> str:
+def model_context(tree, limit: int = 120_000, *, redact: bool = False) -> str:
     parts, size = [], 0
     for path in sorted(tree.paths()):
         if not path.endswith((".py", ".md", ".txt", ".toml", ".yml", ".yaml", ".json")):
             continue
         raw = tree.read(path)
-        if b"\x00" in raw or any(rx.search(raw) for rx in SECRETS):
-            continue                                       # a detected secret never leaves
+        if b"\x00" in raw:
+            continue
+        if any(rx.search(raw) for rx in SECRETS):
+            if not redact:
+                continue                                   # a detected secret never leaves
+            for rx in SECRETS:
+                raw = rx.sub(REDACTED, raw)
         try:
             text = raw.decode()
         except UnicodeDecodeError:
@@ -106,32 +114,45 @@ def claude(prompt: str, key: str) -> dict:
 
 
 class Agent:
-    def __init__(self, signer: Signer, capability: str, store, *, api_key: str | None = None, ask=claude):
-        self.signer, self.capability, self.store = signer, capability, Path(store)
-        self.api_key, self.ask = api_key, ask
+    def __init__(self, signer: Signer, capability, store, *, data=EMPTY, api_key: str | None = None, ask=claude,
+                 publish=None):
+        """capability: one grant id, or {"recipe": id, "review": id} when the two routes are granted apart.
+        data: the same pinned snapshot the instruments use, so that recipes reproduce."""
+        self.capabilities = capability if isinstance(capability, dict) else {"recipe": capability, "review": capability}
+        self.signer, self.store = signer, Path(store)
+        self.data, self.api_key, self.ask = data, api_key, ask
+        self.publish = publish or (lambda head: None)   # e.g. push to refs/standard/proposals/<head> on GitHub
 
     def craft(self, target_id: str, base: str, law_text: str = "") -> tuple[str, str]:
-        """(head, route): "recipe" when an instrument can reproduce it, "review" when a human must."""
+        """(head, route): "recipe" when an instrument can reproduce it, "review" when a human must sign a review."""
         tree = Snapshot(self.store, base)
-        recipe = RECIPES.get(target_id)
-        if recipe is not None:
-            files = recipe(tree)
-            if files and any(p not in tree.paths() or tree.read(p) != c for p, c in files.items()):
-                return commit_files(self.store, base, files, f"Standard: remediate {target_id}"), "recipe"
-            raise AgentError(f"the {target_id} recipe changes nothing")
-        if target_id in NEVER_TO_A_MODEL or target_id not in TASKS or not self.api_key:
-            raise AgentError(f"{target_id}: no recipe and no model route")
+        recipe = recipes_for(self.data).get(target_id)
+        files = recipe(tree) if recipe is not None else None
+        if files and any(p not in tree.paths() or tree.read(p) != c for p, c in files.items()):
+            head = commit_files(self.store, base, files, f"Standard: remediate {target_id}\n\n"
+                                                         f"Standard-Target: {target_id}\n")
+            self.publish(head)
+            return head, "recipe"
+        if target_id not in TASKS or not self.api_key:
+            raise AgentError(f"{target_id}: no applicable recipe and no model route")
         reply = self.ask(f"Repository files follow. Maintenance target `{target_id}`.\nTask: {TASKS[target_id]}\n"
                          f"{law_text}\nReturn JSON {{\"title\": str, \"files\": {{path: full new content}}}}, "
-                         f"changing as few files as possible.\n\n{model_context(tree)}", self.api_key)
+                         f"changing as few files as possible.\n\n"
+                         f"{model_context(tree, redact=target_id == 'secrets')}", self.api_key)
         files = reply.get("files") if isinstance(reply, dict) else None
         if not isinstance(files, dict) or not files or not all(in_scope(target_id, p) and isinstance(t, str)
                                                                 for p, t in files.items()):
             raise AgentError(f"the repair of {target_id} leaves its write scope")
+        if any(REDACTED.decode() in t for t in files.values()):
+            raise AgentError("the reply still carries a redaction mark")
         title = str(reply.get("title", ""))[:200] or f"remediate {target_id}"
-        return commit_files(self.store, base, {p: t.encode() for p, t in files.items()}, f"Standard: {title}"), "review"
+        head = commit_files(self.store, base, {p: t.encode() for p, t in files.items()},
+                            f"Standard: {title}\n\nStandard-Target: {target_id}\n")
+        self.publish(head)
+        return head, "review"
 
-    def intent(self, domain: str, at: int, area: str, item: str, base: str, head: str) -> dict:
-        body = {"id": f"intent-{uuid.uuid4().hex}", "at": at, "author": self.signer.identity, "under": self.capability,
+    def intent(self, domain: str, at: int, area: str, item: str, base: str, head: str, route: str = "recipe") -> dict:
+        body = {"id": f"intent-{uuid.uuid4().hex}", "at": at, "author": self.signer.identity,
+                "under": self.capabilities[route],
                 "op": "remediate", "args": {"area": area, "item": item, "base": base, "head": head}}
         return envelope(domain, "intent", body, [self.signer])

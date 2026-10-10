@@ -43,7 +43,11 @@ def required_for(kind) -> frozenset:
 class SignedAssessment:
     """A boundary backed by one signed assessment of the installation.
 
-    payload = {schema, assessor, release, genesis, ledger, issued_at, expires_at, contracts: {Txx: "VERIFIED" | ...}}
+    payload = {schema, assessor, independent, release, genesis, ledger, issued_at, expires_at,
+               contracts: {Txx: "VERIFIED" | ...}}
+
+    `independent` is false when the operator assessed its own installation (a demo): the system runs, nothing is
+    qualified, and every view says so (D19).
     """
 
     SCHEMA = "standard.t-assessment/1"
@@ -52,12 +56,14 @@ class SignedAssessment:
         if not pinned_assessors or any(not isinstance(k, bytes) or len(k) != 32 for k in pinned_assessors.values()):
             raise TrustUnavailable("TRUST.ASSESSORS")
         self.bundle, self.pinned = bundle, dict(pinned_assessors)
+        self.independent = bundle.get("payload", {}).get("independent") is True
 
     def check(self, required, *, release: str, genesis: str, ledger: str, now) -> None:
         try:
             payload = self.bundle["payload"]
             if set(self.bundle) != {"payload", "signature"} or set(payload) != {
-                    "schema", "assessor", "release", "genesis", "ledger", "issued_at", "expires_at", "contracts"} \
+                    "schema", "assessor", "independent", "release", "genesis", "ledger", "issued_at", "expires_at",
+                    "contracts"} or type(payload["independent"]) is not bool \
                     or payload["schema"] != self.SCHEMA:
                 raise TrustUnavailable("TRUST.SHAPE")
             key = self.pinned.get(payload["assessor"])

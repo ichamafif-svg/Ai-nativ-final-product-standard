@@ -1,0 +1,199 @@
+"""Constitute an installation (§13.2 step 1, D18), in two phases separated by FLOOR-0's witnessed delay:
+
+    python tools/ceremony.py init DIR --repo PATH [--pins PATH]                 a local git repository
+    python tools/ceremony.py init DIR --github OWNER/NAME --token-file F [--pins PATH]
+    ... at least one hour later ...
+    python tools/ceremony.py activate DIR
+
+`init` writes keys, the client law, the genesis, the witnesses' first checkpoint, the grant proposals, a
+self-assessment and DIR/standard.toml. `activate` anchors time again and activates the grants. The genesis grants
+nothing: capabilities are widenings, so they wait for the delay like any other.
+
+DEMO: one operator generates every key on one host, including the four humans and the two witnesses. The quorum,
+the witnesses and the assessment are therefore not physical (G01, G06, D19). Use this for a demonstration, never as
+a qualified installation.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat  # noqa: E402
+
+from floors import RELEASE  # noqa: E402
+from kernel import Kernel, canon, digest, empty  # noqa: E402
+from trusted.boundary import CONTRACTS, PREFIX, SignedAssessment  # noqa: E402
+from trusted.daemon import key  # noqa: E402
+from trusted.journal import Journal, PinStore  # noqa: E402
+from trusted.release import code_digest  # noqa: E402
+from trusted.signing import Signer, entry  # noqa: E402
+
+IDENTITIES = {"h1": "human", "h2": "human", "h3": "human", "h4": "human", "w1": "witness", "w2": "witness",
+              "guard": "guard", "agent": "agent", "scanner": "service", "oracle": "oracle", "sentinel": "sentinel"}
+YEAR = 365 * 86_400_000
+GRANTS = {
+    "scanner": ("scanner", ["observe", "certify:real"], ["repo:*"], []),
+    "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*"], []),
+    "agent_recipe": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-autonomous"]),
+    "agent_review": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"]),
+    "reviewer": ("h3", ["observe", "certify:real"], ["repo:*"], []),
+    "officer": ("h2", ["observe", "certify:real"], ["org:*"], []),
+}
+
+
+def now() -> int:
+    return int(time.time() * 1000)
+
+
+def new_key(path: Path) -> Signer:
+    sk = Ed25519PrivateKey.generate()
+    raw = sk.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(base64.b64encode(raw).decode())
+    return Signer(path.stem, sk)
+
+
+def git(*args) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True, timeout=600).stdout.strip()
+
+
+def init(args) -> None:
+    d = Path(args.dir).resolve()
+    (d / "keys").mkdir(parents=True)
+    os.chmod(d / "keys", 0o700)
+    signers = {i: new_key(d / "keys" / f"{i}.key") for i in IDENTITIES}
+    assessor = new_key(d / "keys" / "assessor.key")
+    root = {"threshold": 2, "identities": {i: {"kind": k, "keys": [signers[i].root_key()]} for i, k in IDENTITIES.items()}}
+    law = {"format": "standard-client/1", "floors": RELEASE.digest,
+           "bindings": {"owner": "h1", "inventory_source": "scanner", "scanner": "scanner", "compliance_officer": "h2"}}
+    code = code_digest()
+    kernel = Kernel(RELEASE, code)
+    t = now()
+    genesis = entry(empty(), "genesis", {"id": "genesis", "at": t, "author": "h1", "root": root, "law": law,
+                                         "code": code}, [signers["h1"], signers["h2"]])
+    domain = next(op[2] for op in kernel.decide(empty(), genesis)[1] if op[:2] == ("set", "domain"))
+    pins_path = Path(args.pins).resolve() if args.pins else d / "pins" / "pins.db"
+    if pins_path.parent == d / "pins":
+        print("WARNING: the pins live on the journal's volume: anti-rollback is not independent (L-04).")
+    journal_path = d / "journal.db"
+    journal = Journal(journal_path, kernel, PinStore(pins_path, create=True), domain, create=True)
+    journal.append(genesis)
+    s = journal.snapshot()
+    journal.append(entry(s, "checkpoint", {"id": "checkpoint-0", "at": t + 1, "author": "w1", "size": s["size"],
+                                           "head": s["head"]}, [signers["w1"], signers["w2"]]))
+    grants = {}
+    for name, (holder, actions, resources, conditions) in GRANTS.items():
+        s = journal.snapshot()
+        body = {"id": f"grant-{name}", "at": s["last_at"] + 1, "author": "h1", "holder": holder, "actions": actions,
+                "resources": resources, "conditions": conditions, "not_after": t + YEAR}
+        journal.append(entry(s, "grant", body, [signers["h1"], signers["h2"]]))
+        grants[name] = body["id"]
+    payload = {"schema": SignedAssessment.SCHEMA, "assessor": "operator", "independent": False, "release": code,
+               "genesis": domain, "ledger": digest(str(journal_path)), "issued_at": t, "expires_at": t + 30 * 86_400_000,
+               "contracts": dict.fromkeys(CONTRACTS, "VERIFIED")}
+    signature = assessor.sign(PREFIX + canon(payload))["sig"]
+    (d / "assessment.json").write_text(json.dumps({"payload": payload, "signature": signature}, indent=2))
+    if args.github:
+        mirror = d / "mirror"
+        git("clone", "-q", "--mirror", f"https://github.com/{args.github}.git", str(mirror))
+        anchor = git("-C", str(mirror), "rev-parse", "refs/heads/main")
+        git("clone", "-q", "--bare", f"https://github.com/{args.github}.git", str(d / "agent-store"))
+        repository = (f'kind = "github"\nname = "{args.github}"\ntoken_file = "{Path(args.token_file).resolve()}"\n'
+                      f'mirror = "mirror"\nanchor = "{anchor}"')
+    else:
+        source = Path(args.repo).resolve()
+        anchor = git("-C", str(source), "rev-parse", "refs/heads/main")
+        git("clone", "-q", "--bare", str(source), str(d / "agent-store"))
+        repository = f'kind = "git"\npath = "{source}"\nproposals = "agent-store"\nanchor = "{anchor}"'
+    assessor_public = assessor.public
+    data_section = ""
+    if getattr(args, "data", None):
+        from kernel import parse
+        snapshot = Path(args.data).resolve()
+        data_section = f'\n[data]\npath = "{snapshot}"\ndigest = "{digest(parse(snapshot.read_bytes(), max_bytes=64 << 20))}"\n'
+    (d / "standard.toml").write_text(f'''# DEMO installation: every key on one host, self-assessed (ARCHITECTURE.md §15.4, D18, D19).
+demo = true
+
+[ledger]
+journal = "journal.db"
+pins = "{pins_path}"
+genesis = "{domain}"
+
+[keys]
+dir = "keys"
+
+[grants]
+{chr(10).join(f'{n} = "{g}"' for n, g in grants.items())}
+
+[repository]
+{repository}
+
+[assessment]
+path = "assessment.json"
+assessors = {{ operator = "{assessor_public}" }}
+
+[socket]
+path = "admission.sock"
+
+[agent]
+store = "agent-store"
+{data_section}''')
+    print(f"constituted {d}: genesis {domain}. Activate the grants after {time.ctime((journal.snapshot()["last_at"] + 3_600_000) / 1000)}:")
+    print(f"    python tools/ceremony.py activate {d}")
+
+
+def activate(args) -> None:
+    d = Path(args.dir).resolve()
+    import tomllib
+    c = tomllib.loads((d / "standard.toml").read_text())
+    kernel = Kernel(RELEASE, code_digest())
+    journal = Journal(d / c["ledger"]["journal"], kernel, PinStore(Path(c["ledger"]["pins"])), c["ledger"]["genesis"])
+    keys = d / c["keys"]["dir"]
+    h1, h2 = key(keys, "h1"), key(keys, "h2")
+    s = journal.snapshot()
+    journal.append(entry(s, "checkpoint", {"id": f"checkpoint-{now()}", "at": max(now(), s["last_at"] + 1),
+                                           "author": "w1", "size": s["size"], "head": s["head"]},
+                         [key(keys, "w1"), key(keys, "w2")]))
+    for name, grant in c["grants"].items():
+        s = journal.snapshot()
+        if grant in s["grants"]:
+            continue
+        journal.append(entry(s, "activate", {"id": f"activate-{name}", "at": s["last_at"] + 1, "author": "h1",
+                                             "proposal": grant}, [h1, h2]))
+    print("grants active:", ", ".join(c["grants"]))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    i = sub.add_parser("init")
+    i.add_argument("dir")
+    i.add_argument("--repo")
+    i.add_argument("--github")
+    i.add_argument("--token-file")
+    i.add_argument("--pins")
+    i.add_argument("--data", help="a reviewed snapshot from tools/refresh_data.py, pinned by its digest")
+    a = sub.add_parser("activate")
+    a.add_argument("dir")
+    args = parser.parse_args()
+    if args.command == "init":
+        if bool(args.repo) == bool(args.github) or (args.github and not args.token_file):
+            parser.error("give --repo, or --github with --token-file")
+        init(args)
+    else:
+        activate(args)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

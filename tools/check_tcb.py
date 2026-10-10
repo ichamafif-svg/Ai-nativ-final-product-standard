@@ -18,12 +18,12 @@ STANDARD = {"kernel", "trusted", "floors", "autonomy", "surface", "compliance", 
 ALLOWED = {
     "kernel": {"kernel"},
     "floors": {"kernel", "floors"},
-    "trusted": {"kernel", "trusted"},
+    "trusted": {"kernel", "floors", "trusted"},
     "autonomy": {"kernel", "trusted", "autonomy"},
     "surface": {"kernel", "trusted", "autonomy", "surface"},
 }
 # U may use trusted code only as a library: what reads, signs with its own key, or talks to the gateway.
-U_MAY_USE = {"trusted.instruments", "trusted.recipes", "trusted.signing", "trusted.gateway"}
+U_MAY_USE = {"trusted.instruments", "trusted.recipes", "trusted.signing", "trusted.gateway", "trusted.data"}
 TCB = ("kernel", "floors", "trusted")
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
 
@@ -57,7 +57,7 @@ def main() -> int:
                 if path.name == "checker.py" and layer == "trusted" and top == "kernel" and name not in CHECKER_ALLOWED:
                     problems.append(f"the second judge imports {name}: it must stay independent of the kernel")
     counted = {}
-    for budget, spec in BUDGETS.items():
+    for budget, spec in ((k, v) for k, v in BUDGETS.items() if not k.startswith("_")):
         lines = 0
         for pattern in spec["files"]:
             for path in sorted(ROOT.glob(pattern)):
