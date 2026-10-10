@@ -59,6 +59,13 @@
     "ceiling": 690,
     "breaks": "safety (T06/T07/T08): a fact that opens a right, or a provider write"
   },
+  "hosting": {
+    "files": [
+      "trusted/hosting.py"
+    ],
+    "ceiling": 71,
+    "breaks": "safety (T07, D23): a client writes a canonical repository or another client's branch"
+  },
   "_raised": {
     "date": "2026-10-10",
     "trusted": "960 -> 1150: operator process (daemon), release identity (T01); 1150 -> 1153: GitHub API choice in the config; strict umask of the guard (T07 by Unix users)",

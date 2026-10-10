@@ -88,6 +88,19 @@ def qualify(config_path) -> list:
                                          f"the agent runs as {agent.pw_name}",
                          "the host's kernel refuses any write to the repository by the agent's user",
                          "root, sudo rules that let someone become the guard, and the guard process itself"))
+    if "hosting" in c:                                     # D23: clients reach repositories only through the gate
+        import pwd
+        import tomllib as toml
+        gate, guard = pwd.getpwnam(c["hosting"]["gate_user"]), pwd.getpwnam(sep["guard_user"]) if sep else None
+        hosted = toml.loads(Path(c["hosting"]["config"]).read_text())["repositories"]
+        bad = [n for n, r in hosted.items() if guard is None or Path(r["inbox"]).stat().st_uid == guard.pw_uid
+               or any(q.stat().st_uid != guard.pw_uid or q.stat().st_mode & 0o022
+                      for q in [Path(r["canonical"]), *Path(r["canonical"]).rglob("*")] if not q.is_symlink())]
+        ok = not bad and guard is not None and gate.pw_uid not in (0, guard.pw_uid)
+        out.append(probe("T07 hosted repositories behind the gate", ok, bad or f"{len(hosted)} repositories; "
+                         f"canonical owned by {guard.pw_name}, inboxes by {gate.pw_name}",
+                         "a client's push, run as the gate user, cannot write a canonical repository",
+                         "sshd's configuration, other accounts on the host, and keys authorized outside tools/host.py"))
     return out
 
 

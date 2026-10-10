@@ -303,7 +303,7 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 153 / 1 153** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **690 / 690**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 153 / 1 153** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **690 / 690**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**, passerelle d'hébergement **71 / 71**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -1000,6 +1000,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D20 | Périmètre : Python (`requirements.txt` épinglé), GitHub Actions, git, GitHub. Le reste est `uncovered` ou `NO_ROUTE`, visible (§15.4) | Arrêtée |
 | D21 | La redevabilité reste dans le processus T pour cette version ; son isolation dans un worker confiné est reportée, la limite est déclarée | Arrêtée |
 | D22 | Le produit se prouve d'abord en **git local** ; GitHub reste un adaptateur | En git local, « seule la garde déplace `main` » est tenu par deux utilisateurs Unix et vérifié par `qualify.py` ; sur GitHub il dépend de tokens, rulesets et d'une offre payante pour les dépôts privés. Les propositions de l'agent sur GitHub sont des branches `standard/proposals/*` (protégeables par ruleset) ; là où GraphQL est inaccessible, la garde fait le même CAS par `git push --force-with-lease=main:<base>` |
+| D23 | **Produit souverain** : notre interface, nos serveurs git, nos agents, des LLM frontier par API seulement quand une recette ne suffit pas. GitHub n'est plus qu'un adaptateur facultatif | Trois chantiers. (1) **Hébergement** : les dépôts clients vivent chez nous ; les clients passent par une passerelle SSH (commande forcée) qui lit le dépôt canonique et n'écrit que dans une boîte de dépôt, sous `refs/heads/<identité>/*` ; `main` ne bouge que par le CAS de la garde. (2) **Interface** : une application web au-dessus de `surface/` ; aucune clé humaine sur le serveur (signature côté navigateur ou clé matérielle), sinon le quorum humain est du théâtre. (3) **LLM** : une seule porte d'egress, multi-fournisseurs, avec masquage des secrets et journal de chaque envoi (R15). Conséquence de périmètre : la cible GitHub Actions de D20 devient secondaire ; la CI qui exécute les tests est la nôtre et entre dans la TCB |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1032,6 +1033,8 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 5. En root : `python tools/ceremony.py separate DIR --guard-user standard-guard --agent-user standard-agent` (l'agent doit être dans le groupe de la garde pour joindre le socket). La garde possède l'installation, le dépôt et toutes les clés sauf celle de l'agent ; l'agent ne possède que `DIR/agent`.
 6. Lancer `python -m trusted serve DIR/standard.toml` sous l'utilisateur garde et `python -m autonomy run DIR/standard.toml` sous l'utilisateur agent, chacun avec son propre `HOME`. `python tools/qualify.py DIR/standard.toml` liste ce que la démo ne tient pas physiquement.
 
+**Héberger les dépôts clients (D23).** `python tools/host.py create hosting.toml NAME --from PATH --guard-user standard-guard --gate-user standard-gate` crée le dépôt canonique (à la garde) et sa boîte de dépôt (à la passerelle). `python tools/host.py authorize hosting.toml NAME alice --key alice.pub --write --gate-user standard-gate` donne à une clé SSH une commande forcée vers `trusted/hosting.py` : `git fetch` lit le canonique, `git push` n'écrit que dans la boîte, sous `refs/heads/alice/*`. Pas de shell, pas d'autre dépôt, une seule réponse de refus qui ne dit pas ce qui existe. L'installation pointe sur le canonique (`ceremony.py init DIR --repo …/repos/NAME.git`) et déclare `[hosting] config, gate_user` pour que `qualify.py` le vérifie. Ce que les clients poussent n'atteint pas encore `main` : il faut pour cela une opération propre dans la loi (suite de D23).
+
 En git local, T07 est tenu par le noyau de l'hôte : l'agent ne peut ni verrouiller `refs/heads/main`, ni lire la clé de la garde, ni ouvrir le journal. La garde ne lance jamais git *dans* le store de l'agent (elle le lit de l'extérieur par `ls-remote`/`fetch`), pour que la configuration git écrite par U ne s'exécute jamais sous l'identité de la garde. Restent hors preuve : root, les règles sudo qui permettent de devenir la garde, et le processus de la garde lui-même.
 
 Côté GitHub, l'installation doit garantir que seule la garde déplace `main` (ruleset avec la garde seule en bypass) et que l'agent ne peut pousser que les branches `standard/proposals/*` (une règle de ruleset sur un motif de branche, exprimable chez GitHub ; un ref hors `refs/heads` ne l'est pas). C'est T07 : `qualify.py` le vérifie en partie et dit le reste.
@@ -1056,7 +1059,8 @@ surface/     Interface humaine, point d'entrée agent (`python -m surface`).
 compliance/  Projection clauses ISO/NIS2/DORA (hors TCB, lecture seule).
 tests/       Un test par règle du registre §17, un par garantie G01–G16,
              les dix scénarios de §21.1, le différentiel des deux juges.
-tools/       Contrôle des couches et budgets, cérémonie, qualification, données.
+tools/       Contrôle des couches et budgets, cérémonie, qualification, données,
+             hébergement (host.py : dépôt canonique + boîte de dépôt + clés clients).
 demo/        Le dépôt de démonstration, hors de ses floors au départ.
 ```
 
@@ -1117,6 +1121,9 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Preuves qualifiables | Fait pour les cibles retenues (§15.3) ; données tierces épinglées (D17) |
 | Travail unifié (U) | Fait : projection, Work Engine, agent, cycle, surface, revue et attestation humaines |
 | Installation | Fait : processus opérateur et agent sous deux utilisateurs Unix, cérémonie en deux phases, séparation, qualification, adaptateur GitHub |
+| Hébergement (D23, chantier 1) | Fait : passerelle SSH à commande forcée, canonique à la garde, boîte de dépôt par client ; démontré avec sshd réel (push sur `main` et sur la branche d'un autre refusés, shell refusé) ; qualify : PASS. Reste : faire entrer le travail des clients dans la loi |
+| Interface (D23, chantier 2) | À faire : application web au-dessus de `surface/`, signature humaine hors serveur |
+| Porte LLM (D23, chantier 3) | Partielle : appel Claude dans l'agent, masquage des secrets ; reste multi-fournisseurs et journal d'egress |
 | Jalon investisseur (D15) | Démontré en git local avec T07 physique (qualify : PASS) ; sur GitHub réel, une réparation SBOM a atteint `main` de bout en bout, mais par les accès de la session et non par un jeton de garde distinct |
 | Garanties physiques (§15.2) | T07 **démontré** en git local. Les autres **non démontrées** : exigent des humains, des témoins, un volume de pins et un évaluateur réellement distincts |
 | Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |
