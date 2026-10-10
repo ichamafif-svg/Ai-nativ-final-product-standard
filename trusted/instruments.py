@@ -226,7 +226,8 @@ def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = Fals
             venv = work / "venv"
             subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=300)
             python = str(venv / "bin" / "python")
-            subprocess.run([python, "-m", "pip", "install", "-q", "-r", str(code / "requirements.txt"), "pytest"],
+            subprocess.run([python, "-m", "pip", "install", "-q", "--only-binary=:all:",   # wheels: no build code
+                            "-r", str(code / "requirements.txt"), "pytest"],
                            check=True, timeout=1800)
         (work / "pytest.ini").write_text("[pytest]\n")
         report = work / "report.xml"

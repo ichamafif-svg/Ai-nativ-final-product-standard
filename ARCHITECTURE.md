@@ -1046,6 +1046,8 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 
 ### 19.2 Installer une démo
 
+**Sur un serveur Ubuntu 24.04** : copier le projet, puis en root `bash tools/install_server.sh` (paquets, environnement Python, trois utilisateurs garde/agent/passerelle, profil AppArmor du bac à sable, pare-feu, dépôt de démo hébergé, instantané de données, cérémonie phase 1, clé Claude facultative saisie sans écho, SSH par clé seulement), et une heure plus tard `bash /opt/standard/tools/install_server.sh activate` (activation, séparation, deux services systemd, qualification). Les étapes ci-dessous détaillent ce que fait le script.
+
 1. Créer le dépôt de démo à partir de `demo/` : il démarre hors de ses floors (dépendance vulnérable, SBOM absent, action non épinglée, secret en dur).
 2. `python tools/refresh_data.py requirements.txt --actions actions/checkout@v4 actions/setup-python@v5 > data.json`, puis relire l'instantané.
 3. `python tools/ceremony.py init DIR --repo /srv/standard/repo --pins /autre/volume/pins.db --data data.json` (ou `--github OWNER/NAME --token-file F`) : clés, loi, genèse, propositions de capacités, auto-évaluation, instantané épinglé par son digest.

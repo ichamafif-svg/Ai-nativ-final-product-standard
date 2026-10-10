@@ -101,7 +101,7 @@ def authorize(args) -> None:
     ssh = Path(gate.pw_dir) / ".ssh"
     ssh.mkdir(mode=0o700, exist_ok=True)
     keys = ssh / "authorized_keys"
-    line = f'command="cd {ROOT} && exec python3 -m trusted.hosting {path} {args.identity}",restrict {key}'
+    line = f'command="cd {ROOT} && exec {sys.executable} -m trusted.hosting {path} {args.identity}",restrict {key}'
     existing = keys.read_text().splitlines() if keys.exists() else []
     if line not in existing:
         keys.write_text("\n".join(existing + [line]) + "\n")

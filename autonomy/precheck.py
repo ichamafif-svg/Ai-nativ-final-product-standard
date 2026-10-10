@@ -49,16 +49,40 @@ def measure(tree, targets: dict, data) -> dict:
     return out
 
 
-def suite(sandbox: Sandbox, store, base: str, head: str) -> tuple[str, list]:
+def environment(requirements: Path, cache) -> str:
+    """A Python with the candidate's pinned dependencies, built outside the sandbox (it needs the index), from wheels
+    only so that no package's build code runs, and reused for the same requirements."""
+    import hashlib
+    import subprocess
+    import sys
+    if not requirements.exists() or cache is None:
+        return sys.executable
+    venv = Path(cache) / hashlib.sha256(requirements.read_bytes()).hexdigest()[:16]
+    python = venv / "bin" / "python"
+    if not python.exists():
+        subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True, timeout=300)
+        r = subprocess.run([str(python), "-m", "pip", "install", "-q", "--only-binary=:all:", "-r", str(requirements)],
+                           capture_output=True, timeout=1800)
+        if r.returncode != 0:
+            import shutil
+            shutil.rmtree(venv, ignore_errors=True)
+            raise RuntimeError(f"dependencies: {r.stderr.decode(errors='replace')[-500:]}")
+    return str(python)
+
+
+def suite(sandbox: Sandbox, store, base: str, head: str, cache=None) -> tuple[str, list]:
     """Main's tests against the candidate's code, in the sandbox: (green|red|uncovered, failures)."""
     with sandbox.checkout(store, base) as main_tree, sandbox.checkout(store, head) as code:
         if not (main_tree / "tests").is_dir():
             return "uncovered", ["main has no tests/"]
+        try:
+            python = environment(code / "requirements.txt", cache)
+        except Exception as exc:
+            return "uncovered", [str(exc)]
         report = Path(tempfile.mkdtemp()) / "report.xml"
         (report.parent / "pytest.ini").write_text("[pytest]\n")
-        sandbox.python_module("pytest", "-c", report.parent / "pytest.ini", "--rootdir", code, "-p",
-                              "no:cacheprovider", "-q", f"--junitxml={report}", main_tree / "tests",
-                              cwd=code, pythonpath=code)
+        sandbox.run([python, "-m", "pytest", "-c", report.parent / "pytest.ini", "--rootdir", code, "-p",
+                     "no:cacheprovider", "-q", f"--junitxml={report}", main_tree / "tests"], code, pythonpath=code)
         if not report.exists():
             return "uncovered", ["the suite produced no report"]
         failed = []
@@ -90,7 +114,8 @@ def tools(sandbox: Sandbox, store, base: str, head: str, changed: list) -> dict:
     return out
 
 
-def precheck(store, base: str, head: str, target_id: str, targets: dict, data, sandbox: Sandbox) -> dict:
+def precheck(store, base: str, head: str, target_id: str, targets: dict, data, sandbox: Sandbox,
+             cache=None) -> dict:
     """{"ok": bool, "problems": [str], "fixed": bool, ...}: whether this candidate is worth proposing."""
     before, after = measure(Snapshot(store, base), targets, data), measure(Snapshot(store, head), targets, data)
     worse = [tid for tid in after if tid != target_id and _worse(targets[tid]["expect"], before[tid][0], after[tid][0])]
@@ -101,7 +126,7 @@ def precheck(store, base: str, head: str, target_id: str, targets: dict, data, s
     fixed = target_id not in after or after[target_id][0] == targets[target_id]["expect"]
     if not fixed:
         problems.append(f"{target_id} is still {after[target_id][0]}: {after[target_id][1][:5]}")
-    status, failures = suite(sandbox, store, base, head)
+    status, failures = suite(sandbox, store, base, head, cache)
     if status != "green":
         problems.append(f"main's tests are {status} on this candidate: {failures[:3]}")
     changed = probes.git(store, "diff", "--name-only", base, head).split()

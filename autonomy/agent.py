@@ -154,7 +154,7 @@ class Agent:
         files = recipe(tree) if recipe is not None else None
         if files and any(p not in tree.paths() or tree.read(p) != c for p, c in files.items()):
             head = self._commit(base, files, f"Standard: remediate {target_id}\n\nStandard-Target: {target_id}\n")
-            check = precheck(self.store, base, head, target_id, targets, self.data, self.sandbox) if targets else {}
+            check = precheck(self.store, base, head, target_id, targets, self.data, self.sandbox, self.store.parent / "venvs") if targets else {}
             if check and not check["ok"]:
                 raise AgentError(f"the recipe for {target_id} does not pass the agent's precheck: {check['problems']}")
             self.publish(head)
@@ -187,7 +187,7 @@ class Agent:
             title = str(reply.get("title", ""))[:200] or f"remediate {target_id}"
             head = self._commit(base, {p: c.encode() for p, c in files.items()},
                                 f"Standard: {title}\n\nStandard-Target: {target_id}\n")
-            check = precheck(self.store, base, head, target_id, targets, self.data, self.sandbox) if targets else {
+            check = precheck(self.store, base, head, target_id, targets, self.data, self.sandbox, self.store.parent / "venvs") if targets else {
                 "ok": True, "isolation": self.sandbox.isolation, "tests": "?"}
             if check["ok"]:
                 message = dossier(target, finding["status"], finding["details"], sorted(files), check, title,
