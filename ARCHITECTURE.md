@@ -303,7 +303,7 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **960 / 960**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **248 / 248**. TCB locale : 4 088 lignes, contre 4 507 pour le prototype hybride. Les trois derniers plafonds sont des cliquets.
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **960 / 960**, intégrations T06/T07/T08 (instruments, recettes, adaptateurs, passes opérateur) **450 / 450**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **248 / 248**. TCB locale : 4 538 lignes, intégrations comprises ; le prototype hybride en comptait 4 507 sans elles. Les trois derniers plafonds sont des cliquets.
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -677,7 +677,7 @@ Sinon, elle exige `review = approved`, signé par un reviewer habilité, lié au
 
 ### 11.5 Point d'entrée agent
 
-- `python -m standard` : tâche courante, loi effective (floors + client) et routes T, en texte lisible lié au préfixe et au digest. L'agent ne lit ni README ni sérialisation de la constitution.
+- `python -m surface` : tâche courante, loi effective (floors + client) et routes T, en texte lisible lié au préfixe et au digest. L'agent ne lit ni README ni sérialisation de la constitution.
 - `context --task ID`, `context --law SECTION/ID`, `law-source --source .standard/law.toml`, `discover`, `status`, `claim`, `submit`, `attempt`, `run`, `watch`.
 - `submit` recontrôle route et préfixe, refuse une enveloppe qui ne traite pas exactement la tâche et sa ressource, puis la confie au **seul** chemin d'admission.
 - Un travailleur externe lit la vue sur stdin et renvoie une enveloppe signée par son identité U sur stdout. Aucun retour ne ferme une dette ni ne déclenche un effet.
@@ -975,10 +975,11 @@ Une couche = un dossier. Rien en dehors.
 kernel/      K — jugement unique, six mécanismes, FLOOR-0, langage de loi.
              Aucune dépendance hors stdlib + cryptographie épinglée.
 trusted/     T — journal, pins, garde, adaptateurs d'effet, readback, horloge,
-             livraison, second juge (budget restrictif), passerelle d'admission.
+             livraison, second juge (budget restrictif), passerelle d'admission,
+             instruments T06 et recettes (ils attestent des faits qui ouvrent des droits).
 floors/      Floors de la release, déclaratifs, couverts par le digest.
 autonomy/    U — découverte, projection, Work Engine, agents, recettes, intégrations.
-surface/     Interface humaine, point d'entrée agent (`python -m standard`).
+surface/     Interface humaine, point d'entrée agent (`python -m surface`).
 compliance/  Projection clauses ISO/NIS2/DORA (hors TCB, lecture seule).
 tests/       Un test par règle du registre §17, un par garantie G01–G16,
              les dix scénarios de §21.1, le différentiel des deux juges.
@@ -989,7 +990,7 @@ tests/       Un test par règle du registre §17, un par garantie G01–G16,
 - `kernel` n'importe rien de Standard.
 - `trusted` n'importe que `kernel`.
 - Le second juge n'importe ni le noyau ni son évaluateur.
-- `autonomy`, `surface`, `compliance` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable.
+- `autonomy`, `surface`, `compliance` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable. Ils peuvent seulement utiliser comme bibliothèques `trusted.instruments` (lecture), `trusted.recipes`, `trusted.signing` (signer avec leur propre clé) et `trusted.gateway`.
 - Le budget de chaque fichier de `kernel/` et `trusted/` est déclaré ; tout dépassement bloque.
 
 ---

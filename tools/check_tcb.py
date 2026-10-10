@@ -19,7 +19,12 @@ ALLOWED = {
     "kernel": {"kernel"},
     "floors": {"kernel", "floors"},
     "trusted": {"kernel", "trusted"},
+    "autonomy": {"kernel", "trusted", "autonomy"},
+    "surface": {"kernel", "trusted", "autonomy", "surface"},
 }
+# U may use trusted code only as a library: what reads, signs with its own key, or talks to the gateway.
+U_MAY_USE = {"trusted.instruments", "trusted.recipes", "trusted.signing", "trusted.gateway"}
+TCB = ("kernel", "floors", "trusted")
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
 
 
@@ -47,6 +52,8 @@ def main() -> int:
                 top = name.split(".")[0]
                 if top in STANDARD and top not in allowed:
                     problems.append(f"{path.relative_to(ROOT)} imports {name}")
+                if layer in ("autonomy", "surface") and top == "trusted" and name not in U_MAY_USE:
+                    problems.append(f"{path.relative_to(ROOT)} reaches {name}: U talks to K/T through the gateway")
                 if path.name == "checker.py" and layer == "trusted" and top == "kernel" and name not in CHECKER_ALLOWED:
                     problems.append(f"the second judge imports {name}: it must stay independent of the kernel")
     counted = {}
@@ -62,7 +69,7 @@ def main() -> int:
         print(f"{budget:12} {lines:5} / {spec['ceiling']}")
         if lines > spec["ceiling"]:
             problems.append(f"budget {budget}: {lines} lines over its ceiling {spec['ceiling']}")
-    for layer in ALLOWED:
+    for layer in TCB:
         for path in sorted((ROOT / layer).rglob("*.py")):
             if str(path.relative_to(ROOT)) not in counted:
                 problems.append(f"{path.relative_to(ROOT)} is in no budget")
