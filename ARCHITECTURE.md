@@ -1,303 +1,1052 @@
 # Standard — Architecture
 
-Document unique de référence. Il décrit **ce que Standard est et comment il est découpé**. Il ne décrit ni l'historique des versions, ni l'état d'avancement, ni les résultats de tests. Toute affirmation de sûreté ici est une **exigence de conception**, pas une garantie démontrée.
+Document unique de référence. Il réunit tout ce qui a été trouvé et décidé dans les versions V0 → V7, M2, le laboratoire TCB (campagnes I à V) et le prototype hybride, réécrit au propre. Il remplace tous les documents antérieurs.
+
+**Statut :** architecture cible et décisions arrêtées. Une exigence de ce document n'est **pas** une garantie démontrée. Ce qui est démontré, conditionnel ou ouvert est dit explicitement (§0).
 
 ---
 
-## 1. Mission
+## Sommaire
 
-Standard est une plateforme **AI-native** qui crée puis, surtout, **maintient en continu** des dépôts et systèmes logiciels par des agents autonomes, **sans jamais accorder d'autorité souveraine** à un agent, à un humain seul ou à un composant seul.
+0. Comment lire ce document
+1. Mission et promesse
+2. Principes directeurs
+3. Objets et vocabulaire
+4. La loi
+5. Architecture en couches
+6. Le noyau (K)
+7. Les cinq contrats transversaux
+8. La ligne d'effet
+9. Obligations et cycle de maintenance
+10. La frontière de confiance (T)
+11. L'autonomie (U)
+12. Floors de la release
+13. Protocole et parcours produit
+14. Garanties G01–G16
+15. Limites établies
+16. Modèle de menace
+17. Registre des constats (non-régression)
+18. Décisions
+19. Hébergement et produit
+20. Organisation du code
+21. Réception
+22. Discipline de changement
 
-- L'agent propose, diagnostique, code, teste et corrige.
-- Seul le **noyau** décide de ce qui est admissible.
-- Seule la **frontière de confiance** fait partir un effet réel.
+---
 
-Le produit vise la **maintenance autonome** (sécurité, fiabilité, conformité ISO 27001, NIS2, DORA). L'initialisation d'un dépôt est un cas particulier de maintenance, pas une exception.
+## 0. Comment lire ce document
+
+### 0.1 Statuts à ne jamais mélanger
+
+| Statut | Sens | État actuel |
+|---|---|---|
+| `BOUNDARY_FROZEN` | Le découpage K/T/U d'une garantie est arrêté, avec contrat, hypothèses et falsificateur | **16/16**, conditionnel |
+| `IMPLEMENTATION_VERIFIED` | Le mécanisme est implémenté et éprouvé contre ses falsificateurs | À démontrer, mécanisme par mécanisme |
+| `PHYSICAL_TRUST_VERIFIED` | Le contrat T tient sur une installation réelle | Non atteint |
+| `PRODUCTION_READY` | Toutes les portes de §21 passées sur le déploiement | **Non** |
+
+Un test vert, une CI verte ou une signature ne promeuvent jamais un statut.
+
+### 0.2 Qualité d'un résultat
+
+- **Observé** : sous un commit, un environnement, un oracle et des limites nommés. Rien de plus.
+- **Limite établie** : deux entrées indistinguables pour K mènent à deux vérités physiques différentes, ou une trace prouve qu'une dépendance est indispensable (§15).
+- **Ouvert** : tout le reste. Une question ouverte produit une route inactive ou un écart visible, jamais une hypothèse silencieuse qui permet un départ.
+
+---
+
+## 1. Mission et promesse
+
+Standard est une plateforme **AI-native** qui crée puis, surtout, **maintient en continu** des dépôts et systèmes logiciels par des agents autonomes, **sans accorder d'autorité souveraine** à un agent, à un humain seul ou à un composant seul.
+
+- **BUILD** crée ou transforme : conception, code, vérifications, intégration, déploiement gouverné. Un dépôt peut partir presque de zéro.
+- **RUN** observe le dépôt et la production, détecte les écarts, corrige, vérifie et maintient sécurité, fiabilité et conformité (ISO 27001, NIS2, DORA).
+- BUILD et RUN sont deux contextes d'un **même système**, sous la même loi. Ni BUILD, ni l'initialisation, ni la récupération n'ont de mode « god ».
 
 **Cycle central :** écart → obligation durable → travail autonome → preuve qualifiée → clôture ou escalade.
+
+### 1.1 La promesse a deux faces
+
+Une TCB qui refuse tout satisfait trivialement la sûreté et échoue au produit. Un agent qui peut tout faire paraît autonome et échoue à la constitution. Chaque garantie se teste donc dans les deux sens :
+
+- **Sûreté** : aucune transition ou effet interdit, aucune preuve fictive, aucune dette effacée.
+- **Progrès conditionnel** : si une capacité valide, une preuve accessible, un fournisseur disponible et une route permise existent, le système progresse **sans approbation humaine inutile**. Sinon, il produit une issue identifiable : attente, dette stable ou escalade.
+
+Le progrès n'est garanti que sous des hypothèses écrites de disponibilité et d'équité (§15, L-05).
 
 ---
 
 ## 2. Principes directeurs
 
-1. **Simplicité d'abord.** Un mécanisme ne s'ajoute que s'il protège une garantie nommée. Certaines limites résiduelles sont acceptées et documentées plutôt que compensées par de la complexité.
-2. **Un seul souverain déterministe.** Un jugement unique, une seule sémantique, aucun second moteur, aucun `allowed` fourni de l'extérieur.
-3. **La TCB est l'enjeu du produit.** Ce qui est dans la TCB ne doit souffrir d'aucune faiblesse et ne demande aucune IA pour s'appliquer.
-4. **Silos.** L'AI-first s'applique à la loi et aux opérations. Il ne s'applique **pas** au noyau, où l'IA est totalement absente.
-5. **La TCB ne se fait pas confiance.** Séparation interne de premier rang : un défaut d'un composant de la TCB ne suffit pas à admettre un effet interdit. La séparation est imposée par le noyau Linux (processus, utilisateurs, permissions).
-6. **La TCB seule amène le dépôt vers l'état voulu.** En théorie, appliquer la TCB sans autre couche suffit à converger ; les autres couches accélèrent et enrichissent, elles ne sont pas nécessaires à la correction.
-7. **La TCB ne grossit pas avec le métier.** Les règles métier croissent par déclarations ; les mécanismes de confiance restent constants.
-8. **Sécurité adversariale native.** Elle naît de la première règle (FLOOR-0), pas d'un module ajouté. Un événement adversarial déclenche lui-même du travail ou un traitement spécial.
+Chaque principe vient d'un constat ; la référence entre crochets renvoie au registre §17.
+
+1. **Simplicité d'abord.** Un mécanisme n'existe que s'il porte une garantie nommée. Les limites résiduelles sont acceptées et documentées plutôt que compensées par de la complexité. Mais **aucune baisse de garantie au nom de la simplicité**.
+2. **Un seul souverain déterministe.** Un jugement, une sémantique. Aucun second moteur, aucun `allowed` fourni de l'extérieur, aucun fallback `allowed=true`.
+3. **La TCB est l'enjeu du produit.** Ce qui est dans la TCB ne souffre d'aucune faiblesse et ne demande aucune IA pour s'appliquer.
+4. **Silos.** L'AI-first gouverne la forme de la loi (lisible par une IA, sans ambiguïté) et les opérations. Il ne s'applique **pas** au noyau, où l'IA est absente.
+5. **La TCB ne se fait pas confiance.** Séparation interne de premier rang : un défaut d'un composant ne suffit pas à admettre un effet interdit. L'isolation est imposée par le noyau Linux (processus, comptes, permissions, seccomp), pas par la discipline du code. [V6-§3.5, V6-§3.6]
+6. **La TCB seule amène le dépôt vers l'état voulu.** Les floors déclarent ce qui est exigé ; tout écart devient une obligation ; une obligation devient du travail. Les couches externes accélèrent et enrichissent, elles ne sont pas nécessaires à la correction.
+7. **La TCB ne grossit pas avec le métier.** Les règles métier croissent par déclarations ; les mécanismes de confiance restent constants. Aucun déplacement ni compactage de code ne compte comme réduction.
+8. **Sécurité adversariale native.** Elle naît de FLOOR-0. Un événement adversarial déclenche lui-même du travail ou un traitement spécial.
 9. **Aucun acteur de confiance seul**, humains compris.
-10. **Le noyau décide, il n'observe pas.** Le problème des oracles (vérité du monde réel) est assumé hors du noyau.
+10. **Le noyau décide, il n'observe pas.** La vérité du monde réel (problème des oracles) est assumée hors du noyau [L-01].
+11. **Hors du noyau ≠ hors de la TCB.** Tout composant dont la défaillance peut permettre une action interdite, effacer l'historique ou faire passer une clôture qui ouvre des droits est dans la TCB effective, quel que soit son dossier ou son nom. Une petite TCB locale ne prouve pas une petite TCB effective.
+12. **Identité ≠ définition.** Quand la loi évolue, autorisations, preuves et obligations restent liées à la définition sous laquelle elles sont nées. Jamais de réinterprétation implicite. [V6-§2]
+13. **Fermer par cause racine, pas par cas.** Un constat se corrige par une structure qui ferme sa classe entière. [V6-causes]
 
 ---
 
-## 3. Modèle de loi
+## 3. Objets et vocabulaire
 
-### 3.1 Trois niveaux
+| Objet | Définition |
+|---|---|
+| **Principal** | Identité logique (clé) d'un genre fixé : `human`, `agent`, `service`, `oracle`, `guard`, `witness`, `sentinel` |
+| **Ressource** | Objet gouverné, identifié de façon stable, typé, à états finis |
+| **Capacité** | Droit borné (sujet, ressource, opération, conditions, budget, durée) issu d'une chaîne de délégation atténuante |
+| **Exigence** | Propriété attendue d'un sujet (ex. `vulns = none` sur `repo:deps:vulns`), avec fraîcheur et échéance |
+| **Preuve** | Affirmation bornée, attribuée, sur un sujet exact, sous une méthode et une couverture déclarées |
+| **Obligation** | Dette stable née d'un écart entre exigence et preuve ; n'accorde jamais de droit |
+| **Transition** | Changement d'état canonique causé par exactement une entrée signée |
+| **Intention d'effet** | Description exacte d'une action physique : destination, octets, préconditions, fenêtre, reprise |
+| **Préfixe** | Historique admis, signé, ancré ; toute décision se prend sur un préfixe nommé |
+| **WorkItem** | Tentative de travail. N'est **jamais** une obligation |
+
+Le noyau ne connaît **aucun** objet métier : ni PR, Git, CI, scanner, SBOM, modèle IA, WorkItem ou politique ISO. Les contrats déclaratifs les raccordent aux objets ci-dessus.
+
+---
+
+## 4. La loi
+
+### 4.1 Trois niveaux
 
 | Niveau | Contenu | Auteur | Changement |
 |---|---|---|---|
-| **FLOOR-0** | La TCB : autorité, causalité, polarité, historique, preuve, passage aux effets | Équipe Standard | Nouvelle release + nouvelle genèse. Jamais par le système. |
-| **Floors** | Ce que Standard impose à tous : autonomie, sécurité, conformité | Équipe Standard, dans la release | Nouvelle release adoptée explicitement. Le client ne peut pas les affaiblir. |
-| **Loi client** | Identités, contexte, exigences supplémentaires, resserrements | Humains du client | Gouverné dans le journal (quorum, délai attesté, activation). Pas de nouvelle genèse. |
+| **FLOOR-0** | Protège la confiance elle-même : autorité, causalité, polarité, temps, preuve, effets, historique, redevabilité | Équipe Standard | Nouvelle release + nouvelle genèse. Jamais par le système |
+| **Floors** | Ce que Standard impose à tous : autonomie, sécurité, conformité. C'est le **niveau intermédiaire** qui porte l'autonomie | Équipe Standard, dans la release | Nouvelle release adoptée explicitement. Ni retirables ni affaiblissables par le client |
+| **Loi client** | Identités, liaisons des rôles, opérations, exigences supplémentaires, resserrements | Humains du client | Dans le journal : proposition signée, quorum, délai attesté, activation. Sans nouvelle genèse |
 
-Règles de composition :
+- Il n'y a pas de « lois d'exploitation Standard » séparées : tout ce que Standard impose est dans les floors.
+- Seule FLOOR-0 (avec le code et les floors de la release) est figée à la genèse. La loi client évolue dans le journal.
+- Floors + loi client activée = **une seule loi effective**, épinglée par digest et par préfixe. Toute projection refuse un digest discordant.
+- La TCB elle-même est **hors** de la maintenance autonome.
 
-- La composition est **additive** : un niveau inférieur ajoute ou durcit, jamais n'affaiblit.
-- Seules les lois de FLOOR-0 sont figées à la genèse. La loi client évolue dans le journal **par élargissement gouverné**.
-- Une loi présente dans le dépôt (`.standard/law.toml`) n'est qu'une **proposition** ; seule une activation gouvernée la rend effective.
-- Floors et loi client activée forment **une seule loi effective épinglée** (digest + préfixe).
+### 4.2 FLOOR-0
 
-### 3.2 Les six mécanismes
+Texte normatif. Le digest de FLOOR-0 couvre ce texte, la table de polarité, les droits de restriction, les constantes et l'automate de la ligne d'effet.
 
-Toute loi de la TCB s'exprime avec six primitives. Les niveaux inférieurs réutilisent les mêmes primitives chaque fois que c'est possible : une loi client doit se lire comme une loi de la TCB.
-
-| Mécanisme | Rôle |
+| Règle | Contenu |
 |---|---|
-| **CAP** | Capacités : qui peut faire quoi, sur quelle ressource, dans quel contexte et pour combien de temps. Délégation uniquement atténuante. |
-| **OBL** | Obligations : dettes stables nées d'un écart, avec échéance, maintien et clôture sur preuve. |
-| **NIV** | Niveaux : hiérarchie FLOOR-0 > floors > loi client, et règle de non-affaiblissement. |
-| **PROV** | Provenance : indépendance des chaînes de détenteurs, quorum, témoins. |
-| **TYPE** | Types fermés des ressources, faits, transitions et effets. |
-| **HIST** | Historique : journal append-only, préfixe authentique, loi applicable à chaque position. |
+| **F0-1** | Aucun acteur seul : quorum humain k ≥ `MIN_HUMANS`, au moins k+2 humains enrôlés, et assez de témoins. La récupération reste conditionnée à leur réponse. |
+| **F0-2** | Pour chaque propriété critique : ses contrôles, ses dépendances communes et les fautes couvertes sont nommés. Un désaccord de sûreté bloque l'effet ; une incohérence d'intégrité bloque la frontière touchée. Un arrêt local n'est pas une mutation non signée du journal. |
+| **F0-3** | Code et floors sont liés à la genèse. La loi client ne change que par quorum, délai attesté et activation, sans jamais affaiblir les floors ; les chaînes de capacités ne font que se restreindre. Une loi ne contraint que les genres qui agissent, attestent ou atténuent : **jamais** une restriction, un témoin ou le protocole d'élargissement. |
+| **F0-4** | Toute transition d'état canonique est causée par exactement une entrée signée. L'admission ne dépend que du préfixe admis, de la loi et du code épinglés. |
+| **F0-5** | Chaque genre d'entrée a une seule polarité. La genèse établit la racine initiale, épinglée de l'extérieur, par quorum. Tout élargissement ultérieur exige quorum humain, délai attesté, puis activation explicite par quorum. Les autres polarités ne font que restreindre, atténuer, agir sous capacité, attester ou témoigner. |
+| **F0-6** | Le temps ne fait qu'expirer ou faire tomber une autorité ; il n'en accorde jamais. Seul le quorum de témoins fait avancer l'ancre attestée. Les horodatages ordinaires sont monotones et bornés au-dessus de l'ancre. Une restriction peut partager le dernier instant : aucun horodatage ne peut l'affamer. |
+| **F0-7** | Lever une restriction unilatérale est un élargissement. k+1 humains peuvent dépasser un veto après son délai. |
+| **F0-8** | Un fait ne permet une action que s'il est fraîchement attesté par une chaîne ne partageant **aucun détenteur** avec l'acteur. Tout fait permissif porte son étiquette de provenance : observations, clôtures, instances ouvertes et portes. L'absence d'un fait ne permet jamais rien. |
+| **F0-9** | Tout effet est typé ; sa ressource dérive de ses arguments ; sa réservation est durable et à usage unique. Re-jugement et départ fournisseur sont ordonnés contre l'admission. Seule la requête canonique jugée passe à l'adaptateur de confiance, avec une clé de réservation liée à la genèse. La ligne d'effet suit une table unique ; une réservation part dans `DISPATCH_MS` ou jamais, et seulement ensuite peut être réconciliée. |
+| **F0-10** | L'historique est append-only et lié à la genèse. Une épingle monotone indépendante est retenue pour chaque écriture **avant** acquittement. Un historique en dessous ou divergent est bloqué ; la réparation restaure sa queue exacte. |
+| **F0-11** | Hors admission, chaque cible déclarée sans preuve indépendante fraîche a une obligation et une échéance stables ; un écart en retard enregistre une escalade vers les humains de la racine. La redevabilité n'autorise jamais rien. Enregistrer une escalade ne prouve ni sa livraison ni la réparation. |
 
-La suffisance de ces six primitives pour toute règle métier n'est pas démontrée ; c'est un objectif de conception.
+**Constantes de FLOOR-0** (valeurs par défaut de la release ; une loi client peut seulement les durcir) :
 
-### 3.3 Source de l'autonomie
+| Constante | Valeur | Rôle |
+|---|---|---|
+| `MIN_HUMANS` | 2 | k minimal du quorum ; k+2 humains enrôlés |
+| `MIN_WITNESSES` | 2 | Quorum de témoins pour avancer l'ancre |
+| `MIN_DELAY_MS` | 1 h | Délai attesté minimal avant activation d'un élargissement |
+| `MAX_AHEAD_MS` | 5 min | Avance maximale d'un horodatage sur l'ancre |
+| `DISPATCH_MS` | 5 min | Fenêtre de départ d'une réservation |
+| TTL `pending`, `unredeemed`, `reconcile`, `proof`, `observation` | 1 jour | Durées de vie avant expiration |
 
-L'autonomie vient de **l'écart entre ce que Standard (et le client) demande et ce que le dépôt a**. Chaque exigence active produit des besoins observables. Chaque besoin non satisfait produit une obligation. Chaque obligation produit du travail. Une obligation ne crée **jamais** une permission.
+**Polarité de chaque genre d'entrée :**
+
+| Polarité | Genres |
+|---|---|
+| `widen` | `genesis`, `rotate`, `grant`, `unfreeze`, `law`, `activate` |
+| `attenuate` | `delegate` |
+| `restrict` | `veto`, `revoke`, `freeze`, `flag`, `heartbeat`, `invalidate` |
+| `witness` | `checkpoint` |
+| `act` | `intent`, `token`, `reservation`, `execution`, `resource`, `transition` |
+| `attest` | `reconciliation`, `observation`, `measurement`, et tout genre de preuve déclaré par la loi |
+
+**Qui peut restreindre seul :** `veto` et `revoke` : humain (et tout détenteur sur la chaîne révoquée pour `revoke`) ; `freeze` et `flag` : humain ou sentinelle ; `heartbeat` : sentinelle ; `invalidate` : humain ou oracle source.
+
+### 4.3 Les six mécanismes
+
+Toute loi de la TCB s'exprime avec six primitives. Les floors et la loi client utilisent **les mêmes** primitives : une loi client se lit comme une loi de la TCB. Chaque refus du noyau porte un code de la forme `MÉCANISME.RAISON`.
+
+| Mécanisme | Ce qu'il porte | Exemples de refus |
+|---|---|---|
+| **CAP** — capacités | Autorité : rôles, chaînes de délégation atténuantes, budgets, restrictions, veto, gel, quorum, garde | `CAP.CHAIN`, `CAP.WIDENS`, `CAP.ATTENUATE`, `CAP.SCOPE`, `CAP.VETO`, `CAP.RESTRICT`, `CAP.HOLDER`, `CAP.GUARD`, `CAP.WITHDRAWN` |
+| **OBL** — obligations | Dettes, portes, ligne d'effet, réservations, budgets d'usage, reprises | `OBL.NOT_OPEN`, `OBL.ALREADY_OPEN`, `OBL.LINE`, `OBL.RESERVATION`, `OBL.LAPSED`, `OBL.GATE`, `OBL.CONTRACT`, `OBL.BUDGET`, `OBL.RETRY` |
+| **NIV** — niveaux de preuve | Ordre total des niveaux de qualification (`unknown` < `real`) ; `min_level` exigé par une cible ou une condition | `NIV.TOO_LOW`, `NIV.UNKNOWN`, `NIV.CERTIFY` |
+| **PROV** — provenance | Indépendance des chaînes de détenteurs, source habilitée, instrument, sujet, couverture, fraîcheur | `PROV.NOT_INDEPENDENT`, `PROV.INSTRUMENT`, `PROV.SUBJECT`, `PROV.COVERAGE`, `PROV.STALE`, `PROV.UNKNOWN` |
+| **TYPE** — types | Formes fermées : genres, champs, arguments, ressources, opérations, racine | `TYPE.SHAPE`, `TYPE.FIELDS`, `TYPE.ARGS`, `TYPE.KIND`, `TYPE.OP`, `TYPE.RESOURCE`, `TYPE.ROOT`, `TYPE.DUPLICATE` |
+| **HIST** — historique | Genèse, chaîne, épingles, ancre de temps, rollback | `HIST.GENESIS`, `HIST.CHAIN`, `HIST.PIN`, `HIST.ROLLBACK`, `HIST.TIME`, `HIST.AHEAD`, `HIST.CHECKPOINT` |
+
+Correspondance avec les sept responsabilités sémantiques du scope figé :
+
+| Responsabilité | Mécanismes |
+|---|---|
+| Identity | TYPE (formes, genres), HIST (genèse, racine), PROV (détenteurs) |
+| Authority | CAP |
+| Law | NIV (niveaux), TYPE (déclarations fermées), HIST (loi applicable à chaque position) |
+| State | TYPE, HIST |
+| Evidence | PROV, NIV |
+| Obligation | OBL |
+| Effect | OBL (ligne d'effet), TYPE (effet typé), CAP (re-jugement) |
+
+La suffisance des six primitives pour toute règle métier n'est pas démontrée ; c'est un objectif. Une intégration qui exigerait une septième primitive rouvre la frontière (§22).
+
+### 4.4 Langage de loi
+
+Le langage est **fini, borné, positif** :
+
+- Prédicats : `eq`, `prefix`, `observed`, `closed_at_least`, `open`, `related`.
+- `related: [relation, gauche, droite]` n'interroge que les relations constitutionnelles `role`, `holds`, `parent`, `owns`, `type`, `state`, avec les liaisons `$author`, `$resource`, `$under`. Chaque interrogation est directe et bornée, sans code ni recherche non bornée.
+- `where` n'accepte que des chaînes et des entiers [V6-3].
+- Une condition ne voit que les faits qu'elle nomme, pour la ressource qu'elle juge [V6-causes].
+- Aucune négation : l'absence d'un fait ne permet rien.
+- Les ressources déclarent types, champs scalaires fermés, états, état initial et table de transitions. Une transition déclare ses états de départ et d'arrivée, ses contraintes et la liste **exacte** des champs écrits. Une déclaration ne peut écrire ni racine, ni droits, ni constitution, ni preuves, ni obligations. Enregistrer exige `register:<type>` ; transitionner exige `transition:<type>:<operation>`.
+- Les instruments déclarent méthode, couverture exacte, sources, niveau minimal et fraîcheur.
+- Format source humain/agent : TOML (`.standard/law.toml`), lu comme les mêmes déclarations typées que K juge. Ce n'est ni un second langage ni un second interpréteur.
+
+### 4.5 Composition et évolution
+
+- La composition est **additive** : le client ajoute ou durcit. Il ne retire ni n'affaiblit un floor.
+- Un client peut ajouter des façons de prouver, **jamais** à un niveau inférieur à celui du floor [V6-7].
+- Une obligation bloquante ne peut viser que des genres qui agissent, attestent ou atténuent ; jamais une restriction, `checkpoint` ou `activate` [V6-2].
+- Opérations : `ops.<op>.trusted` est une liste **additive** de contrats T requis ; T07/T08 sont des minima non retirables.
+- Une loi présente dans le dépôt est une **proposition**. Seule la genèse ou une activation gouvernée lui donne autorité.
+- Changer la loi client passe par le protocole gouverné même quand le changement resserre seulement.
+- Une activation est traitée sous la loi qui l'a admise ; les nouvelles cibles s'appliquent ensuite [V6-§3.8].
+- La relecture historique utilise la loi en vigueur à la position de chaque entrée.
+- Retirer une cible client est une décision de loi visible ; ce n'est **jamais** une réparation (`REQUIREMENT_RETIRED_WITHOUT_REPAIR_PROOF`). Sa réintroduction retrouve la dette.
+- Changer de release (code ou floors) exige une nouvelle genèse sélectionnée de l'extérieur. Aucune migration silencieuse, aucun reset automatique, aucune exception de bootstrap. Un historique importé reste une provenance, jamais une preuve.
+
+### 4.6 Identité et définition
+
+| Objet | Épinglé sur | Si la définition change |
+|---|---|---|
+| Proposition | Racine **et** loi au moment de l'approbation | Périmée ; nouvelle proposition obligatoire [V6-§3.2] |
+| Capacité | Nom **et** contenu canonique de ses conditions | L'ancienne capacité ne reçoit pas la nouvelle interprétation |
+| Intention | Contrat exact de l'opération | Nouvelle intention si arguments, ressource ou profil changent |
+| Approbation humaine | Racine courante | Ne traverse pas une rotation |
+| Preuve | Définition complète de sa cible (ressource, propriété, source, propriétaire, seuils, couverture, route) | Invalidée ; nouvelle observation exigée [V6-§3.1] |
+| Instance d'obligation | Déclaration d'origine | Une nouvelle règle de clôture ne solde pas l'ancienne instance [V6-§3.7] |
+| Clôture | Contrat d'origine, provenance, fraîcheur | N'accorde aucun droit sous un autre contrat |
+
+### 4.7 Source de l'autonomie
+
+L'autonomie vient de **l'écart entre ce que Standard et le client demandent et ce que le dépôt a**. Toute exigence active produit des besoins observables dès son activation, même sans route installée ni écart encore attesté. Chaque besoin non satisfait produit une obligation ; chaque obligation produit du travail. Une obligation ne crée **jamais** de permission.
 
 ---
 
-## 4. Architecture en couches
+## 5. Architecture en couches
 
-Les couches s'emboîtent autour du noyau. **Plus une couche est proche du noyau, moins elle reçoit de signaux.** Les connexions entre couches sont limitées et typées.
+### 5.1 Quatre couches autour du noyau
+
+Plus une couche est proche du noyau, **moins elle reçoit de signaux**. Les connexions sont limitées, typées et orientées vers l'intérieur.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ 4. SURFACE        humains : santé, couverture, dettes,   │
-│                   décisions, escalades                   │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ 3. AUTONOMIE (U)  agents, WorkItems, découverte,   │  │
-│  │                   BUILD/RUN, intégrations          │  │
-│  │  ┌──────────────────────────────────────────────┐  │  │
-│  │  │ 2. CONFIANCE (T)  identités, temps, journal, │  │  │
-│  │  │                   preuves, garde des effets  │  │  │
-│  │  │  ┌────────────────────────────────────────┐  │  │  │
-│  │  │  │ 1. NOYAU (K)  jugement déterministe    │  │  │  │
-│  │  │  └────────────────────────────────────────┘  │  │  │
-│  │  └──────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ SURFACE   humains : maintenu, trous de couverture, dettes,   │
+│           décisions attendues, escalades                     │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ U  AUTONOMIE   agents, WorkItems, découverte,          │  │
+│  │                BUILD/RUN, intégrations, Work Engine    │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ T  CONFIANCE   identités, temps, journal, pins,  │  │  │
+│  │  │                second juge, instruments, garde,  │  │  │
+│  │  │                readback, livraison               │  │  │
+│  │  │  ┌────────────────────────────────────────────┐  │  │  │
+│  │  │  │ K  NOYAU   jugement déterministe unique    │  │  │  │
+│  │  │  └────────────────────────────────────────────┘  │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 | Couche | Reçoit | Produit | Peut | Ne peut jamais |
 |---|---|---|---|---|
-| **K Noyau** | Préfixe authentique, entrée signée, loi épinglée | Décision + delta exhaustif + autorisation d'effet exacte | Juger | Lire le monde, exécuter un effet, contenir de l'IA |
-| **T Confiance** | Décisions de K, signatures, mesures, réponses fournisseurs | Prémisses qualifiées, commit ancré, effet parti ou `UNKNOWN` | Attester, ancrer, garder les secrets, faire partir l'effet autorisé | Décider `allowed` |
-| **U Autonomie** | Loi effective projetée, obligations, état du dépôt | Propositions signées, WorkItems, diagnostics | Travailler sous capacités bornées | Définir la loi, détenir un secret privilégié, fabriquer une preuve |
-| **Surface** | Vues de K et de U | Décisions humaines signées | Montrer et solliciter | Masquer un FAULT ou un trou de couverture |
+| **K** | Préfixe authentique, entrée signée canonique, loi et code épinglés, temps transmis | Verdict, raison stable, delta exhaustif, obligations, autorisation d'effet bornée en données | Juger | Lire une horloge ambiante, le réseau, un fournisseur, un secret ou un agent ; exécuter ; contenir de l'IA |
+| **T** | Décisions de K, signatures, mesures, réponses fournisseurs | Prémisses qualifiées, commit ancré, effet parti ou `UNKNOWN`, reçus | Attester, ancrer, garder les secrets, faire partir l'effet jugé | Décider `allowed` |
+| **U** | Loi effective projetée, tâches, état du dépôt | Propositions signées, WorkItems, diagnostics, patches | Travailler sous capacités bornées | Définir la loi, détenir un credential privilégié, fabriquer une preuve, fermer une dette |
+| **Surface** | Vues de K et U | Décisions humaines signées | Montrer, solliciter | Masquer un `FAULT` ou un trou de couverture ; présenter `IDLE` comme une certification |
 
 **TCB effective = K + T.** U et la Surface sont hors TCB : leur défaillance peut ralentir ou mal prioriser, jamais admettre un effet interdit.
 
-Le silo **opérations (U)** est le seul qui ne soit pas précisément délimité : c'est un chantier de couverture, pas de précision.
+Le silo **U** est le seul qui ne soit pas précisément délimité : c'est un chantier de **couverture**, pas de précision. Tous les autres silos ont des frontières exactes.
+
+### 5.2 Règle d'appartenance
+
+Un composant appartient à T (et à la TCB effective) dès qu'il :
+
+- atteste une observation que K utilise pour accorder un droit ou fermer une obligation de sûreté ;
+- détient un secret privilégié ou un credential d'écriture ;
+- fait partir un effet ;
+- conserve le journal, une épingle ou une ancre.
+
+Un scanner, un adaptateur ou un outil déjà présent dans l'entreprise suit le même critère, même s'il s'appelle « adaptateur » et même si son code est hors du dépôt. Son coût, son installation et ses modes de défaillance sont inventoriés séparément.
+
+### 5.3 Budgets de la TCB
+
+Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon la garantie qu'un défaut de ce code peut casser :
+
+| Budget | Contenu | Un défaut peut |
+|---|---|---|
+| **Sûreté** | Noyau, primitives, floors, journal, garde, adaptateurs capables d'effets, bootstrap | Laisser passer un effet, un élargissement ou une réécriture interdits |
+| **Restrictif seul** | Second juge | Seulement **arrêter** : il juge après une admission du noyau, et son échec arrête |
+| **Visibilité** | Redevabilité, santé, travailleur d'audit | Masquer ou inventer un écart, jamais admettre ni envoyer |
+
+- Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
+- Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
+- Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
+- Plafonds de départ (hérités de la V7, à reconfirmer sur le nouveau code) : sûreté **2 942**, restrictif seul **537**, visibilité **500**. Dernières mesures connues : noyau hybride 2 442 lignes, TCB effective 4 507.
+- Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
 
-## 5. Noyau (K)
+## 6. Le noyau (K)
 
-### 5.1 Objets canoniques
+### 6.1 Contrat d'évaluation
 
-Principal, ressource, capacité, preuve, obligation, transition, intention d'effet, constitution. Aucune ontologie fournisseur (GitHub, CI, cloud, SRE) dans le noyau.
+`decide(préfixe, entrée_signée) → (verdict, raison, delta, obligations, autorisation_d_effet?)`
 
-### 5.2 Fonction
+- **Entrée** : état canonique pré-transition, constitution et code épinglés, proposition authentifiée, assertions externes **qualifiées par T**, temps transmis.
+- **Sortie** : verdict déterministe parmi `ACCEPT | REJECT | PENDING_EXTERNAL | ESCALATION_DUE`, raison stable (`MÉCANISME.RAISON`), delta complet, obligations créées/maintenues/fermées, et le cas échéant une autorisation bornée **en données**, jamais une exécution.
+- `PENDING_EXTERNAL` signifie qu'une attestation ou un contrat T manque. Ce n'est **jamais** une permission implicite.
+- **Déterminisme** : mêmes octets + même préfixe + mêmes hypothèses temporelles → même verdict, même delta.
+- **Totalité** : toute entrée admissible a un verdict ; toute entrée malformée, ambiguë, non canonique (flottants, `-0`, clés dupliquées, surrogates) est refusée.
+- **Pureté** : aucun effet de bord, aucune lecture d'horloge ambiante, de réseau, de fournisseur, de secret ou d'agent.
+- `Kernel.commit` rejoue les octets signés et refuse toute divergence, tout delta incomplet ou additionnel et tout préfixe périmé. Seul le journal (T04) réalise le commit durable, après contrôle indépendant (T05) et rétention de l'épingle.
 
-`decide(préfixe, entrée_signée) → (décision, delta)`
+### 6.2 Contrats logiques
 
-- **Pure et déterministe** : mêmes octets + même préfixe → même jugement.
-- **Exhaustive** : le delta contient toutes les conséquences obligatoires ; un delta incomplet ou additionnel est refusé.
-- **Fail-closed** : entrée malformée, provenance insuffisante ou dépendance T indisponible → refus explicite.
+Responsabilités, pas modules imposés. Elles peuvent être regroupées en un code court ; aucune ne peut être supprimée.
 
-### 5.3 Contrats logiques
+| | Responsabilité | Refus essentiel |
+|---|---|---|
+| **K01** Modèle canonique | Formes fermées, identités stables, encodage unique et versionné, aucune donnée métier privilégiée | Forme ambiguë, champ caché, flottant, deux sens pour un même digest |
+| **K02** Identité | Signature liée au domaine, à la déclaration, à la ressource, au type, à la version et au préfixe exacts. Une clé n'a qu'un encodage canonique [V6-9]. Enveloppe fermée, une signature par clé, triée [V6-env] | Réutilisation cross-domaine, cross-époque, cross-ressource ; même clé enrôlée deux fois |
+| **K03** Autorité | Atténuation monotone, aucun privilège par défaut, révocation et gel immédiats au préfixe, élargissement par quorum distinct + témoins + délais + veto | Un acteur se donne une capacité ; deux clés d'un même humain dans un quorum |
+| **K04** Constitution | Composition non affaiblissante ; changements de racine, dégel et droits par procédure ; genèse et récupération sans exception souveraine | Clause client qui affaiblit un floor |
+| **K05** État et transition | Fonction pure unique ; préconditions, delta requis **et** interdit, conflits sérialisés, aucune mutation non déclarée | Deux writers divergents ; delta « permis » mais incomplet |
+| **K06** Recevabilité des preuves | Sujet exact, méthode, couverture, fraîcheur, source, indépendance, invalidation. Signature ≠ vérité. Le silence n'est jamais `healthy` | Mesure signée mensongère ; périmètre non couvert ; auto-attestation |
+| **K07** Obligations | Une dette stable par exigence × sujet × épisode ; tentatives et WorkItems ne touchent pas l'échéance ; retrait ≠ réparation ; clôture sur preuve admissible | Huit retries créent huit dates ; un renommage masque l'écart |
+| **K08** Intention d'effet | Destination, payload, transformation, préconditions, auteur, fenêtre, réconciliation ; re-jugement au départ ; aucune exécution | Même opération avec d'autres arguments ; capacité révoquée avant départ |
+| **K09** Escalade | Condition constitutionnelle d'escalade, indépendante de tout scheduler. Une tentative échouée ne ferme rien | Échéance dépassée et obligation faussement close |
+| **K10** Jugement | **Un seul** chemin sémantique combinant K01–K09 ; trace rejouable | Divergence entre sous-moteurs ; fallback `allowed=true` ; résultat dépendant d'un ordre arbitraire |
 
-Ce sont des responsabilités, pas des modules imposés.
+### 6.3 Forme du noyau : hybride relationnel à jugement unique
 
-| | Responsabilité |
+**Décision D01 (§18).** Relations typées, contraintes positives bornées et transitions à delta exhaustif partagent **une seule** sémantique et **un seul** jugement. Le modèle de données est extensible ; la sémantique des primitives constitutionnelles est fermée, versionnée et non redéfinissable par un adaptateur.
+
+Pourquoi : les trois candidats de la campagne V ont chacun un risque connu.
+
+| Candidat | Risque |
 |---|---|
-| K01 | Modèle canonique : encodage unique, versionné, sans flottant ni champ caché |
-| K02 | Identité : signature liée au domaine, à la genèse, à la ressource et à la version |
-| K03 | Autorité : atténuation monotone, aucun privilège par défaut, révocation et gel immédiats, élargissement par quorum + témoins + délai + veto |
-| K04 | Constitution : composition non affaiblissante, genèse et récupération sans exception souveraine |
-| K05 | État et transitions : ressources à états finis, champs écrits déclarés, conflits sérialisés |
-| K06 | Recevabilité des preuves : sujet, méthode, couverture, fraîcheur, source, indépendance, invalidation. Une signature n'est pas une vérité ; le silence n'est jamais `healthy`. |
-| K07 | Obligations : une dette stable par exigence × sujet × épisode ; retries et renommages ne remettent pas l'échéance à zéro ; retrait de loi ≠ réparation |
-| K08 | Intention d'effet : destination, octets, préconditions et fenêtre exacts ; re-jugement au départ |
-| K09 | Escalade : condition constitutionnelle indépendante de tout scheduler |
-| K10 | Jugement unique combinant K01–K09 |
+| A — transitions seules | Preuves et obligations temporelles couplées au catalogue de transitions |
+| B — contraintes seules | Vérifier « rien d'interdit » manque un delta **requis** et laisse des obligations sans propriétaire |
+| C — composition hybride | Divergence d'ordre et de sémantique si plusieurs moteurs |
 
-### 5.4 Séparation interne
+La forme retenue prend C **avec un seul moteur** : les contraintes portent sur le delta exhaustif d'une transition, dans la même fonction. Toute optimisation incrémentale doit être prouvée équivalente au jugement complet (différentiel, §21).
 
-Le noyau ne se fait pas confiance :
+### 6.4 Séparation interne : le noyau ne se fait pas confiance
 
-- un **vérificateur indépendant** (contrôle ET) recalcule les propriétés critiques ; tout désaccord arrête le journal ;
-- les composants dont un défaut peut seulement **arrêter** ou **masquer** (jamais admettre) sont isolés dans des budgets séparés ;
-- l'isolation entre composants est imposée par l'OS, pas par la discipline du code.
+- **Second juge (T05, budget restrictif seul).** Il ne juge qu'après une admission du noyau, sur un **instantané des déclarations épinglées** de la loi, jamais sur les champs compilés du premier juge [V6-§3.6]. Il **n'appelle pas** le noyau, son évaluateur ni ses structures pour obtenir son verdict. Il recalcule l'effet canonique exact, et les deux octets sont comparés avant le port [V6-§3.5]. Ses gestionnaires sont appelés par une table explicite limitée aux genres du noyau [V6-8].
+- **Désaccord** : arrêt persistant de la frontière touchée. L'arrêt est local et n'est pas une mutation non signée du journal (F0-2).
+- **Matrice de couverture** : pour chaque règle critique, elle distingue calcul indépendant, dépendance commune et règle à juge unique (profil prudent, flags, expirations, destination physique inclus). La tolérance à une faute est promise **uniquement** dans cette matrice. Aucun « un bug seul ne suffit pas » universel n'est revendiqué.
+- **Dépendances communes déclarées** : spécification, parsing canonique, cryptographie, runtime, état réduit, stockage, OS.
+- **Différentiel** : un test aléatoire vérifie en continu que les deux juges ne divergent jamais sur les entrées admises [V6-causes-4].
+- **Isolation physique** : K/T tournent dans un processus opérateur distinct de U, avec comptes OS distincts. Le démarrage vérifie le manifeste de code **avant import et avant tout accès aux secrets** ; le bytecode est ignoré [R04].
 
-### 5.5 Langage
+### 6.5 Langage d'implémentation
 
-Python pour l'instant. Le choix final (Python, Rust, SPARK) se fera sur trois critères : sécurité, performance, fiabilité.
+Python pour l'instant (**D02**). Le choix final (Python, Rust, SPARK) se fera sur trois critères : sûreté, performance, fiabilité. Un changement de langage passe par le différentiel de §21.
 
 ---
 
-## 6. Frontière de confiance (T)
+## 7. Les cinq contrats transversaux
 
-Neuf **responsabilités** (regroupables, pas neuf services). Une opération ne requiert que les T dont elle dépend ; un T manquant bloque uniquement les opérations qui en dépendent, jamais les restrictions immédiates.
+Les constats de la revue V7/M2 se ramènent à **six pertes de sens** entre objets. Chacune est portée par un contrat.
 
-| | Responsabilité | Condition physique à démontrer sur chaque déploiement |
+| Cause | Perte de sens | Contrat |
 |---|---|---|
-| T01 | Épingle de release et de genèse | Installation authentique, aucun downgrade |
-| T02 | Clés et identités physiques | Humains réellement distincts, custody exclusive |
-| T03 | Temps attesté | Horloge et témoins indépendants ; le temps n'accorde jamais de droit |
-| T04 | Préfixe durable | Ancre hors du domaine de restauration du journal |
-| T05 | Vérification indépendante | Domaine de panne réellement distinct |
-| T06 | Instruments de preuve | Vérité et couverture effectivement mesurées |
-| T07 | Garde des effets | Credentials et egress exclusifs ; aucun chemin privilégié parallèle |
-| T08 | Readback et réconciliation | Idempotence fournisseur, état `applied / not_applied / unknown` |
-| T09 | Livraison des escalades | Accusé observable ; le silence n'est pas une résolution |
+| Transition incomplète | Modification permise confondue avec modification exigée | Transition |
+| Temps implicite | Date d'entrée confondue avec horizon actuel d'action | Temps |
+| Preuve aplatie | Statut confondu avec preuve d'un sujet sous une méthode | Preuve |
+| Effet incomplet | Nom d'opération confondu avec destination et conséquence exactes | Effet |
+| Frontière physique implicite | Vérification logique confondue avec contrôle des credentials et de la persistance | Effet + déploiement |
+| Travail fragmenté | Effets, écarts et plans séparés confondus avec un cycle complet | Obligation |
 
-Un adaptateur qui atteste une observation utilisée par K, détient un secret privilégié ou fait partir un effet **appartient à T**, quel que soit son nom.
+La frontière physique n'est pas un langage métier : c'est la condition d'exécution des contrats. Sans elle, le système peut proposer mais ne revendique pas le contrôle des effets.
 
----
+### 7.1 Transition
 
-## 7. Autonomie (U)
+Une transition lie une entrée signée, un préfixe, la loi en vigueur et un état résultant exact.
 
-| | Composant | Interdit |
+| Élément | Sens |
+|---|---|
+| Préconditions | Identités, signatures, polarité, sujet existant, autorité, temps, état antérieur |
+| Delta obligatoire | Modifications requises, avec nombre, clé et valeur |
+| Delta interdit | Toute autre modification, y compris doublon ou écrasement non prévu |
+| Conséquences | Obligations ouvertes/consommées, état de la ligne d'effet |
+
+Exemple `freeze` : pour `id=F`, `scope=S`, le delta est **exactement** `frozen[S] = F` plus l'enregistrement historique. Un delta vide, un autre scope, une autre valeur ou deux écritures sont refusés. Le dégel nomme l'occurrence F ; un gel ultérieur de S invalide ce dégel proposé. L'activation supprime obligatoirement la proposition.
+
+Les déclarations OBL de la loi ajoutent leur propre delta, vérifié exhaustivement ; elles ne peuvent pas modifier les tables d'autorité.
+
+### 7.2 Temps
+
+| Temps | Origine | Usage autorisé |
 |---|---|---|
-| U01 | Découverte et inventaire de l'existant (CI, IAM, scanners, procédures) | Déclarer une couverture complète sans instrument T06 |
-| U02 | Projection de la loi en objectifs observables | Modifier la loi pour simplifier une cible |
-| U03 | Work Engine : WorkItems, reprises, retries | Confondre WorkItem et obligation ; repousser une échéance |
-| U04 | Agents (Claude via API) : planifier, coder, tester, proposer | Détenir un secret privilégié ou une signature souveraine |
-| U05 | BUILD : créer et transformer | Bootstrap en god mode |
-| U06 | RUN : surveiller, corriger, maintenir la conformité | Clore une dette sur un scan vert |
-| U07 | Intégrations : Git, CI, cloud, IAM | Autoriser une action ou fabriquer un fait qualifié |
+| `statement_at` | Entrée signée admise | Ordre historique, relecture déterministe |
+| `anchor_at` | Quorum de témoins sur un préfixe exact | Délais gouvernés, borne d'admission |
+| `evaluated_at` | Horloge de la frontière d'exécution | Expiration actuelle des droits et des preuves |
 
-- **WorkItems.** Les WorkItems sont canoniques et natifs : mêmes objets et même admission que l'API agent. L'initialisation se fait hors WorkItem (elle ralentirait la cadence). Après l'initialisation, l'agent ne travaille hors WorkItem que pour escalader.
-- **Contrôle caché.** Pour certains risques, un contrôle IA parallèle, caché de l'agent, peut être ajouté. Il reste dans U et ne décide rien.
-- **Point d'entrée agent.** `python -m standard` donne à l'agent sa tâche courante, la loi effective (floors + loi client) et les routes T à qualifier, sans lire de documentation.
+- L'horloge d'exécution est une dépendance de confiance explicite (T03) : source, précision, protection contre le recul, domaine de panne. Une valeur fournie par un agent ne suffit jamais.
+- L'exécuteur vérifie à l'horizon **actuel** capacités, preuves, restrictions, profils et fenêtre de départ. Il ne remplace jamais l'heure actuelle par `min(now, anchor + allowance)` pour obtenir une admission [R03].
+- Hors de l'horizon attesté : aucun départ. La projection ouvre `renew-time`, adressée aux témoins, avec ouverture et échéance stables. Un checkpoint au préfixe courant permet une nouvelle évaluation sans renouveler les grants.
+- Un humain signe uniquement sa revue ou son attestation avec **sa** clé ; il ne reçoit jamais les clés des témoins [R11]. Sous une ancre périmée, sa demande attend le renouvellement.
+- Un reçu qui revient après la fenêtre est conservé durablement, lié à la réservation, sans devenir une clôture. Après renouvellement, l'entrée distingue temps du départ, du reçu et de l'admission.
+- Une restriction peut partager le dernier instant (F0-6) : aucune borne haute ne peut affamer les gels [V6-5].
+- **Séparation** : avancer l'horizon d'évaluation peut expirer une autorité ou ouvrir un écart ; cela ne change pas le préfixe et ne crée aucun droit.
+
+### 7.3 Preuve
+
+Une preuve est une affirmation limitée, structurée, attribuée.
+
+| Champ | Contrat minimal |
+|---|---|
+| Sujet | Identifiant exact ; snapshot immuable ; digest des entrées pertinentes |
+| Exigence | Identifiant et digest du contrat applicable dans la loi nommée |
+| Affirmation | Propriété précise, résultat, et limites de ce que le résultat signifie |
+| Méthode | Identité et version de l'outil, configuration, définition **protégée** des checks |
+| Couverture | Univers déclaré, éléments couverts, exclusions et raisons, identités vérifiables |
+| Rapport | Digest d'un rapport conservé et accessible (stockage par contenu) |
+| Validité | Collecte, expiration, événements invalidants définis par l'exigence |
+| Provenance | Identité, chaîne de détenteurs, signatures, dépendances connues |
+
+**Relation de qualification :**
+`qualifies(preuve, exigence, sujet_exact, méthode, couverture, provenance, evaluated_at)`.
+
+Règles :
+
+- Une signature prouve l'attribution, pas la vérité. Un digest prouve le lien aux octets, pas le sens [L-01].
+- L'univers à couvrir est défini **indépendamment** du filtre de l'instrument. Un fichier exclu par incapacité de la méthode (NUL, trop grand) ouvre `restore-coverage` ; ce n'est jamais une couverture complète silencieuse [R12]. Une exclusion autorisée par l'exigence est différente d'une incapacité.
+- Le collecteur fige **un** snapshot avant les mesures ; des sondes sur des commits différents ne font pas une preuve commune [R07].
+- **CI** : le sujet nomme tête **et** base testées, configuration des checks, workflow, événement et tentative. Une tentative récente en attente empêche une ancienne réussite de servir de preuve [R05]. Tester la tête seule ne prouve rien sur une base qui a changé.
+- **Dépendances** : distinguer déclarations directes, lock résolu, fermeture transitive et environnement ciblé. Un fichier de pins ne prouve pas la fermeture [R13].
+- **Licences** : sur versions et artefacts exacts, selon une politique d'expressions épinglée. Jamais par présence d'une sous-chaîne (`MIT`) [R14].
+- **L'instrument n'est pas contrôlé par le sujet** : la configuration de la CI, de pytest, les `# nosec`, les octets du dépôt mesuré ne pilotent pas la mesure [M2-r2].
+- Les faits produits en exécutant le code du sujet (`tests`) sont **nécessaires, jamais suffisants** : ce code peut mentir sur lui-même.
+- Une sonde ne répond pas « OK faute d'erreur » [M2-r1].
+- Les rapports volumineux vivent hors du journal par adresse de contenu ; leur disparition invalide la qualification.
+- **Deux clôtures distinctes** : la preuve d'**application** résout l'incertitude d'une réservation ; une preuve qualifiée de l'**état résultant** résout l'écart de l'exigence. Une PR fusionnée peut laisser la vulnérabilité présente.
+- **Conformité** : relation contrôlée clause ↔ affirmation. Une attestation « procédure à jour » ne prouve pas une notification faite dans le délai [R18]. Sorties : `satisfied`, `missing`, `partial`, `not_applicable` gouverné, `fault`. Une clause satisfaite n'est pas une certification.
+- Une invalidation par un humain habilité ou par la source retire immédiatement la recevabilité.
+
+### 7.4 Effet
+
+L'effet désigne une conséquence exacte, indépendante du fournisseur.
+
+| Élément | Contenu |
+|---|---|
+| Destination | Fournisseur, compte/tenant, ressource, opération, paramètres exacts |
+| Sujet et préconditions | Snapshot source, base, diff, checks, politique de scope, invalidations |
+| Autorité | Capacité, contrat d'opération, profil humain, restrictions actuelles |
+| Sortie de données | Destinataire, classes de données, périmètre, digest du contenu autorisé |
+| Reprise | Clé de réservation, déduplication, méthode de réconciliation, preuves recevables |
+
+- **Sont des effets** : créer un commit, une branche, une ref ou une PR ; écrire une config ; **envoyer du contexte à un modèle externe** (sortie de données). La fusion n'est pas la seule frontière [M2-r1, R15].
+- Plusieurs requêtes fournisseur pour une proposition forment des étapes identifiées ; une reprise ne les recommence pas en bloc.
+- **Scope sémantique** : une capacité autonome de dépendances porte sur la transformation (paquets, versions, sources, hashes, fermeture), pas sur une liste de chemins. Modifier le backend de build ou les checks dans un fichier autorisé exige une autre autorité [R06].
+- **Secrets** : le modèle ne reçoit qu'un contexte autorisé et expurgé. Si la classification ou l'expurgation échoue, la sortie est refusée et le travail part vers une méthode locale ou un humain. Découvrir un secret n'accorde jamais le droit de l'envoyer [R15].
+- L'agent n'écrit jamais dans `.git/` ni hors des chemins de sortie autorisés ; pas de liens symboliques suivis [M2-r1].
+
+### 7.5 Obligation
+
+Voir §9 pour le cycle complet.
+
+| Élément | Sémantique |
+|---|---|
+| Identité stable | Exigence/propriété × sujet ou périmètre stable × contrat applicable × génération d'écart. Suit `(ressource, propriété)`, pas le nom de la cible [V6-6] |
+| Cause | `observe`, `repair`, `restore-coverage`, `renew-time`, `reconcile`, `prove`, `restore-integrity`, `restore-route` |
+| Horodatage | Première ouverture et échéance du manque continu, conservées pendant les relances |
+| Route | Rôle, opération, méthode, capacité requise, disponibilité constatée |
+| Satisfaction | Relation de preuve explicitement requise |
+| Historique | Tentatives, reçus, invalidations, escalades, motif de sortie |
 
 ---
 
-## 8. Protocole de bout en bout
+## 8. La ligne d'effet
+
+### 8.1 Automate unique
+
+Un seul automate dans FLOOR-0, lu par les deux juges. `(genre, résultat) → (états de départ admis, état d'arrivée)` :
+
+| Entrée | Depuis | Vers |
+|---|---|---|
+| `intent` | — | `intended` |
+| `token` | `intended` | `tokened` |
+| `reservation` | `tokened` | `reserved` |
+| `execution: ok` | `reserved`, `expired` | `proving` |
+| `execution: failed` | `reserved`, `expired` | `failed` |
+| `execution: unknown` | `reserved`, `expired` | `uncertain` |
+| `reconciliation: applied` | `uncertain`, `expired` | `proving` |
+| `reconciliation: not_applied` | `uncertain`, `expired` | `failed` |
+
+- `expired` = réservation au-delà de `DISPATCH_MS`. Plus aucune garde ne peut l'envoyer ; **alors seulement** un réconciliateur peut la régler. Cela ferme la double exécution [V6-1].
+- Les étapes avant tout effet (`pending`, `unredeemed`) expirent par le temps. **Après une réservation, rien n'expire.**
+
+### 8.2 Départ
+
+1. La garde écrit une réservation **signée, durable, épinglée**. Une réservation consommée ne peut pas être reprise, même après un crash. Aucun enregistrement non signé ne sert d'autorité.
+2. Sous le verrou d'écriture, noyau et second juge **re-jugent** autorité, restrictions, conditions, profil humain et fenêtre de départ. Chacun produit l'effet exact ; un désaccord d'octets = arrêt persistant.
+3. L'**envoi** à l'adaptateur a lieu **avant** la libération du verrou. Seule l'**attente** de la réponse peut se faire hors verrou, et elle ne peut contractuellement lancer aucun autre effet [V6-§3.4].
+4. Une restriction admise avant l'envoi bloque l'effet. Après l'envoi, elle ne le rappelle pas.
+5. Toute exception après entrée dans l'adaptateur, y compris pendant l'attente, est `unknown`. Le même jeton ne peut pas être retenté.
+6. L'entrée candidate exacte est conservée **avant** l'épingle ; la reprise restaure la queue sans candidat perdu [V6-10].
+7. Un contrat T manquant au dernier contrôle laisse la réservation à réconcilier **sans** envoyer.
+
+### 8.3 Réconciliation
+
+| Issue | Preuve exigée | Suite |
+|---|---|---|
+| `applied` | Conséquence constatée sur la destination et le sujet exacts | Qualifier l'exigence (§7.3, deux clôtures) |
+| `not_applied` | Absence **définitive** de l'effet de cette réservation, aucune demande encore susceptible d'aboutir | Examen d'une nouvelle tentative sous nouvelle autorisation |
+| `indeterminate` | Information insuffisante, incohérente, ou appel encore susceptible d'aboutir | Réconciliation conservée ; répétition bloquée |
+
+- Un timeout ferme le droit de départ local ; il ne supprime pas une demande déjà transmise.
+- Une PR ouverte, un silence ou un commentaire ne prouvent pas une non-application.
+- Une intervention humaine ne fabrique pas une preuve de non-application ; une dérogation au risque est un nouveau contrat gouverné.
+
+### 8.4 Reprise de chaque état
+
+| Situation | Travail dérivé | Droit de répéter |
+|---|---|---|
+| Preuve absente ou périmée | Observer le sujet actuel | Aucun |
+| Couverture insuffisante | `restore-coverage` | Aucun |
+| Intention sans token, délai passé | Abandon sans départ ; nouvelle intention sur faits frais | Sous nouvelle autorisation |
+| Token sans réservation, délai passé | Idem ; l'ancien token est inutilisable [R10] | Sous nouvelle autorisation |
+| Réservation dans sa fenêtre | Attendre le départ déjà engagé | Non |
+| Réservation expirée ou réponse inconnue | `reconcile` | Non, jusqu'à preuve définitive |
+| Effet appliqué | Preuve de résultat puis qualification de l'exigence | Pas pour la même incertitude |
+| Non-application définitive | Réobserver, proposer à nouveau | Sous nouvelle autorisation |
+| Route sans acteur, capacité ou adaptateur | `restore-route`, adressé au propriétaire | Aucun départ de secours |
+| Intégrité ou auditeur en panne | `fault`, restaurer la frontière | Aucun droit issu du rapport |
+
+### 8.5 Exécuteur minimal
+
+- Agents et planificateurs ne possèdent **aucun** credential d'effet gouverné. Un exécuteur distinct les détient et ne reçoit que des requêtes canoniques. Une séparation par objet Python dans un même processus n'est pas une isolation.
+- Credentials limités par opération et destination. Une configuration fournisseur qui laisse une autre voie d'écriture invalide la revendication de contrôle exclusif (G15).
+- Démarrage par une entrée vérifiée **avant import et accès aux secrets**, depuis une installation immuable approuvée de l'extérieur. Le manifeste couvre les adaptateurs et tout code capable de contourner le port.
+- Le journal survit au job. Les épingles survivent dans un domaine de restauration indépendant. L'acquittement de la réservation précède le départ. Les exports Git sont des copies de lecture [R08].
+- Un verrou local ne couvre pas deux exécuteurs : **un seul writer** (D06).
+
+### 8.6 Limites fournisseur
+
+- Si le fournisseur ne peut pas appliquer atomiquement destination, base et préconditions, un GET puis PUT ne suffit pas ; une seconde lecture ne ferme pas la course. L'adaptateur emploie une primitive adéquate ou déclare l'opération **inexécutable** [R09].
+- **GitHub** (D05) : fast-forward de `main` de `base` vers son enfant direct `head` via `updateRefs` avec `beforeOid=base`, `afterOid=head`, `force=false`. `main == head` → `ok` ; base différente avant envoi → `failed` ; réponse incertaine → `unknown`. Un commentaire contenant une clé n'établit pas l'idempotence.
+- Une tentative locale unique ne garantit pas un effet distant unique sans déduplication honorée par le fournisseur.
+
+---
+
+## 9. Obligations et cycle de maintenance
+
+### 9.1 Boucle
+
+```
+Exigence + sujet ──► Qualification des preuves
+                         │ insuffisant            │ suffisant
+                         ▼                        ▼
+                 Obligation persistante    Satisfaction au préfixe nommé
+                         │                        │ expiration / invalidation
+                         ▼                        └──────────► Obligation
+                  Travail proposé (U)
+                         ▼
+                 Autorité + effet exact (K)
+                         ▼
+              Réservation puis exécution (T) ── indéterminé ──► Obligation (reconcile)
+                         ▼
+                  Résultat attesté (T06) ──► Qualification des preuves
+```
+
+Un effet réussi ne satisfait **jamais** automatiquement l'exigence qui l'a motivé.
+
+### 9.2 Continuité de la dette (G08)
+
+- **Même écart** = même `(exigence, ressource, propriété)` tant que le manque est continu, à travers noms, versions, commits et tentatives. Démontré sur 8 cycles malgré 1 → 4 propositions (campagne IV-H) ; le renommage et le rollback restent à éprouver.
+- Un changement de commit ne repousse pas l'échéance ; la preuve doit porter sur le nouveau snapshot.
+- Un changement gouverné de contrat conserve la dette si le manque subsiste ; il ne réutilise pas une ancienne preuve.
+- Une nouvelle déclaration ne peut pas repousser une échéance déjà ouverte.
+- L'expiration d'une preuve instrumentée utilise la plus courte fraîcheur applicable.
+- `debt` est une **projection déterministe** de responsabilité, jamais un second chemin d'autorisation.
+
+### 9.3 Escalade et progrès (G16)
+
+- K juge devoirs, permissions, échéances et **exigibilité** de l'escalade. Une tentative échouée n'est jamais une clôture.
+- U réalise ordonnancement, retries, backoff, notification. T09 fait la livraison observable.
+- **Propriété de progrès conditionnel** : si les sources externes requises restent disponibles, si une action permise existe et si l'ordonnancement est équitable, le système réalise une transition observable **ou** produit une escalade explicite dans une borne définie.
+- Observé en campagne IV : périodes sans action, reprise après 25 h, 21 lignes ouvertes sans escalade pendant la fenêtre. Ces cas sont des défauts d'implémentation U/T, pas des raisons de mettre un scheduler dans K.
+
+### 9.4 États visibles
+
+- Normaux : `PROVEN`, `IN_PROGRESS`, `ESCALATED`. Quatrième résultat : `FAULT`.
+- `PROVEN` porte sur les cibles déclarées, au préfixe et à l'horizon nommés.
+- Une vue `FAULT` contient toujours : préfixe connu ou explicitement inconnu, horizon demandé, frontière en échec, informations encore fiables. Les consommateurs ne présument aucun autre champ [R16].
+- Les rapports sont produits même après l'échec d'un rôle, par une voie de lecture indépendante. Une panne du rapport est elle-même observable.
+- Un audit dépassé est refusé par défaut ; un audit historique est demandé explicitement et étiqueté `current: false`.
+- **Toutes les vues** (maintenance, opérations, conformité, Surface) lisent la **même** projection issue de la loi effective, cibles client comprises. Elles priorisent différemment ; elles ne définissent pas différemment ce qui est résolu [R17].
+
+---
+
+## 10. La frontière de confiance (T)
+
+Neuf **responsabilités**, regroupables. Ce ne sont ni neuf services ni une attestation globale obligatoire. Une opération ne requiert que les T dont elle dépend :
+
+| Opération | T requis |
+|---|---|
+| Préfixe et restrictions signées | T01, T02, T04, T05 |
+| Opération temporelle | + T03 |
+| Observation, mesure, preuve | + T06 |
+| Réconciliation | + T08 |
+| Effet et garde | + T07, T08 |
+| Livraison d'escalade | T09 seulement |
+
+Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche pas un gel ou une révocation signés. Aucune opération dépendante ne progresse sans son contrat. Les contrôles sont répétés sous le verrou juste avant le départ physique.
+
+| | Port | Règle | Test de falsification | Condition physique |
+|---|---|---|---|---|
+| **T01** Release / runtime | `verify_release(runtime, genesis, law)` | Installer et ancrer hors de l'agent ; aucun downgrade, aucune genèse discrète | Binaire substitué ; genèse réinitialisée | Installation authentique |
+| **T02** Clés / identité physique | `authenticate(statement, roles)` | Custody exclusive ; liaison physique documentée | Même opérateur avec plusieurs clés de quorum | Humains réellement distincts |
+| **T03** Temps | `attest_time(event, uncertainty)` | Défi frais, ≥ 2 témoins à clés distinctes, signatures sur domaine et genèse, refus du recul | Faux futur accordant un droit | Horloge et témoins indépendants |
+| **T04** Préfixe durable | `commit(expected_head, delta)` | Append-only, CAS atomique, ancre hors du domaine de restauration | Rollback journal + pin ; crash entre pin et commit | Domaines de restauration indépendants |
+| **T05** Vérification indépendante | `check(inputs, decision, delta)` | Implémentation et domaine de panne distincts ; désaccord bloquant | Deux copies identiques acceptent le même bug | Domaine de panne réellement distinct |
+| **T06** Instruments | `attest_measurement(subject, method, coverage)` | Source et périmètre instrumentés, indépendants du bénéficiaire | Monde réel faux avec payload signé identique | Vérité et couverture réellement mesurées |
+| **T07** Garde des effets | `reserve_and_dispatch(effect, authority)` | Credentials et egress exclusifs, départ sérialisé, comparaison d'octets | Secret CI secondaire qui déploie sans garde | Aucun chemin privilégié parallèle |
+| **T08** Readback | `reconcile(reservation, provider_state)` | `applied / not_applied / unknown` sans déduction abusive ; idempotence prouvée avant retry | ACK perdu après application ; double action | Idempotence fournisseur, readback indépendant |
+| **T09** Livraison | `deliver_due(escalation, endpoint)` | Outbox durable par clé stable, marque *tentée* avant envoi, readback + reçu signé liant clé, payload et destinataires | Scheduler arrêté ; silence lu comme résolution | Disponibilité, accusé humain observé |
+
+**Déclaration de déploiement.** Pour chaque T : fournisseur, trust domain, possession des clés, droits de restauration, chemins réseau, dépendances communes, protocole de panne, test réel. Des services distincts sous un même administrateur ne sont pas indépendants. La qualification est liée à une release, une genèse, une installation et une route.
+
+**Évaluation signée.** Une frontière (`TrustBoundary`) qualifie seulement les rôles utilisés par l'opération. Une évaluation Ed25519 signée lie release, genèse, journal et registre ; les clés de l'évaluateur sont épinglées par l'installation, hors de portée de l'agent. Sans temps fiable, une restriction peut être contrôlée à la date d'émission signée de l'évaluation ; cette voie ne peut jamais élargir. Une déclaration `VERIFIED` signée ne démontre pas la réalité physique.
+
+---
+
+## 11. L'autonomie (U)
+
+### 11.1 Composants
+
+| | Composant | Contrat | Interdit |
+|---|---|---|---|
+| U01 | Découverte | Inventorier dépôts, outils existants (CI, IAM, scanners, SRE), couverture ; proposer des observations. Catégories `PRESENT_UNQUALIFIED` ou `NOT_FOUND` | Déclarer une couverture complète sans T06 |
+| U02 | Projection | Convertir la loi effective en objectifs observables, expliquer les écarts | Modifier la loi pour simplifier une cible |
+| U03 | Work Engine | Créer, louer, reprendre, réessayer ; conserve tentatives, délais et échéance initiale à travers les redémarrages | Confondre WorkItem et obligation ; repousser une échéance |
+| U04 | Agents | Claude via API : planifier, coder, tester, proposer sous capacités bornées | Détenir un secret privilégié ou une signature souveraine |
+| U05 | BUILD | Initialiser, transformer, produire artefacts et preuves | Bootstrap en mode god |
+| U06 | RUN | Monitoring actif, incidents, corrections, conformité continue | Clore une dette sur un scan vert |
+| U07 | Intégrations | Git, CI, cloud, IAM, SRE, exposés en modèles génériques | Autoriser une action, fabriquer un fait qualifié |
+| U08 | Surface | Couverture, objectifs, risques, dettes, décisions, escalades | Traiter un risque non couvert comme sain |
+
+### 11.2 Routes
+
+Chaque responsabilité de l'installation a une route vérifiable : **réutiliser, envelopper, compléter, créer, ou signaler l'impossibilité**. Une route décrit mode (BUILD, RUN, BOTH), sujet, besoin et T requis. États : `AVAILABLE`, `TRUST_BLOCKED`, `NO_ROUTE`, `HUMAN_REVIEW`.
+
+- Une route déclarée ne prouve pas son fournisseur. Une route non qualifiée reste inactive pour les opérations qui en dépendent, produit du **travail de qualification** distinct de la dette constitutionnelle, et n'empêche pas les restrictions immédiates.
+- La présence d'un outil n'est ni une preuve de couverture ni une raison de le remplacer.
+
+### 11.3 WorkItems
+
+- WorkItems canoniques et **natifs** : mêmes objets et même admission que l'API agent (D08).
+- L'**initialisation** se fait hors WorkItem (ils ralentiraient la cadence). Après l'initialisation, l'agent ne travaille hors WorkItem **que pour escalader**.
+- Une tâche ne disparaît qu'après une nouvelle vue constitutionnelle où l'obligation n'est plus ouverte. `complete_attempt` libère seulement la tentative.
+- La base opérationnelle (leases, tentatives) n'est ni le journal ni une ancre et ne confère aucun droit.
+- Cycle d'une proposition avant intention : mesure → prête ou en attente de revue → retrait si tests non verts, sujet disparu ou délai de revue dépassé (3 jours). Une transition exacte retirée ne se rouvre pas par recréation du même commit. Échec de fabrication → backoff d'un jour.
+
+### 11.4 Autonomie = reproductibilité
+
+Une réparation passe sans humain **seulement** si :
+
+- `tests = green` sur la transition exacte `base → head`, **et**
+- `reproduced = yes` : un instrument indépendant a recalculé exactement son contenu depuis la base et des données de confiance (recette reproductible).
+
+Sinon, elle exige `review = approved`, signé par un reviewer habilité, lié au head exact (jamais à un pointeur mutable) [M2-r2]. Le sujet de l'effet est la transition `repo:{area}:{item}/{base}/{head}` ; les faits qui l'autorisent portent sur cette ressource exacte. La comparaison d'arbres inclut chemins, contenus, **modes et gitlinks**.
+
+### 11.5 Point d'entrée agent
+
+- `python -m standard` : tâche courante, loi effective (floors + client) et routes T, en texte lisible lié au préfixe et au digest. L'agent ne lit ni README ni sérialisation de la constitution.
+- `context --task ID`, `context --law SECTION/ID`, `law-source --source .standard/law.toml`, `discover`, `status`, `claim`, `submit`, `attempt`, `run`, `watch`.
+- `submit` recontrôle route et préfixe, refuse une enveloppe qui ne traite pas exactement la tâche et sa ressource, puis la confie au **seul** chemin d'admission.
+- Un travailleur externe lit la vue sur stdin et renvoie une enveloppe signée par son identité U sur stdout. Aucun retour ne ferme une dette ni ne déclenche un effet.
+- `AGENTS.md` à la racine signale ce point d'entrée.
+
+### 11.6 Interface d'admission
+
+U parle à K/T par **une socket Unix étroite** (mode 0600/0660, répertoire non accessible en écriture à tous) exposant seulement `view`, `status`, `qualify`, `admit`. Jamais garde, clés ni ports fournisseur.
+
+**Règle :** toute requête reçoit une réponse. Une erreur interne, y compris de sérialisation, produit un refus typé `{"ok": false, "error": TYPE}`, jamais une connexion coupée ni un détail interne [HK-1].
+
+### 11.7 Contrôle caché
+
+Pour certains risques, un contrôle IA parallèle, caché de l'agent, peut être ajouté. Il reste dans U, ne décide rien, et produit au plus un `flag` par une identité habilitée.
+
+---
+
+## 12. Floors de la release
+
+Les floors portent la direction (autonomie, sécurité, conformité) dans le **même langage** qu'une loi client.
+
+**Rôles** que tout client lie à ses identités : `owner`, `inventory_source`, `scanner`, `compliance_officer`.
+
+**Clôture sur preuve indépendante (F1).** Tout effet laisse une obligation `proof` que seule une preuve indépendante de niveau `real` ferme.
+
+**Couverture (F2).** Chaque univers déclaré doit être observé complet par une source indépendante, sinon c'est un écart : `inventory` (dépôt) et `soa` (déclaration d'applicabilité).
+
+**Mesures techniques** (observées par `@scanner`, réparées par `remediate`) — fraîcheur / échéance en jours :
+
+| Id | Ressource | Attendu | Fraîcheur | Échéance |
+|---|---|---|---|---|
+| vulns | `repo:deps:vulns` | aucune haute | 1 | 7 |
+| deps-age | `repo:deps:age` | aucune majeure en retard | 7 | 30 |
+| licenses | `repo:deps:licenses` | conforme à la politique | 7 | 30 |
+| secrets | `repo:code:secrets` | aucune fuite | 1 | 1 |
+| sast | `repo:code:sast` | aucune haute | 1 | 30 |
+| ci | `repo:ci:main` | verte | 1 | 2 |
+| actions | `repo:ci:actions` | toutes épinglées | 7 | 30 |
+| sbom | `repo:supply:sbom` | à jour | 7 | 7 |
+
+**Réglages** (observés, réparés par des humains) : protection de `main` (seule la garde la déplace) ; lignée (tout commit de `main` depuis l'ancre est la tête d'un effet jugé).
+
+**Mesures organisationnelles** (attestées `current` par `@compliance_officer`, sous la SoA) : ISMS, risques, revue d'accès (90 j), formation, RH, fournisseurs, procédure d'incident, continuité, sauvegarde/restauration (90 j), registre légal, audit indépendant, sites physiques, politique crypto, tests de résilience, registre des actifs, baseline infra (180 j), monitoring (180 j), threat intel (180 j). Leur écart va aux personnes.
+
+**Projection conformité** (hors TCB) : 93 contrôles ISO 27001, 12 exigences NIS2, 19 articles DORA. Le mapping peut surévaluer la portée d'une attestation générale ; il ne certifie ni la conformité juridique ni le contrôle effectif.
+
+---
+
+## 13. Protocole et parcours produit
+
+### 13.1 Protocole de bout en bout
 
 ```
 proposer (U)
-  → authentifier / qualifier les prémisses (T)
-  → juger (K)
-  → vérifier indépendamment (T05)
-  → committer atomiquement au préfixe ancré (T04)
-  → réserver, re-juger au départ, faire partir l'effet exact (T07)
-  → résultat confirmé ou UNKNOWN (T08)
-  → réconcilier
-  → nouvelle mesure qualifiée (T06) → clôture ou maintien de l'obligation (K)
+ → authentifier, qualifier les prémisses (T01–T03, T06)
+ → juger (K)
+ → vérifier indépendamment (T05)
+ → committer atomiquement au préfixe ancré (T04)
+ → réserver, re-juger au départ, envoyer l'effet exact (T07)
+ → résultat confirmé ou UNKNOWN (T08)
+ → réconcilier
+ → nouvelle mesure qualifiée (T06)
+ → clôture, maintien ou escalade de l'obligation (K, livraison T09)
 ```
 
-- Une restriction admise avant le départ bloque l'effet ; après le départ, elle ne le rappelle pas.
-- Une panne ou une réponse ambiguë devient `UNKNOWN`, puis travail de réconciliation, jamais un succès présumé.
-- Un reçu d'exécution ne clôt pas une obligation ; seule une preuve qualifiée de la propriété exigée la clôt.
+### 13.2 Parcours
+
+1. **Constituer.** Épingler release, genèse, FLOOR-0 et floors ; composer la loi client ; établir identités, quorum, témoins. Le provisionnement des T a une provenance indépendante de l'agent.
+2. **Découvrir et qualifier.** Inventorier, choisir une route par responsabilité, tester réellement les T nécessaires.
+3. **Projeter.** Mesure absente, couverture inconnue, instrument indisponible, risque constaté et effet incertain sont cinq états distincts.
+4. **Travailler.** Les agents reprennent les obligations, en BUILD ou RUN.
+5. **Décider et effectuer.** Selon §13.1.
+6. **Vérifier et poursuivre.** Clôture sur preuve ; sinon reprise, réconciliation, restauration de route ou escalade.
+
+**Règle de réalisation :** toute intégration se rattache à une étape du parcours, à un propriétaire K/T/U, à un contrat de preuve et à un scénario d'échec. Une fonctionnalité de démo ne devient une capacité de Standard que si elle fonctionne sous la loi effective, emprunte la frontière physique requise, conserve la dette et expose sa couverture.
 
 ---
 
-## 9. Parcours produit
+## 14. Garanties G01–G16
 
-1. **Constituer.** Épingler release, genèse, FLOOR-0 et floors ; composer la loi client ; établir les identités humaines et le quorum.
-2. **Découvrir et qualifier.** Inventorier l'existant et choisir une route par responsabilité : réutiliser, envelopper, compléter, créer, ou signaler l'impossibilité. Qualifier les T nécessaires.
-3. **Projeter.** Transformer la loi effective en besoins observables. Une mesure absente, une couverture inconnue, un instrument indisponible, un risque constaté et un effet incertain sont des états distincts.
-4. **Travailler.** Les agents reprennent les obligations en BUILD ou RUN, sous capacités bornées.
-5. **Décider et effectuer.** Selon le protocole de la section 8.
-6. **Vérifier et poursuivre.** Clôture sur preuve, sinon reprise, réconciliation ou escalade. La Surface montre ce qui est maintenu, ce qui échappe à la couverture et les décisions attendues.
+Découpage **figé conditionnellement 16/16**. Aucune garantie n'est démontrée en production.
+
+| G | Garantie | K (non délégable) | T (dépendance) | U (délégué) | Falsificateur |
+|---|---|---|---|---|---|
+| G01 | Aucun élargissement par un acteur seul | Signatures habilitées, quorum, délais, veto | Humains distincts, custody, témoins indépendants | Solliciter | Racine de clés tenues par une personne |
+| G02 | Restriction immédiate | Restriction et re-jugement dans l'ordre | Ordre atomique de départ, fencing | Stopper les travaux | Révocation pendant réservation, avant les octets |
+| G03 | Floors inaffaiblissables | Composition additive | Release / runtime authentiques | Proposer plus strict | Autre code, floor plus faible |
+| G04 | Transition canonique déterministe | Delta exhaustif | Journal durable, ordre | Proposer | Deux têtes divergentes acceptées |
+| G05 | Sens des signatures | Domaine, contenu, identité logique | Crypto, clés, identité physique | Préparer | Collusion, clé compromise |
+| G06 | Le temps n'accorde rien | Contraintes temporelles | Temps fiable | Retry, backoff | Deux sources de temps incohérentes |
+| G07 | Preuve qualifiée | Sujet, source, méthode, fraîcheur, couverture | Vérité de la mesure | Scanner | Même payload pour deux mondes |
+| G08 | Dette persistante | Ouverture, continuité, échéance, clôture | Rétention, observation couvrante | WorkItems, retries | Renommage ou panne de scanner masque la dette |
+| G09 | Aucun effet hors intention | Effet exact re-jugé | Garde, egress exclusifs, octets | Plans | Egress alternatif |
+| G10 | Effet incertain jamais présumé | Réservation, `UNKNOWN`, réconciliation | Fencing, idempotence, readback | Résoudre | ACK perdu puis retry |
+| G11 | Historique non régressable | Rejet d'un préfixe incompatible | Pins indépendants | Proposer recovery | Rollback coordonné journal + pin |
+| G12 | Second juge indépendant | Exiger le contrôle, bloquer | Vérificateur réellement indépendant | Diagnostics | Deux juges partagent le bug |
+| G13 | Santé ≠ fait démontré | Clôture sur preuve seulement | Vérité, complétude | Inventaire | Fausse attestation saine |
+| G14 | Aucun mode god | Genèse, racine, récupération gouvernées | Installer, clés racines | Préparer | Restore god-mode |
+| G15 | Aucun egress privilégié alternatif | Contrat d'effet sur toutes les interfaces | Exclusivité OS/réseau/API, inventaire des chemins | Exécuter sous capacité | Job CI avec secret d'écriture hors garde |
+| G16 | Autonomie sans souveraineté | Devoirs, permissions, exigibilité d'escalade | Livraison, disponibilité, équité | Scheduling, notification | Zéro progrès ni escalade ; auto-validation |
+
+G04 n'implique pas que chaque effet physique correspond à une transition : G09/G10 s'examinent séparément.
 
 ---
 
-## 10. Garanties
+## 15. Limites établies
 
-Chaque garantie a un propriétaire K, un contrat T indispensable et un rôle U.
-
-| G | K garantit | T doit rendre réel | U fait |
+| | Limite | Statut | Conséquence |
 |---|---|---|---|
-| G01 | Quorum, élargissement, veto, délais | Personnes, clés et témoins distincts | Solliciter les décisions |
-| G02 | Restriction prioritaire, re-jugement | Ordre atomique, fencing | Stopper les travaux |
-| G03 | Floors, loi additive | Release épinglée authentique | Proposer des règles |
-| G04 | Delta canonique déterministe | Journal durable et ordonné | Proposer des modifications |
-| G05 | Domaine, sens, signatures | Cryptographie, clés | Préparer les assertions |
-| G06 | Aucun droit par l'horloge | Temps et provenance | Retries, backoff |
-| G07 | Preuve recevable (sujet, méthode, couverture) | Vérité des instruments | Scanner |
-| G08 | Ouverture, maintien, échéance, clôture | Rétention, observations fiables | WorkItems, réparations |
-| G09 | Effet exact, re-jugement | Garde et egress exclusifs | Proposer des effets |
-| G10 | Réservation, `UNKNOWN`, réconciliation | Fencing, readback, idempotence | Résoudre les incertitudes |
-| G11 | Refus d'état incompatible | Domaines de restauration indépendants | Proposer une récupération |
-| G12 | Contrôle distinct obligatoire | Vérificateur réellement indépendant | Diagnostics |
-| G13 | Clôture par preuve uniquement | Couverture et vérité mesurées | Inventaire, scans |
-| G14 | Genèse et récupération gouvernées | Installation, racines physiques | Préparer l'initialisation |
-| G15 | Tous les effets gouvernés | Fermeture des autres chemins privilégiés | Appels sous capacité |
-| G16 | Conditions d'escalade | Livraison et disponibilité | Scheduling, alertes |
+| **L-01** | Une attestation signée n'implique pas la vérité physique : le payload est identique que la vérité soit vraie ou fausse | Logique, établie | K garde provenance, sujet, méthode, fraîcheur, couverture, indépendance, clôture. T fournit la mesure qualifiée. U ne qualifie jamais sa propre affirmation |
+| **L-02** | Un jugement logiciel pur ne peut pas empêcher physiquement un egress | Logique, sous la prémisse « K sans credentials » | K spécifie et re-juge ; T impose l'exclusivité |
+| **L-03** | Un hash ne prouve pas qu'un acteur physique est un humain distinct | Logique | K impose le quorum logique ; T établit liaisons et custody |
+| **L-04** | Résister au rollback exige une ancre durable indépendante | Contrat externe requis | K rejette les historiques invalides quand il a l'ancre ; T protège l'ancre |
+| **L-05** | Une autorisation n'implique aucun progrès équitable | Logique | K garde obligations et exigibilité d'escalade ; T/U fournissent l'exécution observable |
+
+**Non établi (ouvert)** : effet distant exactement-une-fois sous ambiguïté fournisseur ; fencing multi-hôte ; indépendance de deux juges déployés ; vérité et couverture réelles des sources ; stabilité des dettes sous réparations répétées et renommages ; custody des clés au bootstrap ; absence vérifiée d'egress alternatif.
+
+Autres limites assumées : pas de preuve formelle de convergence ; pas de consensus multi-hôte ; une signature fournisseur ne prouve pas qu'une personne a reçu l'alerte ; la conformité ne se déduit pas de `PROVEN` ; le système fait confiance au noyau Linux pour l'isolation interne ; un appel synchrone bloqué retarde les écritures (l'adaptateur doit borner ses I/O).
 
 ---
 
-## 11. Hébergement et produit
+## 16. Modèle de menace
 
-- **Deux hébergements, un seul protocole** : mode **dépôt seul** (tout tourne dans le dépôt du client) et **service géré** (le produit commercial). Mêmes objets, même admission, même journal.
-- **Interface native** : Standard a sa propre surface de WorkItems et de décisions. Jira et toute synchronisation de tickets sont hors périmètre.
-- **Hors maintenance autonome** : la TCB elle-même. Elle est changée par l'équipe Standard via une release, jamais par le système.
+### 16.1 Acteurs et pannes
+
+- Agent qui propose entrées, code, fichiers, sorties d'outils arbitraires, sans admission privilégiée.
+- Clé individuelle compromise (agent, observateur, témoin, garde).
+- Instrument défectueux ou malveillant qui signe des rapports faux.
+- Journal ou garde arrêté à n'importe quel point ; stockage restauré en arrière.
+- Deux processus ou hôtes partageant un fournisseur sans partager le verrou.
+- Fournisseur qui retarde, duplique, applique partiellement ou ne confirme pas.
+- Déployeur capable de modifier runtime, secrets ou identifiant de release.
+- **Sujet mesuré qui contrôle son instrument** (config CI, pytest, `nosec`, octets du dépôt).
+
+### 16.2 Frontières à qualifier
+
+| Frontière | Entrée non fiable | Échec qui doit fermer |
+|---|---|---|
+| signature → identité | DSSE, WebAuthn, clés | Encodage, replay, signature invalide |
+| déclarations → loi | Constitution client | Compilation ambiguë, exception cachée |
+| état → décision | Préfixe, temps attesté | Mutation silencieuse, droit indu |
+| observateur → preuve | Analyse externe | Auto-certification, couverture insuffisante |
+| décision → journal | Entrée candidate, pins | Rollback, double écriture, divergence |
+| journal → départ | Token, réservation, horloge | TOCTOU, réservation répétée |
+| garde → fournisseur | Requête, secret, endpoint | Autre endpoint, effet partiel, retry illégitime |
+| exécution → clôture | Retour fournisseur | Succès déclaré sans vérification |
+| release → exécution | Code, dépendances, OS, CI | Import contourné, autre credential |
+
+### 16.3 Campagnes d'attaque de référence
+
+A01 loi équivalente en apparence mais moins restrictive · A02 horodatages au plafond et restriction simultanée · A03 même humain sous deux identités · A04 couverture « complete » sur ensemble incomplet · A05 scanner qui signe un `reproduced` faux · A06 mutation invisible dans le delta · A07 crash avant/après ancre, journal, publication · A08 deux gardes sous verrou local, hôtes différents · A09 fournisseur qui reçoit et ne répond pas · A10 egress vers une autre destination à arguments logiques égaux · A11 preuve d'application réutilisée pour un autre sujet · A12 retrait ou renommage d'exigence sans régler la dette · A13 run et bootstrap avec credentials de contournement · A14 confusion entre deux releases · A15 réconciliation d'un effet encore susceptible de partir.
+
+Risques d'autonomie à instrumenter en priorité : CI fluctuante, obligations stables sous réparations répétées, découverte d'un dépôt vide, système SRE préexistant, agents multiples concurrents, absence de réponse humaine à une escalade.
+
+### 16.4 Mesures du laboratoire
+
+| Mesure | Ce qui est compté |
+|---|---|
+| **SV** Safety violations | Violations reproductibles du contrat de permission et de transition |
+| **PF** Progress failures | Impasses injustifiées malgré préconditions valides, distinguées des arrêts exigés |
+| **IE** Indeterminate effects | Effets inconnus, part réconciliée par preuve indépendante, absence de retry dangereux |
+| **OC** Obligation continuity | Persistance des dettes et des échéances à travers échecs, redémarrages, renommages, changements de loi |
+| **PB** Privilege boundary | Inventaire complet des credentials, propriétaires, canaux d'egress, exemptions |
+| **ES** Evidence soundness | Précision sujet/méthode/univers ; capacité d'une observation fausse à débloquer une action |
+
+**Ne jamais optimiser l'autonomie en affaiblissant FLOOR-0.**
 
 ---
 
-## 12. Organisation du code
+## 17. Registre des constats (non-régression)
+
+Chaque constat est **fermé par une règle** de ce document et doit avoir un test de non-régression dans le nouveau code. Aucun ne peut réapparaître.
+
+### 17.1 Revue V6 — 4 causes racines
+
+| Cause | Constats | Structure qui ferme la classe |
+|---|---|---|
+| **Polarité appliquée au seul portail** | V6-2, V6-5, V6-7, saturation des faits | Une obligation bloquante ne vise que les genres qui agissent, attestent ou atténuent ; le client n'ajoute jamais de preuve sous le niveau du floor ; une restriction peut partager le dernier instant ; une condition ne voit que les faits qu'elle nomme pour sa ressource |
+| **Cycle d'effet implicite** | V6-1, V6-10 | Automate `LINE` unique lu par les deux juges ; départ dans `DISPATCH_MS` ou jamais ; réconciliation seulement après ; entrée exacte conservée avant l'épingle |
+| **Identité portée par la représentation** | V6-6, V6-9, enveloppe | Une clé, un encodage canonique ; enveloppe fermée ; dette suivie par `(ressource, propriété)` |
+| **Provenance et jointure par listes** | V6-3, V6-4, V6-8, portes | Instances d'obligation étiquetées par la provenance de l'ouvreur ; une fenêtre ou porte ouverte par la chaîne de l'acteur ne lui sert pas ; `where` limité aux chaînes et entiers ; table explicite des gestionnaires ; différentiel continu des deux juges |
+
+| # | Constat | Règle |
+|---|---|---|
+| V6-1 | Réconciliation avant envoi → double effet | §8.1 |
+| V6-2 | Une loi pouvait désactiver veto, révocation, gel | §4.5, F0-3 |
+| V6-3 | Booléen sur chemin pointé → arrêt du journal par n'importe quel agent | §4.4 |
+| V6-4 | L'agent ouvrait lui-même la fenêtre qui l'autorise | F0-8 |
+| V6-5 | Horodatage au plafond → plus aucun gel admissible | F0-6, §7.2 |
+| V6-6 | Renommer une cible remettait l'échéance à zéro | §7.5, §9.2 |
+| V6-7 | Preuve client sous le niveau du floor | §4.5 |
+| V6-8 | Nom de preuve = méthode interne → arrêt persistant | §6.4 |
+| V6-9 | Même passkey enrôlée deux fois (point compressé/non compressé) | K02 |
+| V6-10 | Crash entre épingle et commit → journal bloqué | §8.2.6 |
+| V6-env | Champs non signés dans l'enveloppe changent la tête | K02 |
+| V6-sat | Saturation des faits rendant `BOUND.EXCEEDED` les effets des autres | §4.4 |
+| V6-§3.1 | Preuve d'une ressource (PR 42) restée valide quand la cible désigne une autre (PR 43) | §4.6 |
+| V6-§3.2 | Ancien délai utilisé après changement de loi | §4.6 |
+| V6-§3.3 | Loi mal formée activée, détectée seulement par le travailleur | Validation complète des cibles **avant** admission |
+| V6-§3.4 | Verrou relâché avant l'appel fournisseur | §8.2 |
+| V6-§3.5 | Effet du premier juge non comparé par le second | §6.4 |
+| V6-§3.6 | Champs compilés du noyau recopiés dans le second juge | §6.4 |
+| V6-§3.7 | Ancienne obligation soldée selon une nouvelle règle | §4.6 |
+| V6-§3.8 | Activation comptabilisée sous la mauvaise loi | §4.5 |
+| V6-§3.9 | Route de réparation contrôlée par motif textuel | Types, valeurs répétées et bornes des paramètres ; inversion déterministe du template |
+
+**Ce qui a tenu en V6** (à conserver) : 14 400 entrées hostiles → refus sans exception ; JSON canonique strict ; liaison au domaine ; quorum sur identités distinctes ; veto et dépassement ; atténuation et budgets ; indépendance des chaînes ; usage unique face à deux gardes en course et à un redémarrage ; épingles, détection de fourche et de régression.
+
+### 17.2 Revue V7/M2 — 18 constats
+
+| # | Constat | Règle |
+|---|---|---|
+| R01 | Restriction acquittée sans application | §7.1 delta exact |
+| R02 | Flag/prudence absents du second profil | §6.4 matrice |
+| R03 | Temps ops plafonné à l'ancre | §7.2 |
+| R04 | Lancement non vérifié | §6.4, §8.5 |
+| R05 | Ancienne CI verte prise comme preuve | §7.3 |
+| R06 | Scope de dépendances trop large | §7.4 |
+| R07 | Snapshot du scanner absent | §7.3 |
+| R08 | État publié après l'effet | §8.5 |
+| R09 | Destination/base de fusion non garanties | §8.6 |
+| R10 | Intention/token périmés bloqués | §8.4 |
+| R11 | Humain dépendant des clés témoins | §7.2 |
+| R12 | Univers des secrets filtré par la méthode | §7.3 |
+| R13 | Pins pris pour fermeture transitive | §7.3 |
+| R14 | Licence par sous-chaîne | §7.3 |
+| R15 | Secret envoyé au modèle | §7.4 |
+| R16 | `FAULT` casse le rapport | §9.4 |
+| R17 | Plans et cibles divergents entre vues | §9.4 |
+| R18 | Conformité trop large | §7.3 |
+
+### 17.3 Revues M2 (tours 1 et 2)
+
+| | Constat | Règle |
+|---|---|---|
+| M2-r1 | PR de fork autonome ; journal remplaçable ; `.git/config` écrit par le modèle ; code tiers près des clés ; sondes « OK » faute d'erreur ; blocages | §7.4, §8.5, §7.3 |
+| M2-r2 | Instrument contrôlé par le sujet (CI, pytest, `nosec`, octet NUL) ; périmètre calculé sur noms de fichiers ; commit fusionné ≠ commit jugé ; pannes non isolées ; revue liée à un pointeur mutable | §7.3, §7.4, §11.4 |
+
+### 17.4 Laboratoire (campagnes II–IV)
+
+| | Constat | Leçon |
+|---|---|---|
+| LAB-1 | Seconds `redeem` refusés pour `HIST.TIME`, pas pour usage unique | Un refus pour une autre raison ne prouve pas la garantie testée |
+| LAB-2 | Contrôle « sain » invalide (runner qui n'enlevait pas l'écart) | Tout oracle a un contrôle positif **et** négatif vérifiés |
+| LAB-3 | Traceback masquée par `tee` ; CI verte | L'instrumentation de test est elle-même vérifiée |
+| LAB-4 | Liste `obligations` vide ≠ absence d'obligation constitutionnelle | Lire la projection canonique, pas un champ dérivé |
+
+### 17.5 Prototype hybride
+
+| | Constat | Règle |
+|---|---|---|
+| HK-1 | La passerelle coupait la connexion quand la réponse n'était pas sérialisable (`GATEWAY.RESPONSE`), et `make check` échouait alors que le registre affichait PASS | §11.6 ; un registre de validation est régénéré à chaque commit, jamais recopié |
+
+---
+
+## 18. Décisions
+
+| # | Décision | Statut |
+|---|---|---|
+| D01 | Noyau hybride relationnel à **jugement unique** (§6.3) | Arrêtée |
+| D02 | TCB en Python pour l'instant ; choix final sur sûreté, performance, fiabilité | Arrêtée |
+| D03 | Découpage K/T/U des 16 garanties figé conditionnellement ; ne se rouvre que sur contre-exemple (§22) | Arrêtée |
+| D04 | **Autorité hébergée** par un service durable unique d'admission et d'exécution ; exports Git en lecture seule | Arrêtée |
+| D05 | Fusion GitHub par `updateRefs` avec précondition atomique sur la base ; route inactive si la primitive n'est pas garantie | Arrêtée |
+| D06 | **Un seul writer** par journal. Le multi-instance est interdit tant qu'un protocole de fencing n'est pas démontré | Arrêtée |
+| D07 | Horloge de départ = horloge de l'exécuteur, protégée contre le recul, confrontée à l'ancre ; incertitude non nulle refusée | Arrêtée |
+| D08 | Interface native ; WorkItems canoniques ; Jira et synchronisation de tickets hors périmètre | Arrêtée |
+| D09 | Non-application définitive prouvée **par réservation**, jamais par absence | Arrêtée |
+| D10 | Rapports de preuve en stockage par contenu ; métadonnées bornées dans le journal | Arrêtée |
+| D11 | Autonomie de dépendances par transformations sémantiques étroites, par écosystème | Arrêtée |
+| D12 | Floors = niveau intermédiaire qui porte l'autonomie ; pas de lois d'exploitation Standard séparées | Arrêtée |
+| D13 | Deux hébergements (dépôt seul, service géré) sur le même protocole (§19) | Arrêtée |
+| D14 | Le refacto part du code existant (constitution 0.6, noyau hybride) et le reconstruit dans ce dépôt selon §20 ; aucune compatibilité de genèse | Arrêtée |
+| D15 | Jalon investisseur : maintenance + sécurité + conformité ensemble, démo sur un dépôt dédié, agents Claude via API, ISO 27001 + NIS2 + DORA | Arrêtée |
+
+**Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
+
+---
+
+## 19. Hébergement et produit
+
+- **Même protocole, deux hébergements.**
+  - **Dépôt seul** : K/T tournent dans un processus opérateur distinct sur l'infrastructure du client. Les garanties physiques sont celles des T qualifiés de cette installation. Un état qui voyage par branches Git n'est **pas** une ancre durable (T04) : ce mode exige un pin store externe pour revendiquer G11.
+  - **Service géré** : le produit commercial. Mêmes objets, même admission, même journal ; T qualifiés et opérés par Standard.
+- **Interface native** : WorkItems, décisions humaines, couverture, escalades. Les empreintes et protocoles restent accessibles pour l'audit, pas comme UX principale.
+- **Objectif double** : séduire un investisseur, rester crédible devant des ingénieurs de haut niveau. D'où la règle : chaque affirmation publique porte son statut (§0).
+
+---
+
+## 20. Organisation du code
 
 Une couche = un dossier. Rien en dehors.
 
 ```
-kernel/      K — jugement, six mécanismes, FLOOR-0. Aucune dépendance hors stdlib + crypto épinglée.
-trusted/     T — journal, pins, garde d'effets, readback, horloge, livraison, vérificateur indépendant.
-floors/      Floors de la release (déclaratifs) : autonomie, sécurité, conformité.
-autonomy/    U — découverte, projection, Work Engine, agents, intégrations.
-surface/     Interface humaine et point d'entrée agent.
-tests/       Un test de réception par garantie G01–G16 et par scénario de la section 13.
+kernel/      K — jugement unique, six mécanismes, FLOOR-0, langage de loi.
+             Aucune dépendance hors stdlib + cryptographie épinglée.
+trusted/     T — journal, pins, garde, adaptateurs d'effet, readback, horloge,
+             livraison, second juge (budget restrictif), passerelle d'admission.
+floors/      Floors de la release, déclaratifs, couverts par le digest.
+autonomy/    U — découverte, projection, Work Engine, agents, recettes, intégrations.
+surface/     Interface humaine, point d'entrée agent (`python -m standard`).
+compliance/  Projection clauses ISO/NIS2/DORA (hors TCB, lecture seule).
+tests/       Un test par règle du registre §17, un par garantie G01–G16,
+             les dix scénarios de §21.1, le différentiel des deux juges.
 ```
 
-Règles d'import, vérifiées automatiquement :
+**Règles d'import, vérifiées automatiquement à chaque commit :**
 
 - `kernel` n'importe rien de Standard.
 - `trusted` n'importe que `kernel`.
-- `autonomy` et `surface` ne parlent à K et T que par l'interface d'admission. Ils ne reçoivent ni clé, ni credential, ni journal mutable.
+- Le second juge n'importe ni le noyau ni son évaluateur.
+- `autonomy`, `surface`, `compliance` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable.
+- Le budget de chaque fichier de `kernel/` et `trusted/` est déclaré ; tout dépassement bloque.
 
 ---
 
-## 13. Réception
+## 21. Réception
 
-Une release n'est exploitable que si ces dix scénarios passent **sur le déploiement réel**, avec, pour chacun, le domaine observé, la propriété affirmée, l'instrument et les hypothèses non vérifiées :
+### 21.1 Dix scénarios obligatoires
 
-1. **Élargissement adversarial** : une clé, plusieurs clés d'un même humain, témoin non indépendant, mauvais délai, veto → aucun élargissement hors procédure.
-2. **Loi** : une loi client plus faible est refusée ; une loi plus stricte ne bloque pas les restrictions immédiates.
-3. **Déterminisme** : entrée identique → delta identique ; écritures concurrentes → un seul préfixe linéarisé.
-4. **Preuve** : un même payload signé pour deux réalités différentes ne prouve rien sans source qualifiée.
-5. **Obligation** : la dette persiste sur huit cycles et plusieurs tentatives ; échéance conservée.
-6. **Temps** : une date antidatée, future ou contradictoire ne crée aucun droit.
-7. **Effet** : octets différents, secret alternatif, révocation juste avant le départ, ACK perdu → blocage, `UNKNOWN` ou réconciliation prouvée.
-8. **Rollback / genèse** : crash, restauration, pins déplacés, nouvelle genèse → reprise ancrée ou arrêt.
-9. **Vérificateur** : fautes injectées → le désaccord bloque.
-10. **Autonomie** : BUILD depuis presque rien, RUN sur dépôt mature, escalade due malgré l'arrêt du scheduler.
+Chacun rapporte le domaine observé, la propriété affirmée, l'instrument et les hypothèses non vérifiées. Un scénario qui passe en simulation ne prouve pas la protection réelle.
 
-Un scénario qui passe en simulation ne prouve pas la protection réelle.
+1. **Élargissement adversarial** : une clé, plusieurs clés d'un humain, témoin non indépendant, mauvais délai, veto, dégel → aucun élargissement hors procédure.
+2. **Loi** : loi client plus faible refusée ; loi plus stricte qui ne bloque pas les restrictions immédiates.
+3. **Déterminisme** : entrée identique → delta identique ; delta incomplet ou additionnel refusé ; écritures concurrentes → un seul préfixe linéarisé.
+4. **Preuve** : même payload signé pour deux réalités → aucune preuve de vérité sans source qualifiée ; mauvais sujet ou couverture → refus.
+5. **Obligation** : dette persistante sur 8, 20 et 100 cycles, tentatives, retraits et renommages ; échéance conservée ; clôture uniquement sur preuve indépendante.
+6. **Temps** : antidate, surdate, horloge future ou contradictoire → aucun droit.
+7. **Effet** : octets différents, secret alternatif, révocation juste avant le départ, ACK perdu, retry → blocage, `UNKNOWN` ou réconciliation prouvée.
+8. **Rollback / genèse** : crash à chaque frontière, restauration, pins déplacés, nouvelle genèse → reprise ancrée ou arrêt.
+9. **Second juge** : fautes injectées → le désaccord bloque.
+10. **Autonomie** : BUILD depuis presque rien, RUN sur dépôt mature, outils existants intégrés sans autorité ; escalade due malgré l'arrêt du scheduler.
+
+### 21.2 Portes par composant
+
+- **Composant** : types et version, invariant testable, erreur fail-closed, contre-exemple négatif, preuve de non-contournement, métrique de ressources, propriétaire, aucun raccourci `allow`.
+- **K** : un jugement complet ; loi, racines, autorité, preuve, obligation, effet gouvernés ; delta vérifiable ; aucune branche métier cachée ; différentiel contre la référence sans aucun `mismatch`.
+  - Références connues (exploratoires, à re-mesurer) : jugement + second contrôle ≈ 0,29 ms médiane ; écriture durable SQLite ≈ 1,5 ms médiane ; coût d'écriture constant sur un journal de plus de 2 000 entrées ; différentiel du prototype hybride : 4 994 admissions et 353 refus identiques, 0 divergence.
+- **T** : chaque contrat déployé, indépendance et chemins physiques audités, aucun T simulé silencieusement ; reprise, révocation et effets concurrents testés.
+- **Standard** : BUILD/RUN fonctionnels, Work Engine non souverain, maintenance continue sur obligations, rapport de qualification fidèle aux preuves obtenues.
+
+### 21.3 Portes de sortie (axes × garanties)
+
+Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défaillances, frontières physiques, autonomie — avec un statut `NOT_STARTED | TESTED_LOCAL | TESTED_MULTI_PROCESS | TESTED_EXTERNAL | NOT_APPLICABLE` (justifié). Huit portes :
+
+1. Inventaire vérifié des garanties, chemins d'effet et dépendances.
+2. Reproductibilité : oracle, fixtures, commit, logs, résultat honnête.
+3. Profondeur d'interaction : ordres opposés, races.
+4. Défaillances physiques : crash-injection à chaque frontière, multi-processus, absence d'egress alternatif.
+5. Preuves : authentification ≠ vérité ≠ qualification.
+6. Autonomie : progrès sur toute voie permise, refus sur chaque interdiction, échéances stables.
+7. Revue contradictoire par un autre oracle.
+8. Exhaustion raisonnable : constats regroupés par cause racine ; aucune absence absolue de faille revendiquée.
+
+### 21.4 Ordre de réalisation dans ce dépôt
+
+1. **Sceller la sémantique** : schémas, identités, invalidations, matrice de couverture des cinq contrats ; le registre §17 devient la première suite de tests.
+2. **Noyau** : jugement unique, transition et temps complets ; différentiel contre l'ancien noyau.
+3. **Frontière durable** : journal, pins, second juge, garde, passerelle ; aucun effet réel autonome avant cette porte.
+4. **Preuves qualifiables** : CI, dépendances, secrets, attestations ; sujet figé, méthode, couverture.
+5. **Travail unifié** : toutes les cibles effectives, échéances continues, routes, `FAULT` ; une seule vue.
+6. **Jalon investisseur (D15)** sur dépôt dédié.
+7. **Validation système** : injections de fautes, changements de loi, crashs, fournisseur réel.
 
 ---
 
-## 14. Limites assumées
+## 22. Discipline de changement
 
-- Une signature ne prouve ni la vérité d'une mesure, ni l'existence de deux personnes distinctes.
-- Une tentative locale unique ne garantit pas un effet distant unique sans déduplication côté fournisseur.
-- Un stockage local ne prouve pas l'indépendance des domaines de restauration.
-- La conformité réglementaire ne se déduit pas d'un statut `PROVEN`.
-- Il n'existe pas de preuve formelle de convergence ni de consensus multi-hôte.
-- Le système fait confiance au noyau Linux pour l'isolation interne de la TCB.
+- Modifier ce document exige : un motif, un exemple falsifiable, une analyse d'impact sur la confiance et une décision explicite ajoutée à §18.
+- **Rouvrir le découpage K/T/U** seulement si : une propriété ne peut être attribuée à K, T ou U ; un contournement de pouvoir impose une décision non couverte ; le contrat constitutionnel change de façon contradictoire ; un falsificateur n'est pas traitable par le contrat de confiance.
+- Les enquêtes sur backoff, agents, WorkItems, ordonnanceur, scanners, fournisseurs ou alerting vont dans les audits d'implémentation et d'intégration. Elles ne relancent **jamais** une boucle de recherche sur tout Standard.
+- Aucun nouveau document parallèle : ce fichier est la seule source. Les résultats de validation sont des artefacts générés par la CI, pas des documents rédigés.
