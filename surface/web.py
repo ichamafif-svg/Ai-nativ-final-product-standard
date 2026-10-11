@@ -182,13 +182,46 @@ class Installation:
                        "proven": len(health["proven"]), "as_of": health["as_of"]},
             "main": main, "history": self.history(),
             "product": self.product, "products": self.products,
-            "requirements": self.requirements(view, findings),
+            "requirements": (reqs := self.requirements(view, findings)),
+            "autonomy": self.autonomy(reqs),
             "run": self.run(view, findings), "build": self.build(view, findings, main),
             "law": {"targets": [{k: t.get(k) for k in ("id", "resource", "property", "expect", "coverage", "repair",
                                                         "human", "due_ms")} for t in law["targets"]],
                     "conditions": law["conditions"], "ops": sorted(law["ops"])},
             "signing": {"domain": view["prefix"]["genesis"], "as_of": health["as_of"], "grants": self.grants},
         }
+
+    def autonomy(self, requirements: list) -> dict:
+        """What Standard does without a person, for each requirement and each kind of component, and why not more.
+
+        autonomous: the agent repairs alone, because an independent instrument recomputes the repair byte for byte;
+        supervised: the agent prepares, a person signs, because the repair needs judgment no instrument can prove;
+        human: only people act, because what is asked is not in the repository (a procedure, a platform setting);
+        observed: Standard measures, nobody acts through it yet, because the law has no operation for it."""
+        why = {
+            "autonomous": "La correction se recalcule à l'identique par un instrument indépendant : la loi peut l'accepter sans personne.",
+            "supervised": "La correction demande un jugement. Aucun instrument ne peut prouver qu'elle est juste, donc une personne signe.",
+            "human": "Ce qui est demandé n'est pas dans le code : une procédure, un registre ou un réglage de plateforme qu'une personne atteste.",
+            "observed": "Standard mesure ce composant mais n'agit pas dessus : la loi ne contient encore aucune opération d'exploitation "
+                        "(redémarrer, revenir à la version précédente, ajouter de la capacité). Une telle opération passerait par la garde, "
+                        "comme les changements de code.",
+        }
+        conditions = {
+            "vulns": "Seulement si l'instantané de données connaît une version corrigée ; sinon une personne décide.",
+            "actions": "Seulement si l'instantané de données connaît le commit de l'action ; sinon une personne décide.",
+            "sbom": None,
+        }
+        level = {"agent": "autonomous", "review": "supervised", "people": "human"}
+        rows = []
+        for r in requirements:
+            lv = level[r["who"]]
+            blocked = r["state"] == "unmeasured"
+            rows.append({"id": r["id"], "level": lv, "why": why[lv], "condition": conditions.get(r["id"]),
+                         "blocked": "Non mesurée sur cette installation : aucune autonomie possible tant que rien ne la mesure."
+                         if blocked else None})
+        count = {lv: sum(1 for x in rows if x["level"] == lv) for lv in ("autonomous", "supervised", "human")}
+        return {"levels": why, "requirements": rows, "count": count, "total": len(rows),
+                "runtime": {"level": "observed", "why": why["observed"]}}
 
     def run_report(self, window: int) -> dict:
         """The product in production: its APIs and their metrics, and the latest releases."""

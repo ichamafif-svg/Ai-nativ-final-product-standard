@@ -87,6 +87,10 @@ class Server(unittest.TestCase):
             states = {r["id"]: r["state"] for r in state["requirements"]}
             self.assertEqual(states["sbom"], "gap")                     # the product's state, whatever the product
             self.assertEqual(states["isms"], "attest")
+            levels = {r["id"]: r["level"] for r in state["autonomy"]["requirements"]}
+            self.assertEqual((levels["sbom"], levels["secrets"], levels["isms"]), ("autonomous", "supervised", "human"))
+            self.assertEqual(state["autonomy"]["runtime"]["level"], "observed")    # no runtime operation in the law
+            self.assertTrue(all(r["why"] for r in state["autonomy"]["requirements"]))
             for asset in ("/app.css", "/sign.js", "/app.js"):
                 self.assertEqual(urllib.request.urlopen(f"{url}{asset}").status, 200)
             main = state["main"]
@@ -134,6 +138,7 @@ class Telemetry(unittest.TestCase):
         self.assertEqual((users["requests"], users["rps"]), (1000, 10.0))
         self.assertAlmostEqual(users["error_rate"], 0.1)
         self.assertEqual(users["state"], "failing")
+        self.assertEqual(users["why"], {"rule": "error_rate", "value": 0.1, "limit": 0.05})
         self.assertLess(report["fleet"]["budget"], 0)                    # 10 % errors against a 99.9 % objective
         self.assertEqual(users["p50"], 62.5)                              # 500th of 800 under 100 ms
         idle = next(r for r in report["routes"] if r["name"] == "/orders/{id}")
@@ -184,6 +189,7 @@ class Components(unittest.TestCase):
         self.assertEqual(c["dependency"][0]["state"], "failing")
         job = c["job"][0]
         self.assertEqual((job["name"], job["state"]), ("daily-report", "degraded"))   # 300 s since success, period 60
+        self.assertEqual(job["why"], {"rule": "job_late", "value": 300.0, "limit": 120.0})
         process = c["process"][0]
         self.assertEqual((process["name"], process["memory"], process["uptime"]), ("svc:9000", 52428800, 1200))
         self.assertAlmostEqual(process["cpu"], 0.01)

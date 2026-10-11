@@ -192,14 +192,23 @@ class Telemetry:
                 "budget": None if error_rate is None else 1 - error_rate / (1 - self.slo),
                 "p50": ms(0.5), "p95": ms(0.95), "p99": ms(0.99)}
 
-    def _state(self, s: dict) -> str:
+    FAILING = 0.05          # an error rate at or above this: the component fails a request in twenty or more
+    SLOW_P99_MS = 1000.0    # a p99 above this: one request in a hundred takes more than a second
+
+    def rules(self) -> dict:
+        return {"slo": self.slo, "failing_error_rate": self.FAILING, "slow_p99_ms": self.SLOW_P99_MS, "late_periods": 2}
+
+    def _state(self, s: dict) -> tuple[str, dict | None]:
+        """(state, why): the rule that decided it, with the measured value and the limit it crossed."""
         if s["requests"] == 0:
-            return "idle"
-        if s["error_rate"] >= 0.05:
-            return "failing"
-        if s["availability"] < self.slo or (s["p99"] or 0) > 1000:
-            return "degraded"
-        return "healthy"
+            return "idle", {"rule": "no_traffic"}
+        if s["error_rate"] >= self.FAILING:
+            return "failing", {"rule": "error_rate", "value": s["error_rate"], "limit": self.FAILING}
+        if s["availability"] < self.slo:
+            return "degraded", {"rule": "availability", "value": s["availability"], "limit": self.slo}
+        if (s["p99"] or 0) > self.SLOW_P99_MS:
+            return "degraded", {"rule": "p99", "value": s["p99"], "limit": self.SLOW_P99_MS}
+        return "healthy", None
 
     def report(self, declared=(), window: int = 3600, now: float | None = None) -> dict:
         now = int(now if now is not None else time.time())
@@ -228,8 +237,9 @@ class Telemetry:
             spark = [0.0] * 30
             for at, n, _, _ in deltas:
                 spark[min(29, max(0, int((at - since) / step)))] += n / step
+            state, why = self._state(stats)
             row = {"kind": kind, "operation": op, "name": name, "declared": key in declared, "observed": key in series,
-                   "state": self._state(stats), "spark": [round(x, 3) for x in spark], **stats}
+                   "state": state, "why": why, "spark": [round(x, 3) for x in spark], **stats}
             if kind == "worker":
                 row["backlog"] = latest.get(("worker", name, "backlog"))
             components[kind].append(row)
@@ -239,14 +249,17 @@ class Telemetry:
         for (kind, name, field), value in latest.items():          # a queue that only reports its depth
             if kind == "worker" and field == "backlog" and not any(r["name"] == name for r in components["worker"]):
                 components["worker"].append({"kind": "worker", "operation": "process", "name": name, "observed": True,
-                                             "declared": False, "state": "idle", "spark": [0.0] * 30, "backlog": value,
+                                             "declared": False, "state": "idle", "why": {"rule": "no_traffic"},
+                                             "spark": [0.0] * 30, "backlog": value,
                                              **self._stats([], 0)})
         for name in sorted({n for (k, n, _) in latest if k == "job"}):
             get = lambda f: latest.get(("job", name, f))
             last, period, ok = get("last_success"), get("period"), get("ok")
             late = bool(last and period and now - last > 2 * period)
+            why = ({"rule": "job_failed"} if ok == 0 else {"rule": "job_never"} if not last else
+                   {"rule": "job_late", "value": now - last, "limit": 2 * period} if late else None)
             components["job"].append({"kind": "job", "name": name, "last_success": last, "duration": get("duration"),
-                                      "period": period, "ok": ok,
+                                      "period": period, "ok": ok, "why": why,
                                       "state": "failing" if ok == 0 else "degraded" if late or not last else "healthy"})
         for name in sorted({n for (k, n, _) in latest if k == "process"}):
             cpu = history.get(("process", name, "cpu_seconds"), [])
@@ -256,10 +269,11 @@ class Telemetry:
             started = latest.get(("process", name, "started"))
             components["process"].append({"kind": "process", "name": name, "cpu": usage,
                                           "memory": latest.get(("process", name, "memory")),
-                                          "uptime": now - started if started else None, "state": "healthy"})
+                                          "uptime": now - started if started else None, "state": "healthy",
+                                          "why": None})
         times = [s[0] for by in series.values() for samples in by.values() for s in samples]
         span = (max(times) - min(times)) if len(times) > 1 else 0
-        return {"window": window, "slo": self.slo, "fleet": self._stats(api_fleet or fleet, span),
+        return {"window": window, "slo": self.slo, "rules": self.rules(), "fleet": self._stats(api_fleet or fleet, span),
                 "components": components, "routes": components["api"],
                 "targets": [{"url": t, **s} for t, s in self.status.items()]}
 

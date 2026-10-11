@@ -42,6 +42,17 @@ const STATES = {
 };
 const WHO = { agent: "L'agent seul", review: "L'agent, puis une revue", people: "Une personne" };
 const name = (id) => NAMES[id] || id;
+const LEVEL = {
+  autonomous: ["held", "Autonome", "L'agent répare seul"], supervised: ["gap", "Supervisée", "L'agent prépare, une personne signe"],
+  human: ["attest", "Humaine", "Seules des personnes agissent"], observed: ["pending", "Observation", "Standard mesure, personne n'agit par lui"],
+};
+const RAISE = {
+  autonomous: "Déjà au maximum : rien n'entre sans preuve indépendante, et cette preuve suffit.",
+  supervised: "Une recette dont le résultat se recalcule à l'identique ferait passer ce type de correction en autonome.",
+  human: "Un instrument qui mesure ce point dans le code ou la plateforme remplacerait l'attestation.",
+  observed: "Une opération d'exploitation dans la loi (par exemple revenir à la version précédente), exécutée par la garde sous conditions mesurées.",
+};
+const levelTag = (lv) => `<span class="state ${LEVEL[lv][0]}"><i></i>${LEVEL[lv][1]}</span>`;
 const VALUES = { none: "aucun", current: "à jour", complete: "complète", green: "au vert", red: "en échec", all: "toutes",
   compliant: "conformes", "guard-only": "garde seule" };
 function measure(r) {
@@ -57,7 +68,7 @@ function subject(s) {
 
 // ---- routing --------------------------------------------------------------------------------------------------------
 const ROUTES = {
-  run: ["Run", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
+  run: ["Run", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
   contributions: ["Contributions", "build"], requests: ["Demandes", "build"],
   reviews: ["Revues", "both"], proofs: ["Preuves", "both"], settings: ["Réglages", "both"],
 };
@@ -74,7 +85,7 @@ function frame() {
   const link = (id) => `<a href="#/${id}" ${id === here ? 'aria-current="page"' : ""}><span>${ROUTES[id][0]}</span>${
     id === "reviews" && reviews ? `<span class="badge">${reviews}</span>` : ""}</a>`;
   $("#nav").innerHTML = `
-    <div class="group">Exploitation</div>${link("run")}${link("compliance")}${link("activity")}
+    <div class="group">Exploitation</div>${link("run")}${link("autonomy")}${link("compliance")}${link("activity")}
     <div class="group">Construction</div>${link("contributions")}${link("requests")}
     <div class="group">Gouvernance</div>${link("reviews")}${link("proofs")}${link("settings")}`;
   const others = state.products.length > 1;
@@ -103,7 +114,7 @@ async function refresh() {
 function render() {
   if (!state) return;
   frame();
-  const views = { run: runView, compliance, activity, contributions, requests, reviews, proofs, settings };
+  const views = { run: runView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
   $("#view").innerHTML = views[route()]();
   if (route() === "run") loadRun();
   if (route() === "settings") bindSettings();
@@ -153,6 +164,31 @@ function feed(limit) {
   return `<ul class="feed">${rows.join("")}</ul>`;
 }
 
+function autonomy() {
+  const a = state.autonomy, c = a.count, n = a.total, share = (k) => Math.round((100 * c[k]) / Math.max(n, 1));
+  const blocked = a.requirements.filter((r) => r.blocked).length;
+  return `<h1>Autonomie</h1>
+    <p class="lede">Ce que Standard fait sans personne, pour chaque élément, et pourquoi pas davantage. L'autonomie n'est jamais une confiance accordée à l'agent : elle existe seulement là où une preuve indépendante suffit.</p>
+    <section class="autosum">
+      <div class="panel"><h2>Code et conformité</h2>
+        <div class="bar">${["autonomous", "supervised", "human"].map((k) => `<span class="seg-${k}" style="flex:${c[k]}" title="${LEVEL[k][1]} : ${c[k]}"></span>`).join("")}</div>
+        <ul class="levels">${["autonomous", "supervised", "human"].map((k) => `<li>${levelTag(k)}<b>${c[k]} sur ${n}</b><span>${share(k)} %</span><p>${esc(a.levels[k])}</p></li>`).join("")}</ul>
+        ${blocked ? `<p class="small quiet">${plural(blocked, "exigence n'est pas mesurée", "exigences ne sont pas mesurées")} sur cette installation : leur autonomie reste théorique tant qu'aucun instrument ne les couvre.</p>` : ""}
+      </div>
+      <div class="panel"><h2>Exploitation</h2>${levelTag("observed")}<p>${esc(a.runtime.why)}</p>
+        <p class="small quiet">Pour aller plus loin : ${esc(RAISE.observed)}</p></div>
+    </section>
+    ${["autonomous", "supervised", "human"].map((lv) => {
+      const rs = a.requirements.filter((r) => r.level === lv);
+      return rs.length ? `<section class="lvl"><div class="lvlhead">${levelTag(lv)}<h2>${LEVEL[lv][2]}</h2><span class="quiet">${rs.length} sur ${n}</span></div>
+        <div class="lvlbody"><div><h3>Pourquoi cette limite</h3><p>${esc(a.levels[lv])}</p><h3>Ce qui l'augmenterait</h3><p>${esc(RAISE[lv])}</p></div>
+        <ul class="items">${rs.map((r) => `<li><b>${esc(name(r.id))}</b>${r.condition ? `<span class="cond">${esc(r.condition)}</span>` : ""}${r.blocked ? `<span class="cond bad">Non mesurée ici : autonomie théorique.</span>` : ""}</li>`).join("")}</ul></div></section>` : "";
+    }).join("")}
+    <section class="lvl"><div class="lvlhead">${levelTag("observed")}<h2>${LEVEL.observed[2]}</h2><span class="quiet">tous les composants en exploitation</span></div>
+      <div class="lvlbody"><div><h3>Pourquoi cette limite</h3><p>${esc(a.runtime.why)}</p><h3>Ce qui l'augmenterait</h3><p>${esc(RAISE.observed)}</p></div>
+      <ul class="items">${["APIs", "Workers et files", "Tâches planifiées", "Bases de données", "Services externes", "Processus"].map((k) => `<li><b>${k}</b></li>`).join("")}</ul></div></section>`;
+}
+
 function compliance() {
   const c = counts();
   return `<h1>Conformité</h1>
@@ -170,7 +206,7 @@ const WINDOWS = [[900, "15 min"], [3600, "1 h"], [86400, "24 h"], [604800, "7 j"
 const nf = (v, d = 0) => v == null ? "—" : Number(v).toLocaleString("fr-FR", { minimumFractionDigits: d, maximumFractionDigits: d });
 const pct = (v, d = 2) => v == null ? "—" : `${nf(v * 100, d)} %`;
 const msf = (v) => v == null ? "—" : v >= 1000 ? `${nf(v / 1000, 2)} s` : `${nf(v, v < 10 ? 1 : 0)} ms`;
-const ROUTE_STATE = { healthy: ["held", "Opérationnelle"], degraded: ["gap", "Dégradée"], failing: ["escalated", "En échec"], idle: ["pending", "Aucun trafic"] };
+const ROUTE_STATE = { healthy: ["held", "Opérationnel"], degraded: ["gap", "Dégradé"], failing: ["escalated", "En échec"], idle: ["pending", "Aucun trafic"] };
 
 function spark(values, w = 120, h = 28) {
   const max = Math.max(...values, 0.0001), step = w / Math.max(values.length - 1, 1);
@@ -200,7 +236,19 @@ const KIND = {
 };
 const bytes = (v) => v == null ? "—" : v >= 1 << 30 ? `${nf(v / (1 << 30), 1)} Go` : `${nf(v / (1 << 20), 0)} Mo`;
 const dur = (s) => s == null ? "—" : s < 120 ? `${nf(s, 0)} s` : s < 7200 ? `${nf(s / 60, 0)} min` : s < 172800 ? `${nf(s / 3600, 0)} h` : `${nf(s / 86400, 0)} j`;
-const stateCell = (s) => `<td><span class="state ${ROUTE_STATE[s][0]}"><i></i>${ROUTE_STATE[s][1]}</span></td>`;
+function reason(w) {
+  if (!w) return "";
+  return {
+    no_traffic: "aucune requête sur la période",
+    error_rate: `${pct(w.value)} d'erreurs, seuil ${pct(w.limit, 0)}`,
+    availability: `disponibilité ${pct(w.value, 2)}, objectif ${pct(w.limit, 1)}`,
+    p99: `p99 ${msf(w.value)}, seuil ${msf(w.limit)}`,
+    job_failed: "dernière exécution échouée",
+    job_never: "jamais réussie",
+    job_late: `aucun succès depuis ${dur(w.value)}, limite ${dur(w.limit)}`,
+  }[w.rule] || "";
+}
+const stateCell = (s, w) => `<td><span class="state ${ROUTE_STATE[s][0]}"><i></i>${ROUTE_STATE[s][1]}</span>${s !== "healthy" && w ? `<div class="sub">${esc(reason(w))}</div>` : ""}</td>`;
 
 function table(cols, rows) {
   return `<table class="table api"><colgroup>${cols.map(([, w]) => `<col${w ? ` style="width:${w}px"` : ""}>`).join("")}</colgroup>
@@ -209,29 +257,29 @@ function table(cols, rows) {
 
 const SECTIONS = {
   api: (rs, d) => table([["État", 150], ["Méthode", 76], ["Route"], ["Trafic", 136], ["Req/s", 80, 1], ["Erreurs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["p99", 78, 1], ["Dispo.", 92, 1]],
-    rs.map((r) => `<tr class="${r.state === "idle" ? "idle" : ""}">${stateCell(r.state)}<td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
+    rs.map((r) => `<tr class="${r.state === "idle" ? "idle" : ""}">${stateCell(r.state, r.why)}<td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
       <td><span class="path">${esc(r.name)}</span>${r.observed && !r.declared && d.openapi ? `<div class="sub">absente d'openapi.json</div>` : ""}</td>
       <td>${r.observed ? spark(r.spark) : ""}</td><td class="num">${r.observed ? nf(r.rps, 2) : "—"}</td>
       <td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td><td class="num">${msf(r.p50)}</td>
       <td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td><td class="num">${pct(r.availability, 2)}</td></tr>`)),
   worker: (rs) => table([["État", 150], ["File"], ["Débit", 136], ["Messages/s", 96, 1], ["Échecs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["En attente", 100, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span><div class="sub">${esc(r.operation)}</div></td>
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span><div class="sub">${esc(r.operation)}</div></td>
       <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
       <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num ${r.backlog > 100 ? "bad" : ""}">${nf(r.backlog)}</td></tr>`)),
   job: (rs) => table([["État", 150], ["Tâche"], ["Dernier succès", 150, 1], ["Durée", 100, 1], ["Période", 100, 1], ["Dernière exécution", 160, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span>${r.state === "degraded" ? `<div class="sub">en retard sur sa période</div>` : ""}</td>
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span>${r.state === "degraded" ? `<div class="sub">en retard sur sa période</div>` : ""}</td>
       <td class="num">${r.last_success ? ago(r.last_success * 1000) : "jamais"}</td><td class="num">${r.duration == null ? "—" : msf(r.duration * 1000)}</td>
       <td class="num">${dur(r.period)}</td><td class="num ${r.ok === 0 ? "bad" : ""}">${r.ok === 0 ? "en échec" : r.ok === 1 ? "réussie" : "—"}</td></tr>`)),
   database: (rs) => table([["État", 150], ["Base"], ["Opération", 110], ["Trafic", 136], ["Op/s", 80, 1], ["Erreurs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["p99", 78, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb">${esc(r.operation)}</span></td>
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb">${esc(r.operation)}</span></td>
       <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
       <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td></tr>`)),
   dependency: (rs) => table([["État", 150], ["Service"], ["Méthode", 76], ["Trafic", 136], ["Appels/s", 86, 1], ["Erreurs", 84, 1], ["p95", 78, 1], ["p99", 78, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
       <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
       <td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td></tr>`)),
   process: (rs) => table([["État", 150], ["Processus"], ["CPU", 110, 1], ["Mémoire", 120, 1], ["Démarré depuis", 150, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span></td><td class="num">${r.cpu == null ? "—" : pct(r.cpu, 1)}</td>
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span></td><td class="num">${r.cpu == null ? "—" : pct(r.cpu, 1)}</td>
       <td class="num">${bytes(r.memory)}</td><td class="num">${dur(r.uptime)}</td></tr>`)),
 };
 
@@ -254,13 +302,21 @@ async function loadRun() {
   const tile = (k) => {
     const rs = c[k], bad = rs.filter((r) => r.state === "failing").length, warn = rs.filter((r) => r.state === "degraded").length;
     const tone = bad ? "escalated" : warn ? "gap" : "held";
-    const word = bad ? `${bad} en échec` : warn ? `${warn} ${warn > 1 ? "dégradés" : "dégradé"}` : "opérationnels";
+    const word = bad ? `${bad} en échec` : warn ? `${warn} ${warn > 1 ? "dégradés" : "dégradé"}` : rs.length > 1 ? "opérationnels" : "opérationnel";
     return `<a class="tile" href="#k-${k}"><span class="state ${tone}"><i></i></span><b>${rs.length}</b><span>${rs.length > 1 ? KIND[k][2] : KIND[k][1]}</span><em class="${tone}">${word}</em></a>`;
   };
   $("#run").innerHTML = `
     ${!d.targets.length ? `<div class="note warn">Aucune source de métriques n'est configurée. Ajoutez dans standard.toml : <span class="sha">[run] metrics = ["http://127.0.0.1:9000/metrics"]</span>.</div>` : ""}
     ${down.length ? `<div class="note bad">${plural(down.length, "source de métriques ne répond pas", "sources de métriques ne répondent pas")} : ${down.map((t) => esc(t.url)).join(", ")}.</div>` : ""}
     <div class="tiles">${kinds.map(tile).join("")}</div>
+    <div class="defs">
+      <p><span class="state held"><i></i>Opérationnel</span> moins de ${pct(1 - d.rules.slo, 1)} d'erreurs (objectif de disponibilité ${pct(d.rules.slo, 1)}) et p99 sous ${msf(d.rules.slow_p99_ms)}.</p>
+      <p><span class="state gap"><i></i>Dégradé</span> disponibilité sous l'objectif, ou p99 au-dessus de ${msf(d.rules.slow_p99_ms)}. Pour une tâche planifiée : aucun succès depuis ${d.rules.late_periods} périodes.</p>
+      <p><span class="state escalated"><i></i>En échec</span> ${pct(d.rules.failing_error_rate, 0)} d'erreurs ou plus. Pour une tâche planifiée : sa dernière exécution a échoué.</p>
+      <p><span class="state pending"><i></i>Aucun trafic</span> aucune requête sur la période choisie.</p>
+    </div>
+    <div class="auto"><div>${levelTag("observed")}<b>Autonomie en exploitation</b></div><p>${esc(state.autonomy.runtime.why)}</p>
+      <a class="btn" href="#/autonomy">Détail de l'autonomie</a></div>
     <div class="kpis">
       ${kpi("Requêtes", `${nf(f.rps, 1)}<small>/s</small>`, `${nf(f.requests)} sur la période`)}
       ${kpi("Erreurs", pct(f.error_rate), "réponses 5xx", f.error_rate > 0.01 ? "bad" : "")}
@@ -306,16 +362,18 @@ function fact(text, tone) {
   return `<span class="fact ${tone}"><i></i>${esc(text)}</span>`;
 }
 
+const auto = (id) => state.autonomy.requirements.find((a) => a.id === id);
+
 function requirementTables() {
   return `${DOMAINS.map(([label, test]) => {
       const rs = state.requirements.filter(test);
       return rs.length ? `<section><h2>${label}</h2><table class="table req"><colgroup><col><col style="width:150px"><col style="width:190px"><col style="width:210px"></colgroup>
-        <thead><tr><th>Exigence</th><th>État</th><th>Mesure</th><th>Réparée par</th></tr></thead><tbody>
+        <thead><tr><th>Exigence</th><th>État</th><th>Mesure</th><th>Autonomie</th></tr></thead><tbody>
       ${rs.map((r) => `<tr><td><div class="name">${esc(name(r.id))}</div><div class="sub">${esc(r.property)} = ${esc(r.expect)}</div>
         ${r.where.length && r.state === "gap" ? `<ul class="where">${r.where.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}</td>
         <td><span class="state ${r.state}"><i></i>${STATES[r.state]}</span></td>
         <td class="sub">${esc(measure(r))}</td>
-        <td class="sub">${WHO[r.who]}</td></tr>`).join("")}</tbody></table></section>` : "";
+        <td>${levelTag(auto(r.id).level)}<div class="sub">${LEVEL[auto(r.id).level][2]}</div></td></tr>`).join("")}</tbody></table></section>` : "";
     }).join("")}`;
 }
 
