@@ -33,8 +33,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-from trusted.runtime import GAUGES, HISTOGRAMS, KINDS, parse, quantile  # noqa: F401  (one reading, shared with T06)
-import trusted.runtime as runtime
+from instruments.production import GAUGES, HISTOGRAMS, KINDS, parse, quantile  # noqa: F401  (one reading, shared with T06)
+import instruments.production as runtime
 
 FAILING, SLOW_P99_MS, LATE_PERIODS = 0.05, 1000.0, 2      # published defaults; the engineers' settings replace them
 
@@ -134,6 +134,19 @@ class Telemetry:
                 if key not in bad:
                     self.db.execute("UPDATE incident SET closed_at = ?, state = 'resolved' WHERE id = ?", (now, i))
             self.db.commit()
+
+    def minutes(self, since_minute: int) -> list:
+        """(minute, component id, kind, requests, failed, buckets) from consecutive scrapes, for SLO previews."""
+        with self.lock:
+            rows = self.db.execute("SELECT at, target, kind, operation, name, count, errors, buckets FROM hist "
+                                   "WHERE at >= ? ORDER BY at", (since_minute * 60,)).fetchall()
+        series, out = {}, []
+        for at, target, kind, op, name, count, errors, buckets in rows:
+            series.setdefault((target, kind, op, name), []).append((at, count, errors, json.loads(buckets)))
+        for (_, kind, op, name), samples in series.items():
+            cid = runtime.component_id(kind, op, name)
+            out += [(at // 60, cid, kind, n, e, b) for at, n, e, b in self._deltas(samples) if n > 0]
+        return out
 
     def incidents(self, since: int) -> list:
         with self.lock:

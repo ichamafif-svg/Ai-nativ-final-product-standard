@@ -10,14 +10,27 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fixture import HOUR, Ledger, client_law
+from fixture import Ledger, client_law
 
-from autonomy import Agent, Cycle, Route, WorkEngine, project
+from autonomy import Agent, Cycle, Route, WorkEngine
 from trusted import EffectPort, Journal, PinStore, Signer, TrustedService
 from trusted.adapters import GitRepository, Readback
-from trusted.instruments import Instrument
-from trusted.data import TrustedData
-from trusted.operator import Instruments, Prover
+from instruments.data import TrustedData
+from trusted.host import Evidence, Host
+from trusted.operator import Instrument, Instruments, Prover
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def host_for(root: Path, repo, data=None, world=None, stores=None, clock=None, series=None) -> Host:
+    """The instrument host of a test installation: its own evidence, the pinned data written where the host reads it."""
+    path = None
+    if data is not None:
+        path = root / "data.json"
+        from kernel.canon import canon
+        path.write_bytes(canon(data.value))
+    return Host(ROOT, Evidence(root / "evidence"), repo, data=(path, data.digest) if data is not None else None,
+                world=world, stores=stores, clock=clock, series=series)
 
 
 def sh(cwd, *args):
@@ -90,8 +103,9 @@ class Stand(unittest.TestCase):
             effect_port=EffectPort({"remediate": git_repo.remediate}),
             reconciliation=Readback(git_repo, signer("oracle"), self.oracle_cap, clock))
         self.world = type("World", (), {"protections": lambda _: set()})()
+        self.host = host_for(root, self.repo, self.data, self.world, clock=clock)
         self.instruments = Instruments(self.service, Instrument(signer("scanner"), self.scanner_cap, clock),
-                                       self.repo, self.store, data=self.data, world=self.world)
+                                       self.host, self.repo, self.store)
         self.signer = signer
         self.prover = Prover(self.service, git_repo, signer("oracle"), self.oracle_cap, clock)
         routes = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),

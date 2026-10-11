@@ -18,8 +18,8 @@ import re
 import uuid
 from pathlib import Path
 
-from trusted.build import contract_path, load
-from trusted.instruments import Snapshot
+from instruments.suite import contract_path, load
+from instruments.tree import Snapshot
 from trusted.signing import Signer, envelope
 
 from .agent import AgentError, commit_files, model_context
@@ -37,7 +37,7 @@ class Builder:
                  sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000):
         """grants: {"agent_implement": id, "agent_deliver": id}. store: the agent's proposals store. requests: the
         request store (contracts and specs by digest)."""
-        from trusted.data import EMPTY
+        from instruments.data import EMPTY
 
         from .sandbox import Sandbox
         self.service, self.signer, self.grants, self.store = service, signer, grants, Path(store)
@@ -47,7 +47,7 @@ class Builder:
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
     def check(self, base: str, head: str, rid: str, targets: dict) -> list:
-        from trusted.instruments import _worse
+        from instruments.probes import _worse
 
         from .precheck import measure, suite, tools
         problems = []

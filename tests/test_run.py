@@ -22,12 +22,11 @@ from test_maintenance import FILES, demo_repository  # noqa: E402
 
 import autonomy.__main__ as agent_process  # noqa: E402
 import trusted.daemon as daemon  # noqa: E402
-from trusted import runtime  # noqa: E402
-from trusted.deploy import Releases  # noqa: E402
+import instruments.production as runtime  # noqa: E402
+from trusted.register import Registers  # noqa: E402
 from autonomy import release  # noqa: E402
 from autonomy.policy import Policy, history, law_bounds  # noqa: E402
-from trusted.runtime import component_id  # noqa: E402
-from trusted.slo import Store, evaluate  # noqa: E402
+from instruments.production import component_id, evaluate  # noqa: E402
 from trusted.gateway import AdmissionGateway  # noqa: E402
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
@@ -49,8 +48,8 @@ class Metrics:
         self.count, self.failed = self.count + 100, self.failed + self.errors
         ok = self.count - self.failed
         version = self.version
-        if version is None and self.link is not None and os.path.islink(self.link):
-            version = os.path.basename(os.readlink(self.link))
+        if version is None and self.link is not None and os.path.exists(self.link):
+            version = Path(self.link).read_text().strip() or None
         return "\n".join([
             f'http_server_request_duration_seconds_bucket{{http_route="/orders",http_response_status_code="200",le="0.1"}} {ok}',
             f'http_server_request_duration_seconds_bucket{{http_route="/orders",http_response_status_code="200",le="+Inf"}} {ok}',
@@ -106,35 +105,30 @@ class Facts(unittest.TestCase):
         self.assertEqual(f[(f"run:process:all/{B}/2", "switched_min")], "600")      # restarts are not switches
 
     def test_an_unreachable_source_is_uncovered_never_met(self):
-        production = runtime.Production(["http://x/metrics"], fetch=lambda url: (_ for _ in ()).throw(OSError("down")))
-        production.scrape(1)
-        production.scrape(2)
-        self.assertEqual(production.assess(2)["slo"], "uncovered:1")
-        self.assertEqual(runtime.Production([]).assess(2)["coverage"], "uncovered:empty")
+        m = runtime.measures({})
+        assess = lambda points, now, answers=(): runtime.assess({"metrics-0": points}, list(answers), m, now, 0)
+        self.assertEqual(assess([(1, None), (2, None)], 2)["slo"], "uncovered:1")
+        self.assertEqual(runtime.assess({}, [], m, 2, 0)["coverage"], "uncovered:1")      # nothing declared
         metrics = Metrics()
-        production = runtime.Production(["http://x/metrics"], fetch=metrics)
-        production.scrape(1)
-        production.scrape(31)
-        self.assertEqual(production.assess(31)["slo"], "met")
+        points = [(at, metrics("x")) for at in (1, 31)]
+        self.assertEqual(assess(points, 31)["slo"], "met")
         metrics.errors = 50
-        production.scrape(61)
-        production.scrape(91)
-        assessed = production.assess(91)
-        self.assertEqual(assessed["slo"], "breached:1")
+        points += [(at, metrics("x")) for at in (61, 91)]
+        assessed = assess(points, 91)
+        self.assertEqual(assessed["slo"], "breached:2")                              # /orders failing, its SLO burning
         self.assertAlmostEqual(assessed["failing_pct"], 100 / 3)                     # 100 failed of 300 in the window
 
     def test_probes_see_what_the_product_does_not_report(self):
-        metrics, answers = Metrics(), iter([200, 200, 503, 503])
-        production = runtime.Production(["http://x/metrics"], fetch=metrics, request=lambda method, url: (next(answers), 0.01))
-        production.measures = runtime.measures({"global": {"base_url": "http://shop"},
-                                                "probes": {"p-a": {"spec": "GET /health 200"}, "p-b": {"spec": "rm -rf /"}}})
-        self.assertEqual(production.measures["probes"], [("p-a", "GET", "/health", 200)])
-        for at in (1, 31):
-            production.scrape(at)
-        self.assertEqual(production.assess(31)["slo"], "met")
-        for at in (61, 91):
-            production.scrape(at)
-        assessed = production.assess(91)
+        m = runtime.measures({"global": {"base_url": "http://shop"},
+                              "probes": {"p-a": {"spec": "GET /health 200"}, "p-b": {"spec": "rm -rf /"}}})
+        self.assertEqual([tuple(x) for x in m["probes"]], [("p-a", "GET", "/health", 200)])
+        metrics = Metrics()
+        points = [(at, metrics("x")) for at in (1, 31, 61, 91)]
+        answer = lambda status: [["p-a", "GET", "/health", 200, status, 0.01]]
+        answers = [(1, answer(200)), (31, answer(200))]
+        self.assertEqual(runtime.assess({"m": points[:2]}, answers, m, 31, 0)["slo"], "met")
+        answers += [(61, answer(503)), (91, answer(503))]
+        assessed = runtime.assess({"m": points}, answers, m, 91, 0)
         self.assertEqual(assessed["slo"], "breached:1")                              # metrics fine, probe failing
         self.assertEqual([c["kind"] for c in assessed["components"] if c["error_rate"]], ["probe"])
 
@@ -201,6 +195,12 @@ class Decide(unittest.TestCase):
         self.assertEqual((actions, "baking" in why["canary"]), ([], True))
         self.assertEqual(release.decide(view(canary_error_delta="5.000", canary_baked_min="2"), Policy(canary), 0)[0],
                          [("abort", abort, "agent_abort")])
+        noise = view(canary_error_delta="1.527", canary_error_pct="3.5", live_error_pct="2.0", canary_requests="301",
+                     live_requests="2700", canary_baked_min="2")              # what the live demo saw by chance
+        self.assertEqual(release.decide(noise, Policy(canary), 0)[0], [])
+        broken = view(canary_error_delta="28.000", canary_error_pct="30", live_error_pct="2", canary_requests="60",
+                      live_requests="600", canary_baked_min="1")
+        self.assertEqual(release.decide(broken, Policy(canary), 0)[0], [("abort", abort, "agent_abort")])
         moved = {**view(), r: {"candidate": "no"}}
         self.assertEqual(release.decide(moved, Policy(canary), 0)[0], [("abort", abort, "agent_abort")])
 
@@ -237,28 +237,21 @@ class Settings(unittest.TestCase):
 
 class Migrations(unittest.TestCase):
     def test_stepping_back_across_a_schema_change_needs_a_compatible_migration(self):
-        root = Path(tempfile.mkdtemp())
-        repo = demo_repository(root, {**FILES, "migrations/0001_orders.sql": "CREATE TABLE o (id INTEGER);\n"})
-        commit = lambda path, text: (Path(repo, path).write_text(text), git("add", "-A", cwd=repo),
-                                     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", path, cwd=repo),
-                                     git("rev-parse", "HEAD", cwd=repo))[-1]
-        base = git("rev-parse", "HEAD", cwd=repo)
-        expand = commit("migrations/0002_note.compatible.sql", "ALTER TABLE o ADD COLUMN note TEXT;\n")
-        drop = commit("migrations/0003_drop.sql", "DROP TABLE o;\n")
-        self.assertEqual(runtime.crossed(repo, expand, base), 1)
-        self.assertEqual(runtime.crossed(repo, base, base), 0)
-        self.assertIsNone(runtime.crossed(repo, drop, expand))
+        base = {"app.py": [], "migrations/0001_orders.sql": []}
+        expand = {**base, "migrations/0002_note.compatible.sql": []}
+        drop = {**expand, "migrations/0003_drop.sql": []}
+        self.assertEqual(runtime.crossed(expand, base), 1)
+        self.assertEqual(runtime.crossed(base, base), 0)
+        self.assertIsNone(runtime.crossed(drop, expand))
 
 
 class Objectives(unittest.TestCase):
     """SLOs with error budgets and multi-window burn rates (D32), as numbers (D36)."""
 
     def store(self, minutes, bad_share, per_minute=100, start=0, latency_le="0.1"):
-        store = Store()
-        for m in range(start, start + minutes):
-            store.add(m, "c-000000000001", "api", per_minute, per_minute * bad_share,
-                      {"0.05": per_minute * 0.5, "0.1": per_minute * 0.9, "+Inf": per_minute})
-        return store
+        return [(m, "c-000000000001", "api", per_minute, per_minute * bad_share,
+                 {"0.05": per_minute * 0.5, "0.1": per_minute * 0.9, "+Inf": per_minute})
+                for m in range(start, start + minutes)]
 
     def slo(self, **kw):
         return {"s-1": {"name": "x", "sli": "availability", "target": 99.9, "window_d": 1, "selector": "counted",
@@ -270,8 +263,7 @@ class Objectives(unittest.TestCase):
         self.assertEqual((hot["burn"]["5m"], hot["fast_burn"]), (20.0, 20.0))         # 2 % bad for 0.1 % allowed
         self.assertLess(hot["budget"], 0)
         store = self.store(55, 0.0)
-        for m in range(55, 60):
-            store.add(m, "c-000000000001", "api", 100, 2, {"+Inf": 100})
+        store += [(m, "c-000000000001", "api", 100, 2, {"+Inf": 100}) for m in range(55, 60)]
         blip = evaluate(store, self.slo(), 59, counted=counted)["s-1"]
         self.assertGreater(blip["burn"]["5m"], 14.4)                                  # five bad minutes
         self.assertLess(blip["fast_burn"], 14.4)                                      # but not over the hour
@@ -301,18 +293,18 @@ class Canary(unittest.TestCase):
         self.assertEqual(f[(f"run:canary:abort/{A}/{B}", "running")], "yes")
         self.assertNotIn((f"run:canary:all/{A}/{B}", "candidate"), f)                # one canary at a time
 
-    def test_the_adapter_starts_promotes_and_aborts(self):
+    def test_the_registers_start_promote_and_abort(self):
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, FILES)
         m0 = git("rev-parse", "main", cwd=repo)
         (repo / "app.py").write_text("def add(a, b):\n    return a + b  # v2\n")
         git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "v2", cwd=repo)
         m1 = git("rev-parse", "main", cwd=repo)
-        r = Releases(repo, root / "run", canary_percent=lambda: 20)
+        r = Registers(repo, root / "run", canary_percent=lambda: 20)
         r.switch(f"run:release:all/none/{m0}", {"from": "none", "to": m0}, "k0")
         self.assertEqual(r.canary_switch(f"run:canary:all/{m0}/{m1}", {"from": m0, "to": m1}, "k1"), "ok")
         self.assertEqual((r.canary(), r.current()), (m1, m0))
-        self.assertEqual((r.root / "canary_weight").read_text().strip(), "20")
+        self.assertEqual(r.get("canary_weight"), "20")
         self.assertEqual(r.canary_switch(f"run:canary:all/{m0}/{m1}", {"from": m0, "to": m1}, "k1"), "ok")  # retry
         self.assertEqual(r.switch(f"run:release:all/{m0}/{m1}", {"from": m0, "to": m1}, "k2"), "ok")    # promote
         self.assertEqual((r.canary(), r.current()), (None, m1))
@@ -326,7 +318,7 @@ class Switch(unittest.TestCase):
         self.repo = demo_repository(root, FILES)
         self.main = git("rev-parse", "main", cwd=self.repo)
         self.served = {"version": None, "started": None}
-        self.releases = Releases(self.repo, root / "run", served=lambda: self.served)
+        self.releases = Registers(self.repo, root / "run", served=lambda: self.served)
 
     def test_the_live_release_moves_only_from_the_exact_release(self):
         r, main = self.releases, self.main
@@ -334,7 +326,6 @@ class Switch(unittest.TestCase):
         self.assertIsNone(r.current())                                                  # production was not A
         self.assertEqual(r.switch(f"run:release:all/none/{main}", {"from": "none", "to": main}, "k2"), "ok")
         self.assertEqual(r.current(), main)
-        self.assertTrue((r.link / "app.py").exists())                                   # main's tree, exported
         self.assertEqual(r.switch(f"run:release:all/none/{main}", {"from": "none", "to": main}, "k2"), "ok")  # retry
         self.assertEqual(r.switch(f"run:release:all/{main}/{C}", {"from": main, "to": C}, "k3"), "failed")  # not main
         self.assertEqual(r.switch(f"run:release:all/{main}/x", {"from": main, "to": "x"}, "k4"), "failed")
@@ -346,21 +337,16 @@ class Switch(unittest.TestCase):
         r.switch(f"run:release:all/none/{main}", {"from": "none", "to": main}, "k")
         deploy = {"op": "deploy", "args": {"from": "none", "to": main}}
         self.served = {"version": A, "started": 1}
-        self.assertFalse(r.applied(deploy))                                            # the link moved, not the code
+        self.assertFalse(r.applied(deploy))                                            # the register moved, not the code
         self.served = {"version": main, "started": 1}
         self.assertTrue(r.applied(deploy))
         restart = {"op": "restart", "args": {"release": main, "n": "1"}}
         self.assertEqual(r.request_restart(f"run:process:all/{main}/1", restart["args"], "k6"), "ok")
-        self.assertIn(main, (r.root / "restart").read_text())
+        self.assertIn(main, r.get("restart"))
         self.assertFalse(r.applied(restart))                                           # same process
         self.served = {"version": main, "started": 10 ** 10}
         self.assertTrue(r.applied(restart))
         self.assertEqual(r.request_restart("x", {"release": A, "n": "2"}, "k7"), "failed")   # not the live release
-
-    def test_a_restart_command_that_fails_is_unknown(self):
-        self.releases.restart = ["false"]
-        self.assertEqual(self.releases.switch("r", {"from": "none", "to": self.main}, "k"), "unknown")
-        self.assertTrue(self.releases.applied({"op": "deploy", "args": {"to": self.main}}))
 
 
 class Production(unittest.TestCase):
@@ -378,7 +364,7 @@ class Production(unittest.TestCase):
         ceremony.activate(argparse.Namespace(dir=str(install)))
         operator = daemon.Installation(install / "standard.toml")
         metrics = Metrics(link=str(install / "run" / "current"))       # the product says which release answers
-        operator.production.production.fetch = metrics
+        operator.host.fetch = metrics
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
@@ -460,6 +446,23 @@ class Production(unittest.TestCase):
             metrics.started = clock() // 1000 + 5                             # the runner started it again
             rounds(1)
             self.assertNotIn(f"proof:{restart}", operator.journal.snapshot()["obligations"])
+
+            # D37: every signed measure is a pure function of its run record; anyone can run it again.
+            import replay
+            config = install / "standard.toml"
+            recorded = replay.records(config, 200)
+            jobs = {}
+            for r in recorded:
+                result = replay.replay(replay.host_for(config), r)
+                self.assertEqual(result["result"], "agrees", result)
+                jobs[result["job"]] = jobs.get(result["job"], 0) + 1
+            self.assertIn("production", jobs)
+            host = replay.host_for(config)                                    # a record whose answer was forged
+            rec = json.loads(host.evidence.get(next(r for r in recorded if "production" in host.evidence.get(r).decode())))
+            rec["output"]["facts"] = [[r, p, "met" if p == "slo" else s, d] for r, p, s, d in rec["output"]["facts"]]
+            rec["output"]["facts"].append([f"run:release:all/{m0}/{m1}", "candidate", "yes", []])   # stepped back from
+            forged = host.evidence.put(json.dumps(rec, sort_keys=True).encode())
+            self.assertEqual(replay.replay(host, forged)["result"], "disagrees")
         finally:
             gateway.shutdown()
             gateway.server_close()
@@ -488,8 +491,8 @@ class CanaryEndToEnd(unittest.TestCase):
                 return metrics(url)
             lines = []
             for name in ("current", "canary"):
-                if os.path.islink(install / "run" / name):
-                    release = os.path.basename(os.readlink(install / "run" / name))
+                release = (install / "run" / name).read_text().strip() if (install / "run" / name).exists() else ""
+                if release:
                     ok, err = seen.get(release, (0, 0))
                     seen[release] = (ok + 100 - bad.get(release, 0), err + bad.get(release, 0))
             for release, (ok, err) in seen.items():
@@ -498,7 +501,7 @@ class CanaryEndToEnd(unittest.TestCase):
                           f'standard_release_duration_seconds_bucket{{release="{release}",le="0.1"}} {ok + err}',
                           f'standard_release_duration_seconds_bucket{{release="{release}",le="+Inf"}} {ok + err}']
             return "\n".join(lines)
-        operator.production.production.fetch = fetch
+        operator.host.fetch = fetch
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:

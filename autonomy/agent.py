@@ -20,9 +20,10 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from trusted.instruments import SECRETS, Snapshot
-from trusted.data import EMPTY
-from trusted.recipes import recipes_for
+from instruments.probes import SECRETS
+from instruments.tree import Snapshot
+from instruments.data import EMPTY
+from instruments.recipes import recipes_for
 from trusted.signing import Signer, envelope
 
 MODEL = os.environ.get("STANDARD_AGENT_MODEL", "claude-sonnet-5-5")

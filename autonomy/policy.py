@@ -29,7 +29,7 @@ from __future__ import annotations
 import re
 from zoneinfo import ZoneInfo
 
-from trusted.runtime import PROBE, SELECTOR, component_id, measures
+from instruments.production import PROBE, SELECTOR, component_id, measures
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DEFAULTS = {"objective": 99.9, "failing": 5.0, "p99_ms": 1000.0, "window_s": 300, "late_periods": 2,

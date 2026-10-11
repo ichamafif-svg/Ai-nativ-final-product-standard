@@ -16,9 +16,9 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import trusted.instruments as probes
-from trusted.instruments import Snapshot
-from trusted.recipes import recipes_for
+import instruments.probes as probes
+from instruments.tree import Snapshot
+from instruments.recipes import recipes_for
 
 from .sandbox import Sandbox
 

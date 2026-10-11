@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
-from trusted import instruments  # noqa: E402
+from trusted.host import Evidence, Host  # noqa: E402
 from trusted.isolation import Isolation  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[1]
 
 RUNNER = "standard-runner"
 
@@ -47,12 +49,15 @@ class Isolated(unittest.TestCase):
             "def test_ok():\n    assert True\n")
         repo = demo_repository(root, {**FILES, "tests/test_hostile.py": hostile})
         main = subprocess.run(["git", "-C", str(repo), "rev-parse", "main"], capture_output=True, text=True).stdout.strip()
-        measure = instruments.run_suite(repo, main, main, isolation=Isolation(RUNNER))
-        failed = " ".join(measure.findings)
+        host = Host(ROOT, Evidence(root / "evidence"), repo, isolation=Isolation(RUNNER))
+        out, _ = host.call("contribution", {"base": {"commit": main}, "head": {"commit": main},
+                                            "author": {"value": "eve"}, "targets": {"value": []}})
+        tests = next(f for f in out["facts"] if f[1] == "tests")
+        failed = " ".join(d.splitlines()[0] for d in tests[3])
         self.assertIn("test_steal", failed)                              # the key file is out of reach
         self.assertIn("test_call_home", failed)                          # no network at all
         self.assertNotIn("test_ok", failed)
-        self.assertTrue(any("test_ok" in n for n in measure.covered))
+        self.assertEqual(tests[2], "found:2")
         self.assertEqual(os.listdir(secret), ["guard.key"])
 
 

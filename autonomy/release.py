@@ -41,6 +41,17 @@ def _num(facts: dict, key: str) -> float:
         return 0.0
 
 
+def worse(c: dict, tolerated: float) -> bool:
+    """The canary fails more than the live release by more than the tolerated points, beyond the noise of what was
+    seen: the difference exceeds the tolerance by two standard errors (two proportions). A product that fails 2 % of
+    its requests shows a point of difference on a few hundred requests by chance alone; taking out every canary on
+    such noise would stop all delivery."""
+    pc, pl = _num(c, "canary_error_pct") / 100, _num(c, "live_error_pct") / 100
+    nc, nl = max(_num(c, "canary_requests"), 1), max(_num(c, "live_requests"), 1)
+    se = 100 * ((pc * (1 - pc)) / nc + (pl * (1 - pl)) / nl) ** 0.5
+    return _num(c, "canary_error_delta") - tolerated > 2 * max(se, 100 / nc)
+
+
 def decide(transitions: dict, p: Policy, now_ms: int) -> tuple[list, dict]:
     """[(op, resource, grant name)] in order of priority, and why the agent holds back elsewhere."""
     out, why = [], {}
@@ -75,8 +86,8 @@ def decide(transitions: dict, p: Policy, now_ms: int) -> tuple[list, dict]:
             elif not yes(c, "candidate"):
                 out.append((1, "abort", r, "agent_abort"))
                 why["canary"] = "main moved on: the canary is taken out"
-            elif _num(c, "canary_requests") >= min(p.get("canary_min_requests"), 20) and (
-                    _num(c, "canary_error_delta") > p.get("canary_max_error_delta") or _num(c, "canary_p99_ms") > limit):
+            elif _num(c, "canary_requests") >= 20 and (worse(c, p.get("canary_max_error_delta")) or (
+                    _num(c, "canary_requests") >= p.get("canary_min_requests") and _num(c, "canary_p99_ms") > limit)):
                 out.append((1, "abort", r, "agent_abort"))
                 why["canary"] = f"canary fails {_num(c, 'canary_error_delta'):.2f} points more than the live release " \
                                 f"(limit {p.get('canary_max_error_delta')}), p99 {_num(c, 'canary_p99_ms'):.0f} ms"

@@ -308,15 +308,15 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 
 | Budget | Lignes / plafond | Contenu |
 |---|---|---|
-| Noyau K (sûreté) | **2 240 / 3 200** | jugement, langage, loi, obligations, FLOOR-0, floors |
-| Sûreté T | **1 188 / 1 188** | journal, garde, horloge, frontière, service, passerelle, livraison, release, processus opérateur |
-| Intégrations T06/T07/T08 (sûreté) | **1 099 / 1 099** | instruments de toutes les cibles, isolation, contrat des demandes, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur |
-| Production T06/T07/T08 (sûreté) | **791 / 791** | mesure de production (479 : lecture des métriques, sondes, ce qui est sur chaque bascule, nombres), bascules de release (201), SLO (111). Était 1 205 avant D36 |
+| Noyau K (sûreté) | **2 253 / 3 200** | jugement, langage, loi, obligations, FLOOR-0, floors |
+| Sûreté T | **1 186 / 1 186** | journal, garde, horloge, frontière, service, passerelle, livraison, release, processus opérateur |
+| Intégrations T06/T07/T08 (sûreté) | **782 / 782** | hôte des programmes (`host.py` : entrées par empreinte, exécution isolée, magasin de preuves, relevés), registres de release (`register.py`), passe opérateur, isolation, adaptateurs git et GitHub. Était 1 099 + 791 (production) avant D37 |
 | Hébergement (sûreté) | **71 / 71** | passerelle SSH à commande forcée |
 | Second juge (restrictif seul) | **797 / 797** | |
 | Redevabilité (visibilité) | **250 / 250** | |
+| *Hors TCB* : programmes épinglés | **1 278 / 1 278** | `instruments/` : toutes les mesures qui ouvrent un droit (sondes des floors, tests, régressions, recettes, contrat, règles, production). Épinglés par empreinte dans les floors, exécutés isolés, sans clé ni effet, **rejouables** (D37) |
 
-  TCB locale : **6 436 lignes** (6 846 avant D36), dont 3 399 hors noyau et second juge. Depuis D36, le budget production ne contient plus de jugement réglable : il mesure et signe ce qui est, la loi compare, l'agent se retient. Il reste du code **non relu**. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+  TCB locale : **5 339 lignes** (6 846 avant D36, 6 436 avant D37), dont 2 289 hors noyau et second juge. **T est gelé** (D37) : sûreté T + intégrations + hébergement ≤ **2 039 lignes** (3 149 avant D37), vérifié par `make budget` (`_frozen`). Une nouvelle mesure est un programme épinglé, un nouvel effet un registre ; relever le gel est une décision consignée. Il reste du code **non relu**. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -650,11 +650,11 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 | T | Où | Ce qui est tenu |
 |---|---|---|
 | T04, T05 | `trusted/journal.py`, `trusted/checker.py` | Journal SQLite append-only, pins sur un autre volume ; second juge qui reformule chaque admission |
-| T06 | `trusted/instruments.py`, `trusted/operator.py` | Toutes les sondes des floors ; les propriétés **épinglées** (`instruments` des floors : tests, régressions, reproduction, acceptation, contrat, règles, faits de production) ne s'acceptent que comme `measurement` signée par `@scanner` avec méthode, couverture, date et artefact. Une `observation` d'une propriété épinglée est refusée (`PROV.INSTRUMENT`), une mesure d'une autre source aussi (`PROV.COVERAGE`) : un relecteur ne peut pas signer « tests au vert » (D33) |
-| T06 | `trusted/isolation.py` | Le code des contributeurs et de l'agent tourne sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire ; il ne lit pas les clés de la garde. Sonde `qualify` : « T06 contributors' code runs isolated » |
-| T06 | `trusted/build.py` | Le contrat d'une demande (fichier de tests d'acceptation stocké par digest) : `contract` = `red` sur main (la demande demande du nouveau), `acceptance` = `green` sur l'implémentation, `altered` si le fichier diffère (D34) |
-| T06 | `trusted/runtime.py`, `trusted/slo.py` | Mesures de production signées par le scanner (D36) : couverture des sources, SLO tenu ou rompu, et sur chaque bascule exacte ce qui est (`candidate`, `previous`, `proven`, `live`, `running`) et des nombres (consommation rapide, part en échec, minutes depuis la bascule, deltas du canary, budget restant, migrations traversées). Aucun réglage d'ingénieur n'y est jugé |
-| T07, T08 | `trusted/guard.py`, `trusted/adapters.py`, `trusted/deploy.py` | CAS de `main` (git local ou GitHub), bascules de release (`current`, `canary`, redémarrage sans coupure) ; readback `applied / not_applied / unknown` ; preuve par l'oracle |
+| T06 | `trusted/isolation.py` | Les programmes épinglés et le code des contributeurs tourne sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire ; il ne lit pas les clés de la garde. Sonde `qualify` : « T06 contributors' code runs isolated » |
+| T06 | `trusted/host.py`, `trusted/operator.py`, `instruments/` (hors T) | **Hôte générique (D37)** : le programme `plan` dit quoi mesurer ; l'hôte résout chaque entrée par son identité (commit exact, fichier à un commit, blob du magasin vérifié par son empreinte, données épinglées, relevés), exécute le job du paquet `instruments/` sous l'exécutant isolé, et garde un **enregistrement** (méthode, job, entrées par empreinte, réponse) dans un magasin adressé par contenu. Le scanner signe chaque propriété épinglée comme `measurement` dont la méthode est `programs@<empreinte du paquet>` et l'artefact l'enregistrement. Une observation d'une propriété épinglée est refusée (`PROV.INSTRUMENT`), une mesure d'une autre source aussi (`PROV.COVERAGE`) |
+| T06 | `trusted/host.py` (relevés) | Le monde réel : l'hôte récupère les octets des sources déclarées (métriques, lanceur) et les réponses des sondes, datés, par empreinte, à résolution décroissante (chaque relevé quelques minutes, un par minute des heures, un par heure des mois). Le programme de production les lit ; il ne va jamais lui-même sur le réseau |
+| T06 | `tools/replay.py` (hors T) | **Rejeu** : n'importe qui ayant le journal, le magasin de preuves et le dépôt rejoue les enregistrements avec les mêmes programmes et compare les faits (`agrees`, `disagrees`, `programs`, `unreadable`). Sonde `qualify` « T06 measures replay from their records ». Un enregistrement falsifié est détecté (test) |
+| T07, T08 | `trusted/guard.py`, `trusted/adapters.py`, `trusted/register.py` | CAS de `main` (git local ou GitHub). **Registres de release** (D37) : `current`, `canary`, `canary_weight`, `restart`, petits fichiers que seule la garde écrit, déplacés par compare-and-swap sous un verrou, chaque mouvement journalisé avec sa clé (un réessai après `unknown` ne rejoue rien). La garde ne construit ni n'exporte rien : le lanceur du produit lit le commit nommé dans le dépôt canonique. Readback `applied / not_applied / unknown` : appliqué = la version servie ; preuve par l'oracle |
 | T09 | `trusted/delivery.py` | Outbox et livraison ; **non branchée** sur e-mail ni messagerie (les alertes ne sont que dans l'interface) |
 
 **Évaluation signée.** Une frontière (`TrustBoundary`) qualifie seulement les rôles utilisés par l'opération. Une évaluation Ed25519 signée lie release, genèse, journal et registre ; les clés de l'évaluateur sont épinglées par l'installation, hors de portée de l'agent. Sans temps fiable, une restriction peut être contrôlée à la date d'émission signée de l'évaluation ; cette voie ne peut jamais élargir. Une déclaration `VERIFIED` signée ne démontre pas la réalité physique.
@@ -822,7 +822,7 @@ Le scanner signe ce qui est sur chaque bascule exacte et des nombres ; la loi di
 
 Les bornes sont la **preuve minimale** pour agir seul, comparée par le noyau. Les réglages des ingénieurs (stratégie, fenêtres, gel, horizon de 30 min, canary à 0,5 point, seuils d'alerte, interrupteurs d'autonomie) sont la retenue de l'agent, hors TCB (`autonomy/policy.py`) : ils peuvent exiger plus, jamais moins. Pour un arrêt garanti par le noyau, révoquer une capacité ou geler un périmètre (`run:release:*`) s'applique tout de suite ; rendre l'autonomie attend le délai témoigné.
 
-**Instruments épinglés (D33).** Les floors réservent à `@scanner` : `tests`, `regressions`, `reproduced`, `acceptance`, `contract`, `configured`, `accepted` et tous les faits de production ci-dessus. Chacun déclare méthode, couverture et fraîcheur ; seule une `measurement` de cette source le porte.
+**Instruments épinglés (D33, D37).** Les floors réservent à `@scanner` : `tests`, `regressions`, `reproduced`, `acceptance`, `contract`, `configured`, `accepted` et tous les faits de production ci-dessus. Leur méthode est l'empreinte du paquet de programmes (`programs@sha256:…`, calculée par les floors) : changer un programme change la release, donc la genèse. Seule une `measurement` de cette source, avec cette méthode, le porte ; son artefact est l'enregistrement rejouable.
 
 **Projection conformité** (hors TCB, **non implémentée** : aucun code dans le dépôt ; l'interface montre seulement la carte des exigences des floors par domaine) : 93 contrôles ISO 27001, 12 exigences NIS2, 19 articles DORA. Le mapping peut surévaluer la portée d'une attestation générale ; il ne certifie ni la conformité juridique ni le contrôle effectif.
 
@@ -1116,6 +1116,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D34 | **Construire sous la loi.** Une demande est une ressource typée (`request` : proposée, contrat signé, livrée, retirée). Son contrat est un fichier de tests d'acceptation écrit par une personne avant tout code, gardé par son empreinte. Le contrat ne se signe que si le scanner a vu chacun de ses tests échouer sur main (un test qui passe déjà ne promet rien). L'agent implémente (code seulement, jamais un test, le contrat recopié à l'octet), vérifie dans son bac à sable, propose ; l'op `implement` exige acceptation au vert sur cette transition exacte, tests de main au vert, aucune régression et une revue signée. Un contributeur peut aussi implémenter (même contrat, trailer `Standard-Request:`). La demande est livrée quand main passe le contrat (`accepted`), et l'agent l'enregistre | Ce que la loi ne savait pas vérifier (« le changement fait ce qui était demandé ») devient un fait mesuré contre un contrat signé, avec la même chaîne que la maintenance. Limites : sans modèle configuré, l'agent n'implémente pas ; un contrat ne couvre que ce que ses tests disent |
 | D35 | **Les règles dans le dépôt ; la loi borne le jugement du scanner.** `standard/rules.json` sur main est la source de tous les réglages sauf les silences : on le change par une contribution relue, ou depuis l'interface en signant une fois le nouveau fichier (l'agent le commit à l'identique, le scanner vérifie que seul ce fichier change et que l'empreinte est celle signée par un ingénieur pour ce main, l'op `configure` l'intègre). Le noyau gagne un atome `compare` (comparaison décimale exacte, recalculée par le second juge) : les planchers bornent de l'extérieur ce que le jugement du scanner peut ouvrir (canary : au plus 2 points d'erreurs de plus, au moins 20 requêtes et une minute ; retour arrière dans les 240 min ; pas de 12e redémarrage dans l'heure) | Git pour l'ingénieur, le journal pour l'auditeur, un clic pour la personne pressée. Le jugement fin reste côté confiance (réglages plus stricts), mais un défaut de ce code ne peut plus dépasser les bornes que le noyau vérifie. La base de confiance n'a pas rétréci : la partie production est passée à 1 205 lignes |
 | D36 | **Le scanner mesure, la loi borne, l'agent se retient.** Le scanner ne juge plus rien de réglable : il signe ce qui est sur chaque bascule exacte (`candidate`, `previous`, `proven`, `live`, `running`) et des nombres (`burn_fast`, `failing_pct`, `switched_min`, `unanswered_s`, `restarts_last_hour`, `migrations_crossed`, `budget_pct`, deltas du canary). Les floors fixent la preuve minimale pour agir seul (§12), comparée par le noyau. Les réglages des ingénieurs passent dans U (`autonomy/policy.py`) : l'agent les applique avant de soumettre, et ils ne peuvent qu'exiger plus que la loi. Le délai sur les assouplissements de D31 disparaît des réglages : il reste là où il garantit quelque chose, sur la loi et les capacités (resserrer, révoquer, geler : tout de suite ; élargir : après le délai témoigné) | La production était 1 205 lignes de jugement non relu dans la TCB, dont 320 de réglages et ~150 de décisions qui ouvraient des droits. Un défaut dans la retenue de l'agent ne donne plus que ce que la loi permet déjà ; un défaut du scanner reste possible, mais sur des mesures, plus simples à vérifier qu'un jugement. Prix : un ingénieur qui assouplit un réglage, dans les bornes de la loi, est suivi dès l'intégration |
+| D37 | **T gelé : les mesures sont des programmes épinglés et rejouables, les effets des registres.** T ne contient plus aucune mesure : un hôte générique résout les entrées par leur identité, exécute un paquet de programmes (`instruments/`) épinglé par empreinte dans les floors sous l'exécutant isolé, garde chaque enregistrement (entrées par empreinte, réponse) et le scanner signe ce que le programme répond, avec la méthode `programs@<empreinte>` et l'enregistrement en artefact. Le monde réel entre par des relevés bruts, datés, gardés par empreinte, que le programme lit. Les bascules de production deviennent des registres déplacés par compare-and-swap ; le lanceur du produit construit lui-même ce qu'il sert. `tools/replay.py` rejoue n'importe quel enregistrement ailleurs ; `make budget` gèle T (2 039 lignes) | La confiance passe de « ce processus a dit vrai » à « cette fonction figée, que chacun peut recalculer, a répondu ceci à ces entrées ». Ajouter une mesure ajoute un programme, jamais une ligne de T (démontré par l'analyse canary ci-dessous : un changement de mesure sans toucher T). Restent dans T et non vérifiables par rejeu : l'honnêteté du relevé (l'hôte a récupéré ces octets), la vérité de la source (le produit dit ses propres métriques), l'exclusivité des effets (T07) ; un programme épinglé faux produit un fait faux que le rejeu ne révèle pas (il recalcule la même erreur) : sa relecture reste nécessaire |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1137,7 +1138,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | **Agent (U)** | `python -m autonomy run standard.toml` | Sa propre clé, son dépôt de propositions, la clé API Claude | Journal, pins, clé de la garde, jeton d'écriture |
 | **Interface** | `python -m surface.web standard.toml` (utilisateur `standard-web`) | Rien : lit la vue, relaie des enveloppes signées dans le navigateur | Toute clé |
 | **Exécutant** | `standard-runner`, appelé par la garde via `sudo -n -u standard-runner -- /usr/bin/env -i …` | Rien : exécute le code des contributions, sans réseau | Clés, journal, réseau |
-| **Produit** | `tools/run_release.py` (utilisateur `standard-demo`) | Ses données (`/srv/standard/data`) ; sert `deploy/current` et `deploy/canary` | Le droit de basculer la release (la garde écrit `deploy/`) |
+| **Produit** | `tools/run_release.py DEPLOY PORT --repo CANONIQUE` (utilisateur `standard-demo`) | Ses données (`/srv/standard/data`) ; lit les registres, exporte lui-même le commit nommé depuis le dépôt canonique (lecture seule) et le sert | Le droit de déplacer un registre (la garde écrit `deploy/`). Démo : il lit le dépôt par le groupe de la garde, comme l'interface et la passerelle ; en production, par une lecture de la passerelle |
 | **Humains** | `python -m surface review / attest`, ou l'interface | Leur propre clé | Tout le reste |
 
 À chaque passe, l'opérateur fait témoigner le temps (démo seulement), mesure `main`, les propositions, les contributions et les demandes, mesure la production (sources, SLO, canary, version servie), fait partir les effets admis, réconcilie et prouve. L'agent projette les dettes, fabrique ses propositions et soumet ses intentions.
@@ -1185,12 +1186,13 @@ kernel/      K — jugement unique, six mécanismes, FLOOR-0, langage de loi (do
              redevabilité. Aucune dépendance hors stdlib + cryptographie épinglée.
 floors/      Floors de la release, déclaratifs, couverts par le digest : cibles, opérations,
              conditions, instruments épinglés, ressource request.
-trusted/     T — journal, pins, garde, horloge, livraison, passerelle, service, processus
-             opérateur (daemon), second juge (checker), release ;
-             intégrations : instruments, operator (passes), recipes, adapters, github, data,
-             isolation (exécutant), build (contrat des demandes) ;
-             production : runtime (mesure), slo, deploy (bascules) ;
-             hosting (passerelle SSH).
+trusted/     T, gelé (D37) — journal, pins, garde, horloge, livraison, passerelle, service,
+             processus opérateur (daemon), second juge (checker), release ; host (programmes,
+             preuves, relevés), register (registres de release), operator (passe), adapters,
+             github, isolation (exécutant) ; hosting (passerelle SSH).
+instruments/ Programmes épinglés, hors T (D37) : plan, sondes des floors, recettes, données,
+             suites de tests et contrats, production (métriques, SLO, bascules, nombres).
+             N'importe que kernel ; aucun accès réseau, aucune clé, aucun effet.
 autonomy/    U — projection, Work Engine, agent, cycle, bac à sable, précontrôle, mémoire,
              carte du dépôt, porte LLM ; Integrator (contributions), Builder (demandes),
              Configurer (règles), Releaser et policy (production : la retenue de l'agent, D36).
@@ -1200,7 +1202,7 @@ tests/       Un test par règle du registre §17, un par garantie G01–G16, les
              de §21.1, le différentiel des deux juges, production, construction, isolation.
 tools/       Budgets et couches (check_tcb), cérémonie, qualification, données, hébergement
              (host.py), installation serveur, lanceur de release sans coupure (run_release.py),
-             trafic de démo.
+             rejeu des mesures (replay.py), trafic de démo.
 demo/        Le dépôt de démonstration, hors de ses floors au départ ; service HTTP avec
              build_info, base de données et migrations.
 ```
@@ -1208,9 +1210,10 @@ demo/        Le dépôt de démonstration, hors de ses floors au départ ; servi
 **Règles d'import, vérifiées automatiquement à chaque commit :**
 
 - `kernel` n'importe rien de Standard.
+- `instruments` n'importe que `kernel` ; `trusted` ne l'importe jamais : l'hôte l'exécute dans l'exécutant isolé.
 - `trusted` n'importe que `kernel`.
 - Le second juge n'importe ni le noyau ni son évaluateur.
-- `autonomy` et `surface` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable. Ils peuvent seulement utiliser comme bibliothèques (`U_MAY_USE` dans `tools/check_tcb.py`) `trusted.instruments`, `trusted.build`, `trusted.runtime`, `trusted.slo` (lecture et calcul, sans clé), `trusted.recipes`, `trusted.data`, `trusted.signing` (signer avec leur propre clé) et `trusted.gateway`.
+- `autonomy` et `surface` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable. Ils peuvent utiliser les programmes `instruments` (lecture et calcul, sans clé) et, de `trusted`, seulement `trusted.signing` (signer avec leur propre clé) et `trusted.gateway` (`U_MAY_USE` dans `tools/check_tcb.py`).
 - Le budget de chaque fichier de `kernel/` et `trusted/` est déclaré ; tout dépassement bloque.
 
 ---
@@ -1274,7 +1277,8 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Isolation et instruments (D33) | Fait et vérifié : une contribution hostile ne lit pas la clé et n'atteint pas le réseau (test), qualification T06 PASS en direct ; un relecteur qui signe « tests au vert » est refusé par le noyau |
 | Construction (D34) | Fait et démontré en direct : demande écrite et signée dans Chromium par h1, contrat rouge sur main vérifié par le scanner, contrat signé, implémentation par Alice (contrat recopié, trailer), acceptation au vert mesurée en isolation, revue de h3, intégration, livraison enregistrée par l'agent, mise en production. L'implémentation par l'agent est testée avec un modèle simulé, jamais avec un vrai modèle |
 | Règles dans le dépôt (D35) | Fait et démontré en direct : passage en canary signé une fois par h1, fichier commité par l'agent, intégré par la loi, puis le changement lui-même passé en canary |
-| Production réduite à la mesure (D36) | Fait et testé (bout en bout, dont un retour arrière refusé par le noyau sur une consommation de 9,5) : budget production 1 205 → 791 lignes. **Non redémontré en direct** : la démo installée tourne encore l'ancien code |
+| Production réduite à la mesure (D36) | Fait et testé (bout en bout, dont un retour arrière refusé par le noyau sur une consommation de 9,5) : budget production 1 205 → 791 lignes. Démontré en direct : canary promu après 10 min de cuisson, sans redémarrage |
+| T gelé (D37) | Fait, testé et démontré en direct : 2 039 lignes de T (3 149 avant), 1 278 lignes de programmes hors T ; mise en production par registres, lanceur qui exporte lui-même, mesures rejouées (`qualify` : PASS) ; un enregistrement falsifié est détecté. En direct, le rejeu des enregistrements a montré que l'analyse canary retirait des versions saines sur du bruit (1,5 point d'écart sur 300 requêtes, produit à 2 % d'erreurs) : la retenue de l'agent compare désormais l'écart à deux erreurs-types, changement fait dans un programme et dans U, sans toucher T |
 | Tests | 125 tests (`make check` : couches, budgets, tests) |
 | Pas encore là | Agent avec un vrai modèle (jamais exécuté) ; adaptateurs Kubernetes et Prometheus managé ; livraison des alertes hors interface ; projection conformité ISO/NIS2/DORA ; métriques du canary vues par le seul lanceur (auto-déclarées par le produit) ; budget production (1 205 lignes) non relu, borné seulement par la loi |
 | Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |

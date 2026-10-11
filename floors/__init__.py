@@ -17,6 +17,9 @@ move the live release by a compare-and-swap. D36: the scanner signs what is (thi
 proven good) and numbers (burn rate, failing share, minutes since the switch, canary deltas); the bounds below decide
 when the agent may act alone. The engineers' finer settings are the agent's own restraint inside these bounds.
 """
+import hashlib
+from pathlib import Path
+
 from kernel import FORMAT, Release, floor0_digest
 from kernel.floor0 import MIN_DELAY_MS
 
@@ -56,17 +59,27 @@ ORGANISATIONAL = (
 # D33: the facts that open a right are measurements of a pinned instrument. The kernel admits them only from the
 # scanner, with this method and coverage, fresh; anyone else (a reviewer, an engineer) cannot sign them, so a person
 # cannot replace a measure by an opinion. People sign their own facts: review, approved, requested, ack.
+# D37: the method of every pinned property is the digest of the programs package (instruments/), which computes it
+# from recorded inputs; changing a program changes the release, and anyone can replay a measure from its record.
 # property -> (method, coverage, fresh)
+
+
+def _programs() -> str:
+    h = hashlib.sha256()
+    for path in sorted((Path(__file__).resolve().parents[1] / "instruments").glob("*.py")):
+        h.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return "programs@sha256:" + h.hexdigest()
+
+
+PROGRAMS = _programs()
 INSTRUMENTS = {
-    "tests": ("main-suite", "repo:inventory:all", DAY), "regressions": ("floor-probes", "repo:inventory:all", DAY),
-    "reproduced": ("recipe-replay", "repo:inventory:all", DAY),
-    "acceptance": ("acceptance-suite", "repo:inventory:all", DAY),
-    "contract": ("acceptance-suite", "repo:inventory:all", DAY),
-    "configured": ("rules-diff", "repo:inventory:all", DAY), "accepted": ("acceptance-suite", "repo:inventory:all", DAY),
-    **{p: ("production", "run:sources:all", 15 * MINUTE) for p in (
-        "candidate", "previous", "proven", "live", "running",            # D36: what is, on an exact switch
+    **{p: (PROGRAMS, "repo:inventory:all", DAY) for p in (
+        "tests", "regressions", "reproduced", "acceptance", "contract", "configured", "accepted")},
+    **{p: (PROGRAMS, "run:sources:all", 15 * MINUTE) for p in (
+        "candidate", "previous", "proven", "live", "running", "good",    # D36: what is, on an exact switch
         "burn_fast", "failing_pct", "switched_min", "unanswered_s", "restarts_last_hour", "migrations_crossed",
-        "budget_pct", "canary_error_delta", "canary_requests", "canary_baked_min", "canary_p99_ms", "live_p99_ms")},
+        "budget_pct", "canary_error_delta", "canary_requests", "canary_baked_min", "canary_p99_ms", "live_p99_ms",
+        "canary_error_pct", "live_error_pct", "live_requests")},
 }
 
 

@@ -6,7 +6,7 @@ from test_maintenance import FILES, Stand, sh
 
 from kernel import digest
 from surface.human import attest, review
-from trusted.data import DataError, TrustedData
+from instruments.data import DataError, TrustedData
 
 SBOM_24_1 = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
     {"type": "library", "name": "packaging", "version": "24.1", "purl": "pkg:pypi/packaging@24.1"}]}, indent=2) + "\n"

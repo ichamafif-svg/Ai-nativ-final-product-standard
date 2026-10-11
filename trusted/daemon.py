@@ -27,17 +27,14 @@ from kernel import Kernel
 
 from .adapters import GitRepository, Readback
 from .boundary import SignedAssessment
-from .data import EMPTY, TrustedData
-from .deploy import Releases
 from .gateway import AdmissionGateway
 from .guard import EffectPort
-from .instruments import Instrument, git
-from .journal import Journal, PinStore
-from .operator import MAIN_OPS, Instruments, Prover
-from .release import code_digest
+from .host import Evidence, Host, Series
 from .isolation import Isolation
-from .slo import Store
-from .runtime import Pass, Production
+from .journal import Journal, PinStore
+from .operator import MAIN_OPS, Instrument, Instruments, Prover, git
+from .register import Registers
+from .release import code_digest
 from .service import TrustedService
 from .signing import Signer, entry
 
@@ -79,37 +76,39 @@ class Installation:
                                      push_from=resolve(repo["mirror"]) if repo.get("api") == "git" else None)
             self.repo_path = self.proposals = resolve(repo["mirror"])
             self.world = self.repository
-        run, deploy = c.get("run", {}), c.get("deploy")
-        production = Production(run.get("metrics", []), store=Store(self.path.parent / "slo.db"),
-                                release_source=(deploy or {}).get("runner_metrics"))
-        self.releases = Releases(self.repo_path, resolve(deploy["root"]), deploy.get("restart"), clock=self.clock,
-                                 served=production.served, canary_percent=lambda: production.measures["canary_percent"]
-                                 ) if deploy else None
+        run, deploy, data = c.get("run", {}), c.get("deploy"), c.get("data")
+        evidence = Evidence(self.path.parent / "evidence")             # D37: what every measure read and returned
+        self.host = Host(Path(__file__).resolve().parents[1], evidence, self.repo_path,
+                         isolation=Isolation(c.get("tests", {}).get("runner_user")),   # D33: never run their code as us
+                         stores={"requests": resolve(c.get("build", {}).get("store", "requests"))},
+                         data=(resolve(data["path"]), data["digest"]) if data else None, world=self.world,
+                         series=Series(evidence, self.path.parent / "series.json"), clock=self.clock,
+                         pinned=RELEASE.floors["instruments"]["tests"]["method"])
+        sources = {f"metrics-{i}": ("metrics", url) for i, url in enumerate(run.get("metrics", []))}
+        if (deploy or {}).get("runner_metrics"):
+            sources["runner"] = ("runner", deploy["runner_metrics"])
+        self.releases = Registers(self.repo_path, resolve(deploy["root"]), clock=self.clock,
+                                  served=lambda: self.instruments.served,
+                                  canary_percent=lambda: self.instruments.canary_percent) if deploy else None
         ports = {op: self.repository.remediate for op in MAIN_OPS} | ({
             "deploy": self.releases.switch, "rollback": self.releases.switch,
             "restart": self.releases.request_restart, "canary": self.releases.canary_switch,
             "abort": self.releases.canary_switch} if self.releases else {})
-        data = c.get("data")
-        self.data = TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY
         self.service = TrustedService(
             self.journal, boundary=SignedAssessment(assessment, assessors), clock=self.clock,
             guard_signer=key(self.keys, "guard"), effect_port=EffectPort(ports),
             reconciliation=Readback(self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
                                     releases=self.releases))
-        from . import instruments as measure
-        measure.ISOLATION = Isolation(c.get("tests", {}).get("runner_user"))   # D33: never run their code as us
-        self.instruments = Instruments(self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock),
-                                       self.repo_path, self.proposals, data=self.data, world=self.world,
-                                       anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
-                                       inbox=resolve(repo["inbox"]) if repo.get("inbox") else None,
-                                       findings=self.path.parent / "findings.json",
-                                       requests=resolve(c.get("build", {}).get("store", "requests")),
-                                       engineers=lambda: {g["holder"] for gid, g in self.journal.snapshot()["grants"].items()
-                                                          if gid == grants.get("engineer")})
+        names = {gid: name for name, gid in grants.items()}
+        self.instruments = Instruments(
+            self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock), self.host,
+            self.repo_path, self.proposals, anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
+            inbox=resolve(repo["inbox"]) if repo.get("inbox") else None, findings=self.path.parent / "findings.json",
+            holders=lambda: {names[gid]: g["holder"] for gid, g in self.journal.snapshot()["grants"].items()
+                             if gid in names}, sources=sources, production=bool(sources) or deploy is not None,
+            registers=self.releases)
         self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
                              releases=self.releases)
-        self.production = Pass(self.service, self.instruments.instrument, production, self.repo_path,
-                               releases=self.releases, state=self.path.parent / "production.json")
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):
@@ -137,7 +136,6 @@ class Installation:
     def tick(self) -> dict:
         report = {}
         for name, step in (("witness", self.witness), ("sync", self.sync), ("measure", self.instruments.measure),
-                           ("production", self.production.measure), ("publish", self.instruments.publish),
                            ("witness2", self.witness), ("dispatch", self.service.dispatch_due),
                            ("reconcile", self.service.reconcile_due), ("prove", self.prover.prove_due)):
             try:

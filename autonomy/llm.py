@@ -19,7 +19,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from trusted.instruments import SECRETS
+from instruments.probes import SECRETS
 
 REDACTED = "<REDACTED>"
 SYSTEM = "You are a careful maintenance engineer. Answer with one JSON object and nothing else."

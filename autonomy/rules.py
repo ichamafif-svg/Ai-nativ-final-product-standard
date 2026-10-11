@@ -12,7 +12,7 @@ import json
 import uuid
 from pathlib import Path
 
-from trusted.build import load
+from instruments.suite import load
 from trusted.signing import Signer, envelope
 
 from .agent import AgentError, commit_files

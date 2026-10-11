@@ -17,7 +17,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from trusted.data import EMPTY, TrustedData
+from instruments.data import EMPTY, TrustedData
 from trusted.gateway import GatewayClient
 from trusted.signing import Signer
 

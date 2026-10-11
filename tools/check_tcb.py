@@ -14,16 +14,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BUDGETS = json.loads((ROOT / "tcb-budget.json").read_text())
 EXTERNAL = {"cryptography"}
-STANDARD = {"kernel", "trusted", "floors", "autonomy", "surface", "compliance", "tools", "tests"}
+STANDARD = {"kernel", "trusted", "floors", "instruments", "autonomy", "surface", "compliance", "tools", "tests"}
 ALLOWED = {
     "kernel": {"kernel"},
     "floors": {"kernel", "floors"},
     "trusted": {"kernel", "floors", "trusted"},
-    "autonomy": {"kernel", "trusted", "autonomy"},
-    "surface": {"kernel", "trusted", "autonomy", "surface"},
+    "instruments": {"kernel", "instruments"},        # D37: pure programs; trusted/ runs them, never imports them
+    "autonomy": {"kernel", "trusted", "instruments", "autonomy"},
+    "surface": {"kernel", "trusted", "instruments", "autonomy", "surface"},
 }
 # U may use trusted code only as a library: what reads, signs with its own key, or talks to the gateway.
-U_MAY_USE = {"trusted.instruments", "trusted.build", "trusted.runtime", "trusted.slo", "trusted.recipes", "trusted.signing", "trusted.gateway", "trusted.data"}
+U_MAY_USE = {"trusted.signing", "trusted.gateway"}
 TCB = ("kernel", "floors", "trusted")
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
 
@@ -69,6 +70,12 @@ def main() -> int:
         print(f"{budget:12} {lines:5} / {spec['ceiling']}")
         if lines > spec["ceiling"]:
             problems.append(f"budget {budget}: {lines} lines over its ceiling {spec['ceiling']}")
+    frozen = BUDGETS.get("_frozen", {})              # D37: T is closed; a new measure is a program, not trusted code
+    t_lines = sum(len(Path(ROOT, f).read_text().splitlines()) for f, b in counted.items() if b in frozen.get("budgets", []))
+    print(f"{'T frozen':12} {t_lines:5} / {frozen.get('ceiling', 0)}")
+    if frozen and t_lines > frozen["ceiling"]:
+        problems.append(f"T is frozen at {frozen['ceiling']} lines ({t_lines}): measure with a program (instruments/), "
+                        "act through a register (trusted/register.py), or record a decision that raises it")
     for layer in TCB:
         for path in sorted((ROOT / layer).rglob("*.py")):
             if str(path.relative_to(ROOT)) not in counted:

@@ -19,9 +19,10 @@ from autonomy.precheck import precheck  # noqa: E402
 from autonomy.repomap import RepoMap  # noqa: E402
 from autonomy.sandbox import Sandbox  # noqa: E402
 from floors import FLOORS  # noqa: E402
-from trusted import instruments  # noqa: E402
-from trusted.data import EMPTY  # noqa: E402
-from trusted.instruments import Snapshot  # noqa: E402
+from instruments import probes as instruments  # noqa: E402
+from instruments.data import EMPTY  # noqa: E402
+from instruments.suite import tests_report  # noqa: E402
+from instruments.tree import Snapshot, export  # noqa: E402
 
 TARGETS = {t["id"]: t for t in FLOORS["targets"]}
 KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
@@ -63,7 +64,8 @@ class Findings(unittest.TestCase):
         store, base = store_with()
         head = git("-C", str(store), "commit-tree", git("-C", str(store), "rev-parse", f"{base}^{{tree}}"), "-p", base,
                    "-m", "x")
-        status, details = instruments.tests_report(store, base, head)
+        work = Path(tempfile.mkdtemp())
+        status, details = tests_report(export(store, base, work / "b"), export(store, head, work / "h"))
         self.assertEqual(status, "green")
         self.assertEqual(details, [])
 

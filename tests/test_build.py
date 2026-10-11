@@ -139,6 +139,11 @@ class Construction(unittest.TestCase):
             self.assertEqual(facts("build:request/r-mul")["accepted"], "yes")
             builder.run()
             self.assertEqual(entity("r-mul")["state"], "delivered")
+            import replay                                                       # D37: the facts replay, isolated
+            config = install / "standard.toml"
+            results = [replay.replay(replay.host_for(config), r) for r in replay.records(config, 200)]
+            self.assertEqual({r["result"] for r in results}, {"agrees"}, results)
+            self.assertTrue({"feature", "request"} <= {r["job"] for r in results})
         finally:
             gateway.shutdown()
             gateway.server_close()

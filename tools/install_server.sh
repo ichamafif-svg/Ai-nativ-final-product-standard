@@ -149,10 +149,10 @@ phase2() {
   unit standard-agent standard-agent "-m autonomy run $INSTALL/standard.toml 60"
   unit standard-web standard-web "-m surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
   # DEMO: the demo product's API and steady traffic, so that Run shows real metrics.
-  id standard-demo >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-demo
+  id standard-demo >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-demo
   install -d -o standard-guard -g standard-guard -m 0755 /srv/standard/deploy
   install -d -o standard-demo -g standard-demo -m 0750 /srv/standard/data      # the product's data, not the guard's
-  unit standard-demo-service standard-demo "$CODE/tools/run_release.py /srv/standard/deploy/current 9000 --data /srv/standard/data"
+  unit standard-demo-service standard-demo "$CODE/tools/run_release.py /srv/standard/deploy 9000 --repo $HOSTING/repos/app.git --data /srv/standard/data"
   unit standard-demo-load standard-demo "$CODE/tools/demo_load.py http://127.0.0.1:9000 20"
   systemctl daemon-reload
   systemctl enable --now standard-operator

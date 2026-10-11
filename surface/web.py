@@ -25,9 +25,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from autonomy.projection import Route, project
-from trusted.data import EMPTY
+from instruments.data import EMPTY
 from trusted.gateway import GatewayClient
-from trusted.recipes import recipes_for
+from instruments.recipes import recipes_for
 
 STATIC = Path(__file__).with_name("static")
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -174,14 +174,15 @@ class Installation:
                     "awaiting_review": not landed and not blocked and facts.get("tests") == "green"
                     and facts.get("regressions") == "none" and facts.get("review") != "approved"})
         for item in contributions:                              # D34: a contribution may answer a request
-            from trusted.build import claimed
-            item["request"] = claimed(self.repo, item["head"]) if not item["landed"] else None
+            from instruments.suite import claimed
+            item["request"] = claimed(git(self.repo, "log", "-1", "--format=%B", item["head"], check=False)) \
+                if not item["landed"] else None
             item["facts"].setdefault("acceptance", None)
         return {"contributions": contributions, "requests": self.requests_of(view, findings, main)}
 
     def requests_of(self, view: dict, findings: dict, main: str) -> list:
         """Every request: its state, what the scanner says of its contract, its candidate implementations."""
-        from trusted.build import contract_path, load
+        from instruments.suite import contract_path, load
         notes = _json(self.request_notes)
         out = []
         for resource, e in sorted(view.get("entities", {}).items(), key=lambda kv: -kv[1].get("created", 0)):
@@ -379,26 +380,24 @@ class Installation:
         return out
 
     def preview(self, query: dict) -> dict:
-        """What an SLO would have said over the operator's recorded history: compliance, budget left, and how many
-        times its fast and slow burn alerts would have fired. Nothing is signed: it helps choose before signing."""
-        from trusted.slo import SPANS, Store, good_under, matches
+        """What an SLO would have said over the console's recorded history (30 days): compliance, budget left, and how
+        many times its fast and slow burn alerts would have fired. Nothing is signed: it helps choose before signing."""
+        from instruments.production import SPANS, good_under, matches
         policy = self.settle()
         target, window_d = float(query.get("target", 99.9)), max(1, min(90, int(float(query.get("window_d", 30)))))
         sli, threshold = query.get("sli", "availability"), float(query.get("threshold_ms") or 1000)
         selector = query.get("selector", "counted")
         fast, slow = (float(query.get("burn_fast") or policy.get("burn_fast")),
                       float(query.get("burn_slow") or policy.get("burn_slow")))
-        if not self.slo_db.exists():
-            return {"minutes": 0}
         now_minute = int(time.time()) // 60
         counted = lambda cid, kind: (policy.get("counted", cid) == "on" if policy.get("counted", cid)
                                      else kind != "dependency")
         total, bad = {}, {}
-        for minute, cid, kind, t, b, buckets in Store(self.slo_db, readonly=True).rows(now_minute - window_d * 1440):
+        for minute, cid, kind, t, b, buckets in self.telemetry.minutes(now_minute - window_d * 1440):
             if matches(selector, cid, kind, counted):
                 total[minute] = total.get(minute, 0.0) + t
                 bad[minute] = bad.get(minute, 0.0) + (b if sli == "availability"
-                                                       else t - good_under(json.loads(buckets), threshold))
+                                                       else t - good_under(buckets, threshold))
         if not total:
             return {"minutes": 0}
         first, allowed = min(total), 1 - target / 100
@@ -553,7 +552,7 @@ class Installation:
             out.append({"id": e["obligation"], "kind": "obligation", "operation": "", "name": e["obligation"],
                         "state": "escalated", "worst": "escalated", "why": {"rule": "overdue", "due": e["due"]},
                         "opened_ms": e["due"], "closed_at": None, "source": "law", "resource": resource})
-        from trusted.runtime import component_id
+        from instruments.production import component_id
         silences = self.settle(view).silences(now)
         for a in out:
             facts = view["transitions"].get(a["resource"], {})

@@ -69,6 +69,16 @@ def qualify(config_path) -> list:
                      f"runner {runner}, groups {groups}" if runner else "no [tests] runner_user: it runs as the guard",
                      "the code a contribution brings runs as an account without the guard's keys, without network",
                      "that the kernel's user namespaces and sudo are themselves sound"))
+    try:                                                    # D37: the signed measures replay from their records
+        import replay
+        results = [replay.replay(replay.host_for(path), r) for r in replay.records(path, 5)]
+        bad = [r for r in results if r["result"] != "agrees"]
+        observed = bad or f"{len(results)} latest records agree" if results else "no measurement recorded yet"
+    except Exception as exc:
+        results, bad, observed = [], [exc], f"{type(exc).__name__}: {exc}"
+    out.append(probe("T06 measures replay from their records", bool(results) and not bad, observed,
+                     "the latest signed measures are what the pinned programs compute from what was recorded",
+                     "that the recorded inputs are what the world was (a source's word, the host's fetch)"))
     out.append(probe("T01 code release", c.get("demo") is not True,
                      f"running code {code_digest()}",
                      "the source files on disk hash to this release",

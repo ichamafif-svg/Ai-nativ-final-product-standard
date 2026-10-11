@@ -1,14 +1,17 @@
 """Run the live release of a product without downtime, and follow the guard's switches, restarts and canaries
 (D30, D31, D32).
 
-    python tools/run_release.py /srv/standard/deploy/current 9000 [--health /health] [--data /srv/standard/data]
+    python tools/run_release.py /srv/standard/deploy 9000 --repo /srv/standard/hosting/repos/app.git
+                                [--releases DIR] [--health /health] [--data /srv/standard/data]
 
-The runner listens on PORT and forwards every request to the release that serves. When the guard switches the
-`current` link, or asks for a restart (the `restart` file beside it), the runner starts the new process on a private
+The guard only moves registers, small files in the deploy directory holding commits (D37: trusted/register.py). The
+runner builds what it runs: it exports the commit a register names from the canonical repository, by its hash, into
+its own releases directory. It listens on PORT and forwards every request to the release that serves. When the guard
+moves `current`, or asks for a restart (the `restart` register), the runner starts the new process on a private
 port, with STANDARD_RELEASE set to its commit, and waits until its health path answers 200. Only then does traffic
 move to it and the old process stop: a release that never becomes healthy never receives a request.
 
-When the guard sets a `canary` link (and `canary_weight`, a percentage), the runner starts that release beside the
+When the guard sets the `canary` register (and `canary_weight`, a percentage), the runner starts that release beside the
 live one and sends it that share of requests (never `/metrics`, which stays the live release's). It measures what
 each release answers, from in front of them, at `/__standard/metrics` (standard_release_requests_total{release,
 outcome} and standard_release_duration_seconds_bucket{release,le}): the instrument compares them. When the link
@@ -22,6 +25,8 @@ import argparse
 import http.client
 import os
 import random
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -49,28 +54,47 @@ class Process:
 
 
 class Runner:
-    def __init__(self, link: str, port: int, health: str, data: str | None, ready_s: float = 30.0):
-        self.link, self.port, self.health, self.data, self.ready_s = link, port, health, data, ready_s
-        self.root = os.path.dirname(link)
+    def __init__(self, root: str, port: int, health: str, data: str | None, repo: str, releases: str,
+                 ready_s: float = 30.0):
+        self.root, self.port, self.health, self.data, self.ready_s = root, port, health, data, ready_s
+        self.repo, self.releases = repo, releases
         self.live = self.canary = None
         self.weight, self.restart_seen, self.ports = 0, None, iter(range(port + 1, port + 1000))
         self.lock, self.counts = threading.Lock(), {}      # release -> {"ok", "error", "buckets"}
 
     def _read(self, name: str):
         try:
-            if name in ("current", "canary"):
-                return os.path.basename(os.readlink(os.path.join(self.root, name)))
             with open(os.path.join(self.root, name)) as f:
-                return f.read().strip()
+                return f.read().strip() or None
         except OSError:
             return None
 
+    def export(self, release: str) -> str | None:
+        """The release's tree, from the canonical repository by its exact commit; built once."""
+        if not re.fullmatch(r"[0-9a-f]{40}", release):
+            return None
+        path = os.path.join(self.releases, release)
+        if not os.path.isdir(path):
+            tmp = f"{path}.tmp{os.getpid()}"
+            os.makedirs(tmp)
+            tree = subprocess.run(["git", "-c", "safe.directory=*", "--git-dir", self.repo, "archive", "--format=tar", release],
+                                  capture_output=True, timeout=300)
+            if tree.returncode != 0 or subprocess.run(["tar", "-x", "-C", tmp], input=tree.stdout,
+                                                      capture_output=True).returncode != 0:
+                shutil.rmtree(tmp, ignore_errors=True)
+                return None
+            os.replace(tmp, path)
+        return path
+
     def start(self, release: str) -> Process | None:
+        path = self.export(release)
+        if path is None:
+            print(f"{release} cannot be read from the repository: it receives no traffic", flush=True)
+            return None
         port = next(self.ports)
         env = {**os.environ, "STANDARD_RELEASE": release}
         if self.data:
             env["STANDARD_DATA"] = self.data
-        path = os.path.join(self.root, "releases", release)
         child = subprocess.Popen([sys.executable, os.path.join(path, "service.py"), str(port)], cwd=path, env=env)
         deadline = time.time() + self.ready_s
         while time.time() < deadline and child.poll() is None:
@@ -183,12 +207,16 @@ class Runner:
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("link")
+    parser.add_argument("registers", help="the deploy directory the guard writes")
     parser.add_argument("port", type=int)
     parser.add_argument("--health", default="/health")
     parser.add_argument("--data")
+    parser.add_argument("--repo", required=True, help="the canonical repository, read only")
+    parser.add_argument("--releases", default=os.path.expanduser("~/releases"))
     a = parser.parse_args(argv)
-    runner = Runner(a.link, a.port, a.health, a.data)
+    os.makedirs(a.releases, exist_ok=True)
+    root = a.registers if os.path.isdir(a.registers) else os.path.dirname(a.registers)
+    runner = Runner(root, a.port, a.health, a.data, a.repo, a.releases)
     threading.Thread(target=runner.follow, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", a.port), runner.handler()).serve_forever()
 
