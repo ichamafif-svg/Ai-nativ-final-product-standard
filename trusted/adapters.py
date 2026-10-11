@@ -50,10 +50,10 @@ class GitRepository:
 
 
 def applied(it: dict, repository, releases=None) -> bool:
-    """main contains the head (remediate, integrate), or production runs `to` (deploy, rollback)."""
+    """main contains the head (remediate, integrate), or production serves `to` or restarted (D31)."""
     if it["op"] in ("remediate", "integrate"):
         return repository.applied(it["args"]["head"])
-    return it["op"] in ("deploy", "rollback") and releases is not None and releases.applied(it["args"]["to"])
+    return it["op"] in ("deploy", "rollback", "restart") and releases is not None and releases.applied(it)
 
 
 class Readback:

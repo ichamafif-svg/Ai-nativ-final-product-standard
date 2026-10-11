@@ -1,13 +1,17 @@
-"""U: switch production when the independent instrument says the switch is safe (D30).
+"""U: switch or restart production when the facts say it may (D30, D31).
 
-The agent decides nothing about production. It reads the facts the scanner signed on exact switches, published in the
-view (`transitions`), and submits the matching intent under its own capability:
+The agent decides nothing about production. It reads the facts published in the view (`transitions`) on exact
+switches, the scanner's and the engineers', and submits the matching intent under the capability that fits:
 
-    run:service:all/{from}/{to}   regressed = yes    ->  rollback from -> to   (first: the service is breaking)
-    run:release:all/{from}/{to}   deployable = yes   ->  deploy from -> to
+    run:service:all/{from}/{to}   regressed = yes                     ->  rollback   (agent_rollback)
+                                  previous = yes and requested = yes  ->  rollback   (agent_rollback_reviewed)
+    run:process:all/{release}/{n} restartable = yes                   ->  restart    (agent_restart)
+                                  requested = yes                     ->  restart    (agent_restart_reviewed)
+    run:release:all/{from}/{to}   deployable = yes                    ->  deploy     (agent_deploy)
+                                  candidate = yes and approved = yes  ->  deploy     (agent_deploy_reviewed)
 
-The law refuses anything the facts do not support; the guard switches by compare-and-swap, so a stale fact moves
-nothing. Each switch is submitted once; a refusal is retried after a backoff.
+Stepping back comes first, then restarting, then deploying; one switch per pass. The law refuses anything the facts do
+not support; the guard switches by compare-and-swap, so a stale fact moves nothing. Each is submitted once.
 """
 from __future__ import annotations
 
@@ -17,11 +21,19 @@ from pathlib import Path
 
 from trusted.signing import Signer, envelope
 
-ROUTES = (("rollback", "run:service:all/", "regressed"), ("deploy", "run:release:all/", "deployable"))
+ROUTES = (  # op, resource prefix, [(facts that must all be yes, grant name)], argument names
+    ("rollback", "run:service:all/", [(("regressed",), "agent_rollback"),
+                                      (("previous", "requested"), "agent_rollback_reviewed")], ("from", "to")),
+    ("restart", "run:process:all/", [(("restartable",), "agent_restart"),
+                                     (("requested",), "agent_restart_reviewed")], ("release", "n")),
+    ("deploy", "run:release:all/", [(("deployable",), "agent_deploy"),
+                                    (("candidate", "approved"), "agent_deploy_reviewed")], ("from", "to")),
+)
 
 
 class Releaser:
     def __init__(self, service, signer: Signer, grants: dict, *, clock, notes, backoff_ms=60_000):
+        """grants: grant name -> grant id, for the capabilities this installation gave the agent."""
         self.service, self.signer, self.grants, self.clock = service, signer, grants, clock
         self.notes, self.backoff_ms = Path(notes), backoff_ms
 
@@ -29,19 +41,18 @@ class Releaser:
         view, now = self.service.view(), self.clock()
         notes = json.loads(self.notes.read_text()) if self.notes.exists() else {}
         report = {}
-        for op, prefix, prop in ROUTES:
-            if op not in self.grants:
-                continue
+        for op, prefix, routes, names in ROUTES:
             for resource, facts in sorted(view.get("transitions", {}).items()):
-                if not resource.startswith(prefix) or facts.get(prop) != "yes":
+                if not resource.startswith(prefix):
                     continue
-                frm, to = resource[len(prefix):].split("/")
+                grant = next((self.grants[g] for need, g in routes
+                              if g in self.grants and all(facts.get(f) == "yes" for f in need)), None)
                 state = notes.get(resource, {})
-                if state.get("state") == "admitted" or state.get("next_at", 0) > now:
+                if grant is None or state.get("state") == "admitted" or state.get("next_at", 0) > now:
                     continue
                 body = {"id": f"intent-{uuid.uuid4().hex}", "at": max(now, view["health"]["as_of"] + 1),
-                        "author": self.signer.identity, "under": self.grants[op], "op": op,
-                        "args": {"from": frm, "to": to}}
+                        "author": self.signer.identity, "under": grant, "op": op,
+                        "args": dict(zip(names, resource[len(prefix):].split("/")))}
                 try:
                     self.service.admit(envelope(view["prefix"]["genesis"], "intent", body, [self.signer]))
                     notes[resource] = {"state": "admitted", "op": op}
@@ -49,6 +60,6 @@ class Releaser:
                     notes[resource] = {"state": getattr(exc, "code", None) or str(exc), "next_at": now + self.backoff_ms}
                 report[resource] = notes[resource]["state"]
             if any(v == "admitted" for k, v in report.items() if k.startswith(prefix)):
-                break                                       # one switch per pass: rollback wins over deploy
+                break
         self.notes.write_text(json.dumps(notes, indent=2, sort_keys=True))
         return report

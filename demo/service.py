@@ -6,11 +6,15 @@ It has what a real product has, not only an API:
 - a database (db_client_operation_duration_seconds per operation, on SQLite);
 - an external payment provider it calls (http_client_request_duration_seconds per server);
 - a scheduled job (job_last_success_timestamp_seconds, job_last_duration_seconds, job_period_seconds, job_last_status);
-- its own process (process_cpu_seconds_total, process_resident_memory_bytes, process_start_time_seconds).
+- its own process (process_cpu_seconds_total, process_resident_memory_bytes, process_start_time_seconds);
+- the release it runs (build_info{version}, from STANDARD_RELEASE), so that Standard sees which code answers;
+- a schema kept by forward migrations (migrations/NNNN_name[.compatible].sql), in STANDARD_DATA/shop.db when set.
 
     python service.py [port]
 """
+import glob
 import json
+import os
 import queue
 import random
 import re
@@ -74,6 +78,8 @@ class Metrics:
             for (family, pairs), value in sorted(self.gauges.items()):
                 lines.append(f"{family}{fmt(pairs) if pairs else ''} {value}")
         usage = resource.getrusage(resource.RUSAGE_SELF)
+        if os.environ.get("STANDARD_RELEASE"):
+            lines.append(f'build_info{{version="{os.environ["STANDARD_RELEASE"]}"}} 1')
         lines += [f"process_cpu_seconds_total {usage.ru_utime + usage.ru_stime:.3f}",
                   f"process_resident_memory_bytes {usage.ru_maxrss * 1024}",
                   f"process_start_time_seconds {STARTED:.0f}"]
@@ -82,9 +88,26 @@ class Metrics:
 
 METRICS = Metrics()
 ORDERS: "queue.Queue[int]" = queue.Queue()
-DB = sqlite3.connect(":memory:", check_same_thread=False)
+DATA = os.environ.get("STANDARD_DATA")
+DB = sqlite3.connect(os.path.join(DATA, "shop.db") if DATA else ":memory:", check_same_thread=False)
 DB_LOCK = threading.Lock()
-DB.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, amount INTEGER, paid INTEGER)")
+
+
+def migrate() -> int:
+    """Apply the forward migrations not applied yet, in order; the schema's version is the last one applied."""
+    DB.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+    done = {v for (v,) in DB.execute("SELECT version FROM schema_migrations")}
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
+    for path in sorted(glob.glob(os.path.join(here, "[0-9]*.sql"))):
+        version = int(os.path.basename(path).split("_", 1)[0])
+        if version not in done and not path.endswith(".down.sql"):
+            DB.executescript(open(path).read())
+            DB.execute("INSERT INTO schema_migrations VALUES (?)", (version,))
+    DB.commit()
+    return max(done | {v for (v,) in DB.execute("SELECT version FROM schema_migrations")}, default=0)
+
+
+migrate()
 
 
 def db(operation: str, sql: str, *args):

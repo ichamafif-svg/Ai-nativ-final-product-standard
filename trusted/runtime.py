@@ -1,11 +1,13 @@
-"""T06 — the production instrument: what the scanner signs about the product in production (D30).
+"""T06 — the production instrument: what the scanner signs about the product in production (D30, D31).
 
 The same reading of metrics the console shows, but on the trusted side, so that it can become a signed fact and open
 rights. From Prometheus text metrics in the OpenTelemetry conventions it recognises the product's components (APIs,
-workers, databases, external services, scheduled jobs, processes) and judges each over a window with published rules:
+workers, databases, external services, scheduled jobs, processes), adds the engineers' external probes (requests sent
+from outside, so that a product that reports itself healthy while it does not answer is caught), and judges each over
+a window with the engineers' settings (trusted/policy.py; defaults below):
 
-    failing    5 % of requests or more fail (a 5xx status or an `error_type` label)
-    degraded   availability below the objective, a p99 above one second, or a scheduled job late by two periods
+    failing    5 % of requests or more fail (a 5xx status, an `error_type` label, or a probe's unexpected answer)
+    degraded   availability below the objective, a p99 above its limit, or a scheduled job late by two periods
     healthy    otherwise; idle when nothing was requested
 
 It signs two facts: `run:sources:all coverage` (complete only when every declared metrics source answered, every
@@ -21,6 +23,7 @@ import math
 import re
 import subprocess
 import time
+import urllib.error
 import urllib.request
 
 LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+([-+0-9.eE]+|NaN|\+Inf|-Inf)(?:\s+-?\d+)?$')
@@ -55,8 +58,9 @@ GAUGES = {       # family -> (kind, field, labels naming the row)
     "process_cpu_seconds_total": ("process", "cpu_seconds", ("job", "service_name")),
     "process_resident_memory_bytes": ("process", "memory", ("job", "service_name")),
     "process_start_time_seconds": ("process", "started", ("job", "service_name")),
+    "build_info": ("release", "info", ("version", "service_version")),   # which release answers (D31)
 }
-KINDS = ("api", "worker", "job", "database", "dependency", "process")
+KINDS = ("api", "worker", "job", "database", "dependency", "process", "probe")
 OUTSIDE = ("dependency",)   # an external service's own failures are shown, not counted against the product's objective
 
 
@@ -138,40 +142,84 @@ def stats(ds: list, seconds: float, slo: float) -> dict:
             "p50": ms(0.5), "p95": ms(0.95), "p99": ms(0.99)}
 
 
-def judge(s: dict, slo: float) -> tuple[str, dict | None]:
-    """(state, why): the rule that decided it, with the measured value and the limit it crossed."""
+def judge(s: dict, limits) -> tuple[str, dict | None]:
+    """(state, why): the rule that decided it, with the measured value and the limit it crossed.
+    limits: {"objective", "p99_ms", "failing"}, or an objective alone (the published defaults for the rest)."""
+    if not isinstance(limits, dict):
+        limits = {"objective": limits, "p99_ms": SLOW_P99_MS, "failing": FAILING}
     if s["requests"] == 0:
         return "idle", {"rule": "no_traffic"}
-    if s["error_rate"] >= FAILING:
-        return "failing", {"rule": "error_rate", "value": s["error_rate"], "limit": FAILING}
-    if s["availability"] < slo:
-        return "degraded", {"rule": "availability", "value": s["availability"], "limit": slo}
-    if (s["p99"] or 0) > SLOW_P99_MS:
-        return "degraded", {"rule": "p99", "value": s["p99"], "limit": SLOW_P99_MS}
+    if s["error_rate"] >= limits["failing"]:
+        return "failing", {"rule": "error_rate", "value": s["error_rate"], "limit": limits["failing"]}
+    if s["availability"] < limits["objective"]:
+        return "degraded", {"rule": "availability", "value": s["availability"], "limit": limits["objective"]}
+    if (s["p99"] or 0) > limits["p99_ms"]:
+        return "degraded", {"rule": "p99", "value": s["p99"], "limit": limits["p99_ms"]}
     return "healthy", None
 
 
-def judge_job(last, period, ok, now) -> tuple[str, dict | None]:
+def judge_job(last, period, ok, now, late_periods: int = LATE_PERIODS) -> tuple[str, dict | None]:
     if ok == 0:
         return "failing", {"rule": "job_failed"}
     if not last:
         return "degraded", {"rule": "job_never"}
-    if period and now - last > LATE_PERIODS * period:
-        return "degraded", {"rule": "job_late", "value": now - last, "limit": LATE_PERIODS * period}
+    if period and now - last > late_periods * period:
+        return "degraded", {"rule": "job_late", "value": now - last, "limit": late_periods * period}
     return "healthy", None
 
 
-class Production:
-    """The operator's reading of production: the last scrapes of every declared source, judged over a window."""
+BUCKETS = ("0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10", "+Inf")
 
-    def __init__(self, sources, *, slo: float = 0.999, window: int = 300, fetch=None):
-        self.sources, self.slo, self.window = list(sources), slo, window
+
+def _request(method: str, url: str) -> tuple[int, float]:
+    start = time.perf_counter()
+    try:
+        status = urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=10).status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    except Exception:
+        status = 0                                          # no answer at all
+    return status, time.perf_counter() - start
+
+
+class Production:
+    """The operator's reading of production: the last scrapes of every declared source and the probes' answers,
+    judged over a window with the engineers' settings."""
+
+    def __init__(self, sources, *, slo: float = 0.999, window: int = 300, fetch=None, policy=None, request=None):
+        self.sources, self.slo, self.window, self.policy = list(sources), slo, window, policy
         self.fetch = fetch or (lambda url: urllib.request.urlopen(url, timeout=5).read().decode())
+        self.request = request or _request
         self.samples = {}                                  # source -> [(at, hist, gauges)]
-        self.up = {}
+        self.up, self.probed = {}, {}                      # probe id -> cumulative {"count", "errors", "buckets"}
+
+    def limits(self, kind: str, operation: str, name: str) -> dict:
+        if self.policy is None:
+            return {"objective": self.slo, "p99_ms": SLOW_P99_MS, "failing": FAILING, "counted": kind != "dependency"}
+        return self.policy.limits(kind, operation, name)
+
+    def _probe(self) -> dict:
+        """One request per probe, accumulated as a histogram of kind `probe`: the product's answer seen from outside."""
+        if self.policy is None or not self.policy.get("base_url"):
+            return {}
+        out, base = {}, self.policy.get("base_url").rstrip("/")
+        for pid, method, path, expected in self.policy.probes():
+            status, seconds = self.request(method, base + path)
+            e = self.probed.setdefault(pid, {"count": 0.0, "errors": 0.0, "buckets": dict.fromkeys(BUCKETS, 0.0),
+                                             "last": None})
+            e["count"] += 1
+            e["errors"] += status != expected
+            e["last"] = status
+            for le in BUCKETS:
+                if le == "+Inf" or seconds <= float(le):
+                    e["buckets"][le] += 1
+            out[("probe", method, path)] = e
+        return out
 
     def scrape(self, now: float | None = None) -> None:
         now = int(now if now is not None else time.time())
+        if self.policy is not None:
+            self.window = int(self.policy.get("window_s"))
         for source in self.sources:
             try:
                 hist, gauges = parse(self.fetch(source), re.sub(r"^\w+://", "", source).split("/")[0])
@@ -179,6 +227,21 @@ class Production:
                 self.samples[source], self.up[source] = kept, True
             except Exception:
                 self.up[source] = False
+        probes = self._probe()
+        if probes:
+            kept = [s for s in self.samples.get("probes", []) if s[0] >= now - self.window]
+            self.samples["probes"] = kept + [(now, {k: {**v, "buckets": dict(v["buckets"])} for k, v in probes.items()},
+                                              {})]
+
+    def served(self) -> dict:
+        """The release that answers (build_info version) and when its process started, from the latest scrape."""
+        for source in self.sources:
+            if self.up.get(source) and self.samples.get(source):
+                gauges = self.samples[source][-1][2]
+                version = next((n for (k, n, f) in gauges if k == "release"), None)
+                started = next((v for (k, _, f), v in gauges.items() if k == "process" and f == "started"), None)
+                return {"version": version, "started": started}
+        return {"version": None, "started": None}
 
     def assess(self, now: float | None = None) -> dict:
         """{"coverage": status, "slo": status, "components": [...]} over the window, from the samples only."""
@@ -186,6 +249,7 @@ class Production:
         if not self.sources:
             return {"coverage": "uncovered:empty", "slo": "uncovered:no-source", "components": []}
         silent = [s for s in self.sources if not self.up.get(s) or len(self.samples.get(s, [])) < 2]
+        late = int(self.policy.get("late_periods")) if self.policy else LATE_PERIODS
         components = []
         for source, samples in self.samples.items():
             series = {}
@@ -194,14 +258,20 @@ class Production:
                     series.setdefault(key, []).append((at, e["count"], e["errors"], e["buckets"]))
             span = samples[-1][0] - samples[0][0] if len(samples) > 1 else 0
             for (kind, op, name), rows in series.items():
-                state, why = judge(stats(deltas(rows), span, self.slo), self.slo)
-                components.append({"kind": kind, "operation": op, "name": name, "state": state, "why": why})
+                limits = self.limits(kind, op, name)
+                s = stats(deltas(rows), span, limits["objective"])
+                state, why = judge(s, limits)
+                components.append({"kind": kind, "operation": op, "name": name, "state": state, "why": why,
+                                   "id": limits.get("id"), "counted": limits["counted"],
+                                   "availability": s["availability"], "p99": s["p99"], "requests": s["requests"]})
             gauges = samples[-1][2] if samples else {}
             for job in sorted({n for (k, n, _) in gauges if k == "job"}):
                 get = lambda f: gauges.get(("job", job, f))
-                state, why = judge_job(get("last_success"), get("period"), get("ok"), now)
-                components.append({"kind": "job", "operation": "", "name": job, "state": state, "why": why})
-        bad = [c for c in components if c["state"] in ("degraded", "failing") and c["kind"] not in OUTSIDE]
+                state, why = judge_job(get("last_success"), get("period"), get("ok"), now, late)
+                limits = self.limits("job", "", job)
+                components.append({"kind": "job", "operation": "", "name": job, "state": state, "why": why,
+                                   "id": limits.get("id"), "counted": limits["counted"]})
+        bad = [c for c in components if c["state"] in ("degraded", "failing") and c["counted"]]
         if silent:
             return {"coverage": f"uncovered:{len(silent)}", "slo": f"uncovered:{len(silent)}", "components": components,
                     "silent": silent}
@@ -209,44 +279,113 @@ class Production:
                 "silent": []}
 
 
-ROLLBACK_HORIZON_MS = 30 * 60_000   # a breach this soon after a switch is the new release's; later, it goes to people
+MIGRATION = re.compile(r"migrations/(\d+)[^/]*\.sql")
 
 
-def release_facts(slo: str, live: str | None, main: str, history: list, good: set, now_ms: int) -> tuple[list, dict]:
-    """The facts that open `deploy` and `rollback`, as (resource, property, status), with their reasons.
+def migrations(repo, commit: str) -> dict:
+    """{number: path} of the forward migrations a release carries (migrations/NNNN_name[.compatible].sql)."""
+    if commit in (None, "none"):
+        return {}
+    out = subprocess.run(["git", "-C", str(repo), "ls-tree", "-r", "--name-only", commit, "migrations"],
+                         capture_output=True, text=True, timeout=60).stdout.split()
+    return {int(m[1]): path for path in out if (m := MIGRATION.fullmatch(path)) and not path.endswith(".down.sql")}
 
-    run:release:all lag          none when production runs main's head, else behind (a gap, repaired by deploy)
-    run:release:all/{live}/{main} deployable = yes   main moved, and main's head was never rolled back
-    run:service:all/{live}/{prev} regressed = yes    the objective is breached within the horizon after `live` went
-                                                     live, and `prev`, the release it replaced, met it while live
-    A release rolled back is never deployable again: the gap stays open and goes to people at its due time."""
+
+def compatible(repo, live: str, prev: str, allow: bool) -> tuple[bool, str | None]:
+    """Whether `prev`'s code can run on the schema `live` left: no migration since, or only migrations declared
+    backward compatible (`.compatible.sql`, expand-only) when the engineers allow stepping back across them."""
+    added = sorted(set(migrations(repo, live).items()) - set(migrations(repo, prev).items()))
+    if not added:
+        return True, None
+    unsafe = [path for _, path in added if not path.endswith(".compatible.sql")]
+    if unsafe:
+        return False, f"migration not declared compatible: {', '.join(unsafe)}"
+    if not allow:
+        return False, "stepping back across a compatible migration is turned off"
+    return True, None
+
+
+START_GRACE_MS = 90_000      # a release that does not answer this long after its switch never started
+
+
+def release_facts(slo: str, live: str | None, main: str, history: list, good: set, now_ms: int, *,
+                  served: str | None = None, policy=None, compat=lambda live, prev: (True, None)) -> tuple[list, dict]:
+    """The facts that open `deploy`, `rollback` and `restart`, as (resource, property, status), with their reasons.
+
+    run:release:all lag                   none when production serves main's head, else behind (repaired by deploy)
+    run:release:all/{live}/{main}         candidate = yes   main moved and its head was never rolled back
+                                          deployable = yes  the same, and the engineers let Standard deploy alone
+    run:service:all/{live}/{prev}         previous = yes    prev is the release `live` replaced, its code fits the schema
+                                          regressed = yes   the same, the objective broke within the horizon after the
+                                                            switch and prev met it, or `live` never started; and the
+                                                            engineers let Standard step back alone
+    run:process:all/{live}/{n}            restartable = yes the objective is broken, not by the switch, and the
+                                                            engineers let Standard restart, within the hourly budget
+    A release rolled back is never a candidate again: the gap stays open and goes to people at its due time."""
+    get = (lambda k: policy.get(k)) if policy is not None else (lambda k: {"auto_deploy": "on", "auto_rollback": "on",
+                                                                          "rollback_horizon_min": 30, "auto_restart": "off",
+                                                                          "restarts_per_hour": 2}[k])
     live_name = live or "none"
     rolled_back = {h["from"] for h in history if h.get("op") == "rollback"}
-    facts = [("run:release:all", "lag", "none" if live == main else "behind")]
-    why = {"live": live, "main": main, "rolled_back": sorted(rolled_back)}
+    answering = served or live
+    facts = [("run:release:all", "lag", "none" if answering == main and live == main else "behind")]
+    why = {"live": live, "served": served, "main": main, "rolled_back": sorted(rolled_back)}
     if live != main:
         if main in rolled_back:
             why["deploy"] = "main's head was rolled back: a new commit on main is needed"
         else:
-            facts.append((f"run:release:all/{live_name}/{main}", "deployable", "yes"))
-    switch = next((h for h in reversed(history) if h.get("to") == live), None)
-    if live and slo.startswith("breached") and switch:
-        prev, age = switch["from"], now_ms - switch["at"]
-        if prev == "none" or prev not in good:
-            why["rollback"] = "no earlier release is known to have met the objective"
-        elif age > ROLLBACK_HORIZON_MS:
-            why["rollback"] = f"live for {age // 60_000} min before the breach: not attributable to the switch"
+            facts.append((f"run:release:all/{live_name}/{main}", "candidate", "yes"))
+            if get("auto_deploy") == "on":
+                facts.append((f"run:release:all/{live_name}/{main}", "deployable", "yes"))
+            else:
+                why["deploy"] = "automatic deployment is off: an engineer approves"
+    switch = next((h for h in reversed(history) if h.get("to") == live and h.get("op") != "restart"), None)
+    prev = switch["from"] if switch else "none"
+    if live and prev != "none" and prev not in rolled_back:   # never back to a release that was itself stepped back from
+        fits, reason = compat(live, prev)
+        if not fits:
+            why["rollback"] = reason
         else:
-            facts.append((f"run:service:all/{live}/{prev}", "regressed", "yes"))
+            facts.append((f"run:service:all/{live}/{prev}", "previous", "yes"))
+            age = now_ms - switch["at"]
+            not_started = served is not None and served != live and age > START_GRACE_MS
+            breached = slo.startswith("breached")
+            if not (breached or not_started):
+                pass
+            elif get("auto_rollback") != "on":
+                why["rollback"] = "automatic rollback is off: an engineer decides"
+            elif not_started:
+                facts.append((f"run:service:all/{live}/{prev}", "regressed", "yes"))
+                why["rollback"] = f"{live[:7]} never answered: {served[:7]} still serves"
+            elif prev not in good:
+                why["rollback"] = "no earlier release is known to have met the objective"
+            elif age > get("rollback_horizon_min") * 60_000:
+                why["rollback"] = f"live for {age // 60_000} min before the breach: not attributable to the switch"
+            else:
+                facts.append((f"run:service:all/{live}/{prev}", "regressed", "yes"))
+    if live and slo.startswith("breached") and not any(p == "regressed" for _, p, _ in facts):
+        restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == live]
+        recent = [h for h in restarts if now_ms - h["at"] < 3_600_000]
+        if switch and now_ms - switch["at"] <= get("rollback_horizon_min") * 60_000:
+            why["restart"] = "the breach follows a switch: restarting the same code would not repair it"
+        elif get("auto_restart") != "on":
+            why["restart"] = "automatic restart is off"
+        elif len(recent) >= get("restarts_per_hour"):
+            why["restart"] = f"{len(recent)} restarts in the last hour: the budget is spent, people decide"
+        else:
+            facts.append((f"run:process:all/{live}/{len(restarts) + 1}", "restartable", "yes"))
     return facts, why
 
 
 class Pass:
-    """The operator's production pass: scrape, judge, sign. Facts under the scanner's capability; reasons to findings."""
+    """The operator's production pass: read the settings, scrape, judge, sign. Facts under the scanner's capability;
+    reasons, settings and probe answers to the findings."""
 
-    def __init__(self, service, instrument, production: Production, repo, *, releases=None, state=None):
+    def __init__(self, service, instrument, production: Production, repo, *, releases=None, state=None,
+                 policy=None, authors=lambda: set()):
         self.service, self.instrument, self.production, self.repo = service, instrument, production, repo
         self.releases, self.state, self.live, self.offered = releases, state, None, set()
+        self.policy, self.authors = policy, authors
         self.good = set(json.loads(state.read_text())) if state is not None and state.exists() else set()
 
     def _main(self) -> str:
@@ -254,35 +393,52 @@ class Pass:
                               text=True, timeout=60, check=True).stdout.strip()
 
     def measure(self) -> dict:
+        now = self.instrument.clock()
+        if self.policy is not None:
+            self.policy.update(self.service.journal.snapshot()["observations"], self.authors(), now)
         domain = self.service.view()["prefix"]["genesis"]
-        live = self.releases.current() if self.releases else None
-        if live != self.live:                               # a switch: judge the new release on its own traffic only
-            self.production.samples, self.live = {}, live
-        self.production.scrape(self.instrument.clock() / 1000)
-        a = self.production.assess(self.instrument.clock() / 1000)
+        link = self.releases.current() if self.releases else None
+        served = self.production.served()
+        answering = (served["version"] or link, served["started"])
+        if answering != self.live:                          # a switch or a restart: judge it on its own traffic only
+            self.production.samples, self.live = {}, answering
+            self.production.scrape(now / 1000)
+            served = self.production.served()
+            self.live = (served["version"] or link, served["started"])
+        else:
+            self.production.scrape(now / 1000)
+        a = self.production.assess(now / 1000)
         warming = all(self.production.up.get(s) for s in self.production.sources) and a["coverage"] != "complete"
         facts = [] if warming and self.production.sources else [
             ("run:sources:all", "coverage", a["coverage"]), ("run:service:all", "slo", a["slo"])]
         findings = {"run:sources:all|coverage": {"status": a["coverage"], "details": a.get("silent", [])},
                     "run:service:all|slo": {"status": a["slo"], "details": [
                         f"{c['kind']} {c['operation']} {c['name']}: {c['state']} ({json.dumps(c['why'])})".replace("  ", " ")
-                        for c in a["components"] if c["state"] in ("degraded", "failing")]}}
+                        for c in a["components"] if c["state"] in ("degraded", "failing") and c["counted"]]},
+                    "run:components": {"status": a["slo"], "details": a["components"]},
+                    "run:probes": {"status": str(len(self.production.probed)), "details": [
+                        {"id": pid, "last": e["last"], "count": e["count"], "errors": e["errors"]}
+                        for pid, e in self.production.probed.items()]}}
+        if self.policy is not None:
+            findings["run:policy"] = {"status": "published", "details": self.policy.published()}
         if self.releases is None:
             facts.append(("run:release:all", "lag", "uncovered:not-configured"))
         else:
-            if a["slo"] == "met" and live and live not in self.good:
-                self.good.add(live)
+            if a["slo"] == "met" and link and link not in self.good and served["version"] in (None, link):
+                self.good.add(link)
                 if self.state is not None:
                     self.state.write_text(json.dumps(sorted(self.good)))
-            released, why = release_facts(a["slo"], live, self._main(), self.releases.history(), self.good,
-                                          self.instrument.clock())
+            allow = self.policy is None or self.policy.get("compatible_migrations") == "on"
+            released, why = release_facts(
+                a["slo"], link, self._main(), self.releases.history(), self.good, now, served=served["version"],
+                policy=self.policy, compat=lambda live, prev: compatible(self.repo, live, prev, allow))
             facts += released
             findings["run:release:all|lag"] = {"status": released[0][2], "details": [
-                f"{k}: {', '.join(v) if isinstance(v, list) else v}" for k, v in why.items()]}
+                f"{k}: {', '.join(v) if isinstance(v, list) else v}" for k, v in why.items() if v is not None]}
         offered = {(r, p) for r, p, s in facts if "/" in r and s == "yes"}
         facts += [(r, p, "no") for r, p in self.offered - offered]   # withdrawn: production moved, or recovered
         self.offered = offered
         self.instrument.findings.update(findings)
         for resource, prop, status in facts:
             self.service.admit(self.instrument.observation(domain, resource, prop, status))
-        return {"admitted": len(facts), "slo": a["slo"], "live": live}
+        return {"admitted": len(facts), "slo": a["slo"], "live": link, "served": served["version"]}

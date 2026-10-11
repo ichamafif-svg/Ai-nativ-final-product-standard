@@ -70,7 +70,7 @@ function subject(s) {
 
 // ---- routing --------------------------------------------------------------------------------------------------------
 const ROUTES = {
-  run: ["Run", "run"], alerts: ["Alertes", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
+  run: ["Run", "run"], alerts: ["Alertes", "run"], objectives: ["Objectifs et règles", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
   contributions: ["Contributions", "build"], requests: ["Demandes", "build"],
   reviews: ["Revues", "both"], proofs: ["Preuves", "both"], settings: ["Réglages", "both"],
 };
@@ -89,7 +89,7 @@ function frame() {
   const link = (id) => `<a href="#/${id}" ${id === here ? 'aria-current="page"' : ""}><span>${ROUTES[id][0]}</span>${badge(id)}</a>`;
   document.title = untaken ? `(${untaken}) Standard` : "Standard";
   $("#nav").innerHTML = `
-    <div class="group">Exploitation</div>${link("run")}${link("alerts")}${link("autonomy")}${link("compliance")}${link("activity")}
+    <div class="group">Exploitation</div>${link("run")}${link("alerts")}${link("objectives")}${link("autonomy")}${link("compliance")}${link("activity")}
     <div class="group">Construction</div>${link("contributions")}${link("requests")}
     <div class="group">Gouvernance</div>${link("reviews")}${link("proofs")}${link("settings")}`;
   const others = state.products.length > 1;
@@ -119,9 +119,10 @@ async function refresh() {
 function render() {
   if (!state) return;
   frame();
-  const views = { run: runView, alerts: alertsView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
+  const views = { run: runView, alerts: alertsView, objectives: objectivesView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
   $("#view").innerHTML = banner() + views[route()]();
   if (route() === "run") loadRun();
+  if (route() === "objectives") loadObjectives();
   if (route() === "settings") bindSettings();
   document.querySelectorAll("[data-review]").forEach((b) => b.addEventListener("click", () => openReview(b.dataset.review)));
   document.querySelectorAll("[data-ack]").forEach((b) => b.addEventListener("click", () => take(b)));
@@ -242,12 +243,13 @@ const KIND = {
 };
 const bytes = (v) => v == null ? "—" : v >= 1 << 30 ? `${nf(v / (1 << 30), 1)} Go` : `${nf(v / (1 << 20), 0)} Mo`;
 const dur = (s) => s == null ? "—" : s < 120 ? `${nf(s, 0)} s` : s < 7200 ? `${nf(s / 60, 0)} min` : s < 172800 ? `${nf(s / 3600, 0)} h` : `${nf(s / 86400, 0)} j`;
+const pctx = (v) => pct(v, Math.min(3, Math.max(0, String(+(v * 100).toFixed(3)).split(".")[1]?.length || 0)));   // as set
 function reason(w) {
   if (!w) return "";
   return {
     no_traffic: "aucune requête sur la période",
-    error_rate: `${pct(w.value)} d'erreurs, seuil ${pct(w.limit, 0)}`,
-    availability: `disponibilité ${pct(w.value, 2)}, objectif ${pct(w.limit, 1)}`,
+    error_rate: `${pct(w.value)} d'erreurs, seuil ${pctx(w.limit)}`,
+    availability: `disponibilité ${pct(w.value, 2)}, objectif ${pctx(w.limit)}`,
     p99: `p99 ${msf(w.value)}, seuil ${msf(w.limit)}`,
     job_failed: "dernière exécution échouée",
     job_never: "jamais réussie",
@@ -324,9 +326,9 @@ async function loadRun() {
     ${down.length ? `<div class="note bad">${plural(down.length, "source de métriques ne répond pas", "sources de métriques ne répondent pas")} : ${down.map((t) => esc(t.url)).join(", ")}.</div>` : ""}
     <div class="tiles">${kinds.map(tile).join("")}</div>
     <div class="defs">
-      <p><span class="state held"><i></i>Opérationnel</span> moins de ${pct(1 - d.rules.slo, 1)} d'erreurs (objectif de disponibilité ${pct(d.rules.slo, 1)}) et p99 sous ${msf(d.rules.slow_p99_ms)}.</p>
+      <p><span class="state held"><i></i>Opérationnel</span> moins de ${pctx(1 - d.rules.slo)} d'erreurs (objectif de disponibilité ${pctx(d.rules.slo)}) et p99 sous ${msf(d.rules.slow_p99_ms)}.</p>
       <p><span class="state gap"><i></i>Dégradé</span> disponibilité sous l'objectif, ou p99 au-dessus de ${msf(d.rules.slow_p99_ms)}. Pour une tâche planifiée : aucun succès depuis ${d.rules.late_periods} périodes.</p>
-      <p><span class="state escalated"><i></i>En échec</span> ${pct(d.rules.failing_error_rate, 0)} d'erreurs ou plus. Pour une tâche planifiée : sa dernière exécution a échoué.</p>
+      <p><span class="state escalated"><i></i>En échec</span> ${pctx(d.rules.failing_error_rate)} d'erreurs ou plus. Pour une tâche planifiée : sa dernière exécution a échoué.</p>
       <p><span class="state pending"><i></i>Aucun trafic</span> aucune requête sur la période choisie.</p>
     </div>
     <section class="frontier"><h2>Frontière d'autonomie <span class="quiet small">ce que Standard fait seul pour ces ${d.frontier_total.of} composants</span></h2>
@@ -345,7 +347,7 @@ async function loadRun() {
       ${kpi("Erreurs", pct(f.error_rate), "réponses 5xx", f.error_rate > 0.01 ? "bad" : "")}
       ${kpi("Latence p50", msf(f.p50), "médiane")}
       ${kpi("Latence p95", msf(f.p95), `p99 ${msf(f.p99)}`)}
-      ${kpi("Disponibilité", pct(f.availability, 3), `objectif ${pct(d.slo, 1)}`, f.availability != null && f.availability < d.slo ? "bad" : "")}
+      ${kpi("Disponibilité", pct(f.availability, 3), `objectif ${pctx(d.slo)}`, f.availability != null && f.availability < d.slo ? "bad" : "")}
       ${kpi("Budget d'erreur", f.budget == null ? "—" : f.budget < 0 ? "Épuisé" : pct(f.budget, 0),
         f.budget == null ? "pas de trafic" : f.budget < 0 ? `consommé à ${pct(1 - f.budget, 0)}` : "restant sur la période", budgetTone)}
     </div>
@@ -361,12 +363,22 @@ async function loadRun() {
     </section>`;
 }
 
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
+  const d = e.target.closest("[data-decide]");
+  if (d && runData) {
+    d.disabled = true;
+    const at = Math.max(Date.now(), state.signing.as_of + 1);
+    try {
+      await signFact(state.signing.domain, at, runData.live.grant, d.dataset.decide, d.dataset.prop, "yes");
+      d.textContent = "Signé : la garde exécute au prochain passage";
+    } catch (err) { d.textContent = `Refusé : ${err.message}`; }
+    return;
+  }
   const w = e.target.closest("[data-window]");
   if (w) { runWindow = Number(w.dataset.window); localSet("window", runWindow); render(); }
 });
 
-const SWITCH = { deploy: "Mise en production", rollback: "Retour à la version précédente" };
+const SWITCH = { deploy: "Mise en production", rollback: "Retour à la version précédente", restart: "Redémarrage sans coupure" };
 const LAG = { none: ["held", "main est en production"], behind: ["gap", "main n'est pas en production"] };
 const DETAIL = {
   "main's head was rolled back: a new commit on main is needed": ["La version de main a été retirée par un retour arrière : il faut un nouveau commit sur main", "bad"],
@@ -377,6 +389,18 @@ function liveDetail(x) {
   if (k === "live") return fact(`en production : ${v.slice(0, 7) || "aucune"}`, "");
   if (k === "main") return fact(`main : ${v.slice(0, 7)}`, "");
   if (k === "rolled_back") return v ? fact(`versions retirées : ${v.split(", ").map((s) => s.slice(0, 7)).join(", ")}`, "") : "";
+  if (k === "served") return v && v !== "None" ? fact(`version qui répond : ${v.slice(0, 7)}`, "") : fact("le produit ne dit pas quelle version répond", "wait");
+  const RULES = [
+    [/^migration not declared compatible: (.*)$/, (m) => [`Retour impossible : migration non déclarée compatible (${m[1]}). Une personne corrige en avant.`, "bad"]],
+    [/^stepping back across a compatible migration is turned off$/, () => ["Retour à travers une migration compatible désactivé dans les règles", "wait"]],
+    [/^automatic deployment is off/, () => ["Mise en production automatique désactivée : un ingénieur approuve", "wait"]],
+    [/^automatic rollback is off/, () => ["Retour automatique désactivé : un ingénieur décide", "wait"]],
+    [/^(\w{7})\w* never answered: (\w{7})\w* still serves$/, (m) => [`${m[1]} n'a jamais répondu : ${m[2]} sert toujours, retour automatique`, "bad"]],
+    [/^automatic restart is off$/, () => ["Redémarrage automatique désactivé", ""]],
+    [/^the breach follows a switch/, () => ["La rupture suit une mise en production : redémarrer le même code ne la corrigerait pas", "wait"]],
+    [/^(\d+) restarts in the last hour/, (m) => [`${m[1]} redémarrages dans l'heure : budget épuisé, une personne décide`, "bad"]],
+  ];
+  for (const [rx, f] of RULES) { const m = v.match(rx); if (m) { const [text, tone] = f(m); return fact(text, tone); } }
   const known = DETAIL[v] || (/^live for (\d+) min/.test(v) ? [`En production depuis ${v.match(/\d+/)[0]} min avant la rupture : le retour de version ne lui est pas attribué, une personne décide`, "wait"] : [v, ""]);
   return fact(known[0], known[1]);
 }
@@ -388,9 +412,21 @@ function liveSection(live) {
   return `<section><h2>Version en production <span class="quiet small">faits signés par le scanner, bascules faites par le gardien</span></h2>
     <div class="rows"><div class="rowi"><div class="main"><span class="state ${lag[0]}"><i></i>${lag[1]}</span>
       <div class="facts">${live.slo ? fact(`objectif sur les 5 dernières minutes, signé : ${live.slo === "met" ? "tenu" : live.slo.startsWith("breached") ? "rompu" : "non mesuré"}`, live.slo === "met" ? "ok" : live.slo.startsWith("breached") ? "bad" : "wait") : ""}${live.details.map(liveDetail).filter(Boolean).join("")}</div></div></div>
-    ${live.switches.map((s) => `<div class="rowi"><div class="main"><b>${SWITCH[s.op] || esc(s.op)}</b> <span class="sha">${short(s.from)}</span> → <span class="sha">${short(s.to)}</span>
-      <div class="facts">${fact(ago(s.at), "")}${fact(s.op === "rollback" ? "par l'agent, sur une rupture de l'objectif" : "par l'agent, main jugée", s.op === "rollback" ? "wait" : "ok")}</div></div></div>`).join("")
-      || `<div class="rowi quiet">Aucune bascule pour l'instant</div>`}</div></section>`;
+    ${live.switches.map((s) => `<div class="rowi"><div class="main"><b>${SWITCH[s.op] || esc(s.op)}</b> ${s.op === "restart" ? `<span class="sha">${short(s.to)}</span>` : `<span class="sha">${short(s.from)}</span> → <span class="sha">${short(s.to)}</span>`}
+      <div class="facts">${fact(ago(s.at), "")}${fact({ rollback: "sur une rupture de l'objectif", restart: "sur une rupture, même version" }[s.op] || "main jugée", s.op === "deploy" ? "ok" : "wait")}</div></div></div>`).join("")
+      || `<div class="rowi quiet">Aucune bascule pour l'instant</div>`}</div>
+    ${liveActions(live)}</section>`;
+}
+function liveActions(live) {
+  const can = Boolean(signer && live.grant && signer.identity === live.grant.holder), a = live.actions || {};
+  const btn = (kind, label, resource, prop, tone) => resource
+    ? `<button class="btn ${tone}" data-decide="${esc(resource)}" data-prop="${prop}" ${can ? "" : "disabled"}>${label}</button>` : "";
+  const buttons = [btn("deploy", "Mettre main en production", a.deploy, "approved", "primary"),
+    btn("rollback", "Revenir à la version précédente", a.rollback, "requested", ""),
+    btn("restart", "Redémarrer sans coupure", a.restart, "requested", "")].join("");
+  return `<div class="decide">${buttons}<span class="small quiet">${can
+    ? "Chaque décision est une signature de ce navigateur ; la loi l'exécute par la garde, seulement si le fait du scanner la permet."
+    : `Décisions réservées à ${esc(live.grant?.holder || "l'ingénieur habilité")}, avec sa clé dans ce navigateur.`}</span></div>`;
 }
 
 // ---- ALERTS: what is wrong now, and who took it -------------------------------------------------------------------
@@ -441,6 +477,135 @@ async function take(button) {
   } catch (err) {
     button.textContent = `Refusé : ${err.message}`;
   }
+}
+
+// ---- OBJECTIVES: what engineers set (D31) ---------------------------------------------------------------------------
+async function signFact(domain, at, grant, resource, property, status) {
+  const statement = { id: `set-${crypto.randomUUID().replaceAll("-", "")}`, at, author: signer.identity, under: grant.id,
+    resource, property, status: String(status), level: "real" };
+  const env = await envelope(domain, "observation", statement, signer);
+  const r = await fetch("/api/admit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(env) });
+  const out = await r.json();
+  if (!r.ok) throw new Error(out.refused || out.error);
+  return out;
+}
+const SETTINGS = {
+  objective: ["Objectif de disponibilité", "%", "Part des requêtes qui doivent réussir sur la fenêtre."],
+  failing: ["Seuil « en échec »", "% d'erreurs", "Au-delà, un composant est en échec, pas seulement dégradé."],
+  p99_ms: ["Latence p99 maximale", "ms", "Au-delà, le composant est dégradé."],
+  window_s: ["Fenêtre de jugement", "s", "Durée sur laquelle le scanner juge et signe."],
+  late_periods: ["Retard toléré d'une tâche planifiée", "périodes", "Sans succès depuis ce nombre de périodes : dégradée."],
+  rollback_horizon_min: ["Horizon du retour automatique", "min", "Une rupture plus tardive après une mise en production n'est plus attribuée à celle-ci."],
+  restarts_per_hour: ["Redémarrages automatiques par heure", "max", "Au-delà, une personne décide."],
+  base_url: ["Adresse publique du produit", "", "Les sondes externes l'appellent de l'extérieur, comme un client."],
+};
+const TOGGLES = {
+  auto_deploy: ["Mise en production automatique de main", "Sinon le scanner propose et un ingénieur approuve chaque mise en production."],
+  auto_rollback: ["Retour automatique à la version précédente", "Sur une rupture de l'objectif juste après une mise en production, ou une version qui ne démarre pas."],
+  auto_restart: ["Redémarrage automatique", "Sur une rupture qui ne vient pas d'une mise en production, dans la limite par heure."],
+  compatible_migrations: ["Retour arrière à travers une migration compatible", "Seulement les migrations déclarées .compatible.sql (ajout seul) ; jamais à travers une autre."],
+};
+let settingsData = null;
+function objectivesView() {
+  return `<h1>Objectifs et règles</h1><p class="lede">Ce que la production doit tenir et ce que Standard a le droit d'y faire seul.
+    Chaque réglage est une signature de votre navigateur, gardée au journal. <b>Plus strict : appliqué tout de suite.
+    Plus souple : appliqué après le délai de la loi</b>, et affiché en attente d'ici là.</p><div id="obj"><p class="quiet">Chargement</p></div>`;
+}
+async function loadObjectives() {
+  try {
+    const r = await fetch("/api/settings", { cache: "no-store" });
+    settingsData = await r.json();
+    if (!r.ok) throw new Error(settingsData.error);
+  } catch (err) {
+    $("#obj").innerHTML = `<div class="note bad">Les réglages sont indisponibles : ${esc(err.message)}</div>`;
+    return;
+  }
+  const s = settingsData, p = s.policy;
+  if (!p) { $("#obj").innerHTML = `<div class="note warn">L'opérateur n'a pas encore publié ses réglages : attendez un passage.</div>`; return; }
+  const can = Boolean(signer && s.signing.grant && signer.identity === s.signing.grant.holder);
+  const value = (name, fallback) => name in p.effective ? p.effective[name] : fallback;
+  const left = (at) => { const m = Math.ceil((at - Date.now()) / 60000); return m > 0 ? `dans ${m} min` : "au prochain passage du scanner"; };
+  const pend = (name) => p.pending[name] ? `<span class="fact wait"><i></i>${esc(label(name, p.pending[name].value))} : plus souple, appliqué ${left(p.pending[name].applies_at)}</span>` : "";
+  const comps = Object.fromEntries(s.components.map((c) => [c.id, [c.operation, c.name].filter(Boolean).join(" ")]));
+  const VAL = { on: "activé", off: "désactivé" };
+  function label(name, v) {
+    const [scope, key] = name.split("/"), val = VAL[v] || String(v);
+    if (scope === "global") return `${(SETTINGS[key] || TOGGLES[key] || [key])[0]} : ${val}${SETTINGS[key]?.[1] ? " " + SETTINGS[key][1] : ""}`;
+    if (scope.startsWith("p-")) return v === "off" ? "Sonde retirée" : `Sonde ${val}`;
+    const what = { objective: "objectif", p99_ms: "p99 max", counted: "compté dans l'objectif" }[key] || key;
+    return `${comps[scope] || "Composant"}, ${what} : ${val}${key === "objective" ? " %" : key === "p99_ms" ? " ms" : ""}`;
+  }
+  const delay = Math.round(p.delay_ms / 60000);
+  const field = (key, scope = "global", fallback = p.defaults[key]) => {
+    const name = `${scope}/${key}`, v = value(name, fallback), [label, unit, help] = SETTINGS[key], b = p.bounds[key];
+    return `<div class="set"><div class="sl"><b>${label}</b><span class="small quiet">${help}</span></div>
+      <div class="sv"><input class="num" type="${key === "base_url" ? "text" : "number"}" data-set="${name}" value="${esc(v ?? "")}"
+        ${b ? `min="${b[0]}" max="${b[1]}" step="any"` : ""} ${can ? "" : "disabled"} placeholder="${esc(fallback ?? "")}"><span class="unit">${unit}</span>
+        <button class="btn" data-save="${name}" ${can ? "" : "disabled"}>Enregistrer</button></div><div class="sp">${pend(name)}</div></div>`;
+  };
+  const toggle = (key) => {
+    const name = `global/${key}`, on = value(name, p.defaults[key]) === "on", [label, help] = TOGGLES[key];
+    return `<div class="set"><div class="sl"><b>${label}</b><span class="small quiet">${help}</span></div>
+      <div class="sv"><label class="switch"><input type="checkbox" data-toggle="${name}" ${on ? "checked" : ""} ${can ? "" : "disabled"}><span></span></label>
+      <span class="small">${on ? "Activé" : "Désactivé"}</span></div><div class="sp">${pend(name)}</div></div>`;
+  };
+  const comp = (c) => {
+    const o = value(`${c.id}/objective`, null), l = value(`${c.id}/p99_ms`, null), counted = value(`${c.id}/counted`, null);
+    const isCounted = counted ? counted === "on" : c.counted;
+    return `<tr><td><b>${esc([c.operation, c.name].filter(Boolean).join(" "))}</b><div class="sub">${esc(KIND[c.kind]?.[1] || c.kind)}</div></td>
+      <td>${c.availability == null ? "—" : pct(c.availability, 2)}</td><td>${msf(c.p99)}</td>
+      <td><input class="num sm" type="number" step="any" data-set="${c.id}/objective" value="${o ?? ""}" placeholder="${value("global/objective", p.defaults.objective)}" ${can ? "" : "disabled"}> %</td>
+      <td><input class="num sm" type="number" step="any" data-set="${c.id}/p99_ms" value="${l ?? ""}" placeholder="${value("global/p99_ms", p.defaults.p99_ms)}" ${can ? "" : "disabled"}> ms</td>
+      <td><label class="switch"><input type="checkbox" data-toggle="${c.id}/counted" ${isCounted ? "checked" : ""} ${can ? "" : "disabled"}><span></span></label></td>
+      <td><button class="btn" data-savecomp="${c.id}" ${can ? "" : "disabled"}>Enregistrer</button>${pend(`${c.id}/objective`)}${pend(`${c.id}/p99_ms`)}${pend(`${c.id}/counted`)}</td></tr>`;
+  };
+  const probes = Object.entries(p.effective).filter(([k, v]) => k.endsWith("/spec") && v !== "off");
+  const answers = Object.fromEntries((s.probes || []).map((x) => [x.id, x]));
+  $("#obj").innerHTML = `
+    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour modifier ces règles.</div>`
+      : !can ? `<div class="note warn">Seul ${esc(s.signing.grant?.holder || "l'ingénieur habilité")} peut modifier ces règles.</div>` : ""}
+    <section><h2>Objectif de service</h2><div class="panel sets">${["objective", "failing", "p99_ms", "window_s", "late_periods"].map((k) => field(k)).join("")}</div></section>
+    <section><h2>Ce que Standard fait seul en production</h2>${s.configured ? "" : `<div class="note warn">Aucune mise en production n'est confiée à Standard (section [deploy]) : ces règles ne s'appliquent pas encore.</div>`}
+      <div class="panel sets">${toggle("auto_deploy")}${toggle("auto_rollback")}${field("rollback_horizon_min")}${toggle("auto_restart")}${field("restarts_per_hour")}${toggle("compatible_migrations")}</div></section>
+    <section><h2>Par composant <span class="quiet small">vide = la valeur globale ; décocher = montré mais pas compté dans l'objectif signé</span></h2>
+      <div class="tablewrap"><table class="table api comps"><thead><tr><th>Composant</th><th>Dispo. (1 h)</th><th>p99 (1 h)</th><th>Objectif</th><th>p99 max</th><th>Compté</th><th></th></tr></thead>
+      <tbody>${s.components.map(comp).join("") || `<tr><td colspan="7" class="quiet">Aucun composant mesuré</td></tr>`}</tbody></table></div></section>
+    <section><h2>Sondes externes <span class="quiet small">des requêtes envoyées de l'extérieur : un produit qui se dit en bonne santé sans répondre est vu</span></h2>
+      <div class="panel sets">${field("base_url")}
+      ${probes.map(([k, v]) => { const id = k.split("/")[0], a = answers[id];
+        return `<div class="set"><div class="sl"><b class="sha">${esc(v)}</b><span class="small quiet">${a ? `dernière réponse ${a.last || "aucune"}, ${nf(a.errors)} échec(s) sur ${nf(a.count)}` : "pas encore appelée"}</span></div>
+          <div class="sv"><button class="btn danger" data-probe-off="${id}" ${can ? "" : "disabled"}>Retirer</button></div><div class="sp">${pend(k)}</div></div>`; }).join("")}
+      <div class="set"><div class="sl"><b>Ajouter une sonde</b><span class="small quiet">Méthode, chemin, statut attendu.</span></div>
+        <div class="sv"><select id="pm" ${can ? "" : "disabled"}><option>GET</option><option>HEAD</option><option>POST</option></select>
+        <input class="num" id="pp" type="text" value="/health" ${can ? "" : "disabled"}><input class="num sm" id="ps" type="number" value="200" ${can ? "" : "disabled"}>
+        <button class="btn primary" id="padd" ${can ? "" : "disabled"}>Ajouter</button></div><div class="sp"></div></div></div></section>
+    <section><h2>Historique des réglages</h2><div class="rows">${p.history.map((h) => `<div class="rowi"><div class="main"><b>${esc(label(h.setting, h.value))}</b>
+      <div class="facts">${fact(`par ${h.author}`, "")}${fact(ago(h.at), "")}${fact(h.outcome === "applied" ? "appliqué" : h.outcome === "pending" ? `plus souple : en attente ${delay} min` : h.outcome, h.outcome === "applied" ? "ok" : h.outcome === "pending" ? "wait" : "bad")}</div></div></div>`).join("")
+      || `<div class="rowi quiet">Aucun réglage signé : les valeurs par défaut s'appliquent.</div>`}</div></section>
+    <p id="objmsg" class="small quiet"></p>`;
+  const set = async (resource, status, el) => {
+    $("#objmsg").textContent = "Signature dans ce navigateur";
+    try {
+      await signFact(s.signing.domain, Math.max(Date.now(), s.signing.as_of + 1), s.signing.grant, `run:policy/${resource}`, "value", status);
+      $("#objmsg").textContent = "Signé. Le scanner l'applique à son prochain passage.";
+      setTimeout(loadObjectives, 1200);
+    } catch (err) { $("#objmsg").textContent = `Refusé par le noyau : ${err.message}`; if (el) el.disabled = false; }
+  };
+  document.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => {
+    const input = document.querySelector(`[data-set="${b.dataset.save}"]`); b.disabled = true; set(b.dataset.save, input.value.trim(), b); });
+  document.querySelectorAll("[data-toggle]").forEach((c) => c.onchange = () => set(c.dataset.toggle, c.checked ? "on" : "off", c));
+  document.querySelectorAll("[data-savecomp]").forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    for (const key of ["objective", "p99_ms"]) {
+      const input = document.querySelector(`[data-set="${b.dataset.savecomp}/${key}"]`);
+      if (input.value.trim()) await set(`${b.dataset.savecomp}/${key}`, input.value.trim(), b);
+    }
+  });
+  document.querySelectorAll("[data-probe-off]").forEach((b) => b.onclick = () => { b.disabled = true; set(`${b.dataset.probeOff}/spec`, "off", b); });
+  $("#padd")?.addEventListener("click", () => {
+    const id = "p-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8);
+    set(`${id}/spec`, `${$("#pm").value} ${$("#pp").value.trim()} ${$("#ps").value.trim()}`, $("#padd"));
+  });
 }
 
 function activity() {

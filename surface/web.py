@@ -32,7 +32,7 @@ SHA = re.compile(r"[0-9a-f]{40}")
 BRANCH = re.compile(r"([0-9a-f]{40})\trefs/heads/([a-z0-9][a-z0-9_-]{0,63})/(\S+)")
 ROUTES = {"RUN": [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
                   Route("scanner", "RUN", "*", frozenset({"observe", "cover", "prove"}))]}
-HOLDERS = {"reviewer": "h3", "officer": "h2"}           # the demo ceremony's grants to people (tools/ceremony.py)
+HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1"}           # the demo ceremony's grants to people (tools/ceremony.py)
 MAX_BODY = 1 << 20
 
 
@@ -238,20 +238,68 @@ class Installation:
         """The product in production: its APIs and their metrics, and the latest releases."""
         openapi = git(self.repo, "show", "main:openapi.json", check=False)
         from .telemetry import declared_routes
-        report = self.telemetry.report(declared_routes(openapi), window=window)
         findings = _json(self.findings)
+        self.settle(findings)
+        report = self.telemetry.report(declared_routes(openapi), window=window)
         self.frontier(report, findings)
-        return {**report, "product": self.product, "releases": self.history(8), "live": self.live(findings),
-                "openapi": bool(openapi.strip())}
+        return {**report, "product": self.product, "releases": self.history(8),
+                "live": self.live(findings, self.client.view()), "openapi": bool(openapi.strip())}
 
-    def live(self, findings: dict) -> dict:
-        """What production runs, as the scanner signed it, and the switches the guard made (D30)."""
+    def settle(self, findings: dict):
+        """The operator's effective settings (published beside the findings), so that the console judges as T does."""
+        from trusted.policy import Policy
+        published = findings.get("run:policy", {}).get("details")
+        if not published:
+            return None
+        policy = Policy(published["delay_ms"], None, defaults=published["defaults"])
+        policy.effective, policy.pending, policy.history = published["effective"], published["pending"], published["history"]
+        self.telemetry.limits, self.telemetry.late_periods = policy.limits, int(policy.get("late_periods"))
+        self.telemetry.slo = policy.get("objective") / 100
+        return policy
+
+    def settings(self) -> dict:
+        """Everything an engineer may set, its effective value, what is pending, and every component to tune (D31)."""
+        findings, view = _json(self.findings), self.client.view()
+        policy = self.settle(findings)
+        report = self.telemetry.report(window=3600)
+        components = [{k: r.get(k) for k in ("id", "kind", "operation", "name", "state", "availability", "p99",
+                                             "counted")} for rows in report["components"].values() for r in rows
+                      if r.get("id")]
+        return {"policy": policy.published() if policy else None, "components": components,
+                "probes": findings.get("run:probes", {}).get("details", []), "configured": self.deploy_root is not None,
+                "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
+                            "grant": self.grants.get("engineer")}}
+
+    def live(self, findings: dict, view: dict | None = None) -> dict:
+        """What production runs, as the scanner signed it, the switches the guard made (D30), and the decisions an
+        engineer may sign now: deploy main, step back, restart (D31)."""
         lag = findings.get("run:release:all|lag", {})
         history = []
         if self.deploy_root and (self.deploy_root / "history.jsonl").exists():
             history = [json.loads(x) for x in (self.deploy_root / "history.jsonl").read_text().splitlines() if x][-10:]
+        offered = lambda prefix, prop: next((r for r, f in sorted((view or {}).get("transitions", {}).items())
+                                             if r.startswith(prefix) and f.get(prop) == "yes"), None)
+        current = next((h["to"] for h in reversed(history) if h.get("op") != "restart"), None)
+        restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == current]
         return {"configured": self.deploy_root is not None, "lag": lag.get("status"), "details": lag.get("details", []),
-                "slo": findings.get("run:service:all|slo", {}).get("status"), "switches": history[::-1]}
+                "slo": findings.get("run:service:all|slo", {}).get("status"), "switches": history[::-1],
+                "actions": {"deploy": offered("run:release:all/", "candidate"),
+                            "rollback": offered("run:service:all/", "previous"),
+                            "restart": f"run:process:all/{current}/{len(restarts) + 1}" if current else None},
+                "grant": self.grants.get("engineer")}
+
+    def acts(self, findings: dict | None) -> str:
+        """What Standard does alone in production, in the engineers' current settings (D31)."""
+        p = ((findings or {}).get("run:policy") or {}).get("details") or {}
+        get = lambda k: (p.get("effective") or {}).get(f"global/{k}", (p.get("defaults") or {}).get(k))
+        parts = [f"Retour à la version précédente si l'objectif casse dans les {get('rollback_horizon_min') or 30} min "
+                 "qui suivent une mise en production, ou si la nouvelle version ne démarre pas"
+                 if get("auto_rollback") != "off" else "Retour arrière décidé par un ingénieur",
+                 "mise en production de main seul" if get("auto_deploy") != "off" else "mise en production approuvée par un ingénieur",
+                 f"redémarrage sans coupure (au plus {get('restarts_per_hour')} par heure)" if get("auto_restart") == "on"
+                 else "redémarrage décidé par un ingénieur"]
+        return (" ; ".join(parts).capitalize() + ". Jamais à travers une migration non déclarée compatible. Au-delà, ou si "
+                "la cause est hors du code (service externe, machine), une personne.")
 
     FRONTIER = ("see", "alert", "act", "prove")
 
@@ -269,9 +317,7 @@ class Installation:
             "alert": ("Signalé dans l'interface dès qu'il se dégrade ; une personne le prend en charge par une signature. "
                       "Pas encore d'e-mail ni de messagerie.",
                       "Personne n'est prévenu : Standard ne le voit pas en ce moment."),
-            "act": ("Retour automatique à la version précédente si l'objectif casse dans les 30 min qui suivent une mise en "
-                    "production et que la version remplacée l'avait tenu ; mise en production automatique de main. Au-delà, "
-                    "ou si la cause est hors du code (service externe, machine), une personne.",
+            "act": (self.acts(findings), 
                     "Aucune action en production n'est configurée : Standard ne déploie pas, ne revient pas à la version "
                     "précédente, ne redémarre pas et n'ajoute pas de capacité."),
             "prove": ("Son état entre dans le fait signé « run:service:all slo » du journal, vérifiable par un auditeur.",
@@ -363,6 +409,8 @@ def handler(inst: Installation):
                     return self._ok(inst.state())
                 if route == "/api/alerts":
                     return self._ok(inst.alerts())
+                if route == "/api/settings":
+                    return self._ok(inst.settings())
                 if route == "/api/run":
                     query = dict(q.split("=", 1) for q in self.path.partition("?")[2].split("&") if "=" in q)
                     window = int(query.get("window", 3600))

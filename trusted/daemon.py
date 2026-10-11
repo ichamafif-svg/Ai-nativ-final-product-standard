@@ -24,17 +24,19 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from floors import RELEASE
 from kernel import Kernel
+from kernel.floor0 import MIN_DELAY_MS
 
 from .adapters import GitRepository, Readback
 from .boundary import SignedAssessment
 from .data import EMPTY, TrustedData
-from .deploy import OPS as RUN_OPS, Releases
+from .deploy import Releases
 from .gateway import AdmissionGateway
 from .guard import EffectPort
 from .instruments import Instrument, git
 from .journal import Journal, PinStore
 from .operator import MAIN_OPS, Instruments, Prover
 from .release import code_digest
+from .policy import Policy
 from .runtime import Pass, Production
 from .service import TrustedService
 from .signing import Signer, entry
@@ -78,10 +80,14 @@ class Installation:
             self.repo_path = self.proposals = resolve(repo["mirror"])
             self.world = self.repository
         run, deploy = c.get("run", {}), c.get("deploy")
-        self.releases = Releases(self.repo_path, resolve(deploy["root"]), deploy.get("restart"),
-                                 clock=self.clock) if deploy else None
-        ports = {op: self.repository.remediate for op in MAIN_OPS} | (
-            {op: self.releases.switch for op in RUN_OPS} if self.releases else {})
+        self.policy = Policy(MIN_DELAY_MS, self.path.parent / "policy.json", defaults={   # D31: engineers' settings
+            "objective": float(run.get("slo", 99.9)), "base_url": run.get("base_url", "")})
+        production = Production(run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100, policy=self.policy)
+        self.releases = Releases(self.repo_path, resolve(deploy["root"]), deploy.get("restart"), clock=self.clock,
+                                 served=production.served) if deploy else None
+        ports = {op: self.repository.remediate for op in MAIN_OPS} | ({
+            "deploy": self.releases.switch, "rollback": self.releases.switch,
+            "restart": self.releases.request_restart} if self.releases else {})
         data = c.get("data")
         self.data = TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY
         self.service = TrustedService(
@@ -96,9 +102,11 @@ class Installation:
                                        findings=self.path.parent / "findings.json")
         self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
                              releases=self.releases)
-        self.production = Pass(self.service, self.instruments.instrument, Production(
-            run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100), self.repo_path, releases=self.releases,
-            state=self.path.parent / "production.json")
+        engineer = grants.get("engineer")
+        self.production = Pass(self.service, self.instruments.instrument, production, self.repo_path,
+                               releases=self.releases, state=self.path.parent / "production.json", policy=self.policy,
+                               authors=lambda: {g["holder"] for gid, g in self.journal.snapshot()["grants"].items()
+                                                if gid == engineer})
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):

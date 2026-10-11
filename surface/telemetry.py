@@ -134,11 +134,22 @@ class Telemetry:
         return runtime.stats(deltas, seconds, self.slo)
 
     def rules(self) -> dict:
-        return {"slo": self.slo, "failing_error_rate": self.FAILING, "slow_p99_ms": self.SLOW_P99_MS,
-                "late_periods": runtime.LATE_PERIODS}
+        """The global rules in force: the engineers' settings when published, else the defaults."""
+        g = self._limits("api", "", "")
+        return {"slo": g["objective"], "failing_error_rate": g["failing"], "slow_p99_ms": g["p99_ms"],
+                "late_periods": self.late_periods}
 
-    def _state(self, s: dict) -> tuple[str, dict | None]:
-        return runtime.judge(s, self.slo)
+    limits = None          # the engineers' settings (trusted.policy.Policy.limits), when the operator published them
+    late_periods = runtime.LATE_PERIODS
+
+    def _limits(self, kind: str, op: str, name: str) -> dict:
+        if self.limits is None:
+            return {"objective": self.slo, "p99_ms": self.SLOW_P99_MS, "failing": self.FAILING,
+                    "counted": kind != "dependency", "id": None}
+        return self.limits(kind, op, name)
+
+    def _state(self, s: dict, kind: str = "api", op: str = "", name: str = "") -> tuple[str, dict | None]:
+        return runtime.judge(s, self._limits(kind, op, name))
 
     def report(self, declared=(), window: int = 3600, now: float | None = None) -> dict:
         now = int(now if now is not None else time.time())
@@ -163,12 +174,14 @@ class Telemetry:
             by_target = series.get(key, {})
             deltas = [d for samples in by_target.values() for d in self._deltas(samples)]
             times = [s[0] for samples in by_target.values() for s in samples]
-            stats = self._stats(deltas, (max(times) - min(times)) if len(times) > 1 else 0)
+            lim = self._limits(kind, op, name)
+            stats = runtime.stats(deltas, (max(times) - min(times)) if len(times) > 1 else 0, lim["objective"])
             spark = [0.0] * 30
             for at, n, _, _ in deltas:
                 spark[min(29, max(0, int((at - since) / step)))] += n / step
-            state, why = self._state(stats)
+            state, why = self._state(stats, kind, op, name)
             row = {"kind": kind, "operation": op, "name": name, "declared": key in declared, "observed": key in series,
+                   "id": lim["id"], "counted": lim["counted"], "objective": lim["objective"], "p99_limit": lim["p99_ms"],
                    "state": state, "why": why, "spark": [round(x, 3) for x in spark], **stats}
             if kind == "worker":
                 row["backlog"] = latest.get(("worker", name, "backlog"))
@@ -185,9 +198,11 @@ class Telemetry:
         for name in sorted({n for (k, n, _) in latest if k == "job"}):
             get = lambda f: latest.get(("job", name, f))
             last, period, ok = get("last_success"), get("period"), get("ok")
-            state, why = runtime.judge_job(last, period, ok, now)
+            state, why = runtime.judge_job(last, period, ok, now, self.late_periods)
+            lim = self._limits("job", "", name)
             components["job"].append({"kind": "job", "name": name, "last_success": last, "duration": get("duration"),
-                                      "period": period, "ok": ok, "why": why, "state": state})
+                                      "period": period, "ok": ok, "why": why, "state": state, "id": lim["id"],
+                                      "counted": lim["counted"]})
         for name in sorted({n for (k, n, _) in latest if k == "process"}):
             cpu = history.get(("process", name, "cpu_seconds"), [])
             usage = None

@@ -292,3 +292,27 @@ input[type=text] { width: 100%; max-width: 360px; padding: 9px 12px; border-radi
 .alarm-bar span { flex: 1; } .alarm-bar em { font-style: normal; font-weight: 600; }
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .alarm-bar i { animation: none; } }
+
+/* settings (D31) */
+.sets { padding: 4px 26px; }
+.set { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(260px, 1fr); gap: 4px 24px; align-items: center;
+  padding: 16px 0; border-top: 1px solid var(--hair); }
+.set:first-child { border-top: 0; }
+.set .sl { display: flex; flex-direction: column; gap: 3px; }
+.set .sv { display: flex; align-items: center; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+.set .sp { grid-column: 1 / -1; } .set .sp:empty { display: none; }
+input.num, select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--hair-2); background: var(--surface); color: var(--ink);
+  font: inherit; font-variant-numeric: tabular-nums; width: 140px; }
+input.num[type=text] { width: 220px; } input.num.sm { width: 84px; }
+.unit { font-size: 13px; color: var(--ink-2); min-width: 64px; }
+.switch { position: relative; display: inline-block; width: 42px; height: 24px; margin: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 12px; background: var(--hair-2); transition: background .15s; cursor: pointer; }
+.switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.switch input:checked + span { background: var(--held); } .switch input:checked + span::after { transform: translateX(18px); }
+.switch input:disabled + span { opacity: .5; cursor: not-allowed; }
+.decide { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 16px 20px; border-top: 1px solid var(--hair); }
+@media (max-width: 700px) { .set { grid-template-columns: 1fr; } .set .sv { justify-content: flex-start; } }
+.table.comps { table-layout: auto; } .table.comps td { white-space: nowrap; } .table.comps td:first-child { white-space: normal; }
+.tablewrap { overflow-x: auto; }

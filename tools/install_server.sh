@@ -81,7 +81,7 @@ EOF
   DATA=(); [ -s /srv/standard/data.json ] && DATA=(--data /srv/standard/data.json)
   "$PY" tools/ceremony.py init "$INSTALL" --repo "$HOSTING/repos/app.git" --inbox "$HOSTING/inbox/app.git" \
         --pins "$PINS" "${DATA[@]}"
-  printf '\n[run]\nmetrics = ["http://127.0.0.1:9000/metrics"]\nslo = 99.9\n' >> "$INSTALL/standard.toml"
+  printf '\n[run]\nmetrics = ["http://127.0.0.1:9000/metrics"]\nslo = 99.9\nbase_url = "http://127.0.0.1:9000"\n' >> "$INSTALL/standard.toml"
   # D30: the guard switches the live release (deploy, rollback); the product's user only reads it.
   printf '\n[deploy]\nroot = "/srv/standard/deploy"\n' >> "$INSTALL/standard.toml"
   printf '\n[tests]\ninstall = true\n\n[hosting]\nconfig = "%s"\ngate_user = "standard-gate"\n' \
@@ -147,7 +147,8 @@ phase2() {
   # DEMO: the demo product's API and steady traffic, so that Run shows real metrics.
   id standard-demo >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-demo
   install -d -o standard-guard -g standard-guard -m 0755 /srv/standard/deploy
-  unit standard-demo-service standard-demo "$CODE/tools/run_release.py /srv/standard/deploy/current 9000"
+  install -d -o standard-demo -g standard-demo -m 0750 /srv/standard/data      # the product's data, not the guard's
+  unit standard-demo-service standard-demo "$CODE/tools/run_release.py /srv/standard/deploy/current 9000 --data /srv/standard/data"
   unit standard-demo-load standard-demo "$CODE/tools/demo_load.py http://127.0.0.1:9000 20"
   systemctl daemon-reload
   systemctl enable --now standard-operator

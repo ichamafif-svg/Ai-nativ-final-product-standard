@@ -99,6 +99,10 @@ class Server(unittest.TestCase):
             self.assertTrue(all(r["no"] for r in run["frontier_reasons"].values()))   # every "no" says why
             self.assertEqual(run["frontier_total"]["act"], 0)                        # nothing acts in production
             self.assertFalse(run["live"]["configured"])                               # no [deploy]: said, not hidden
+            settings = json.loads(urllib.request.urlopen(f"{url}/api/settings").read())    # D31: what engineers set
+            self.assertEqual(settings["policy"]["defaults"]["objective"], 99.9)
+            self.assertEqual(settings["signing"]["grant"]["holder"], "h1")
+            self.assertIn("auto_rollback", settings["policy"]["defaults"])
 
             # Prévenir: a silent source opens an alert; a person takes it by a signature the kernel admits.
             inst.telemetry.targets, inst.telemetry.fetch = ["http://product/metrics"], lambda u: (_ for _ in ()).throw(OSError("down"))

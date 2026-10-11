@@ -46,6 +46,12 @@ GRANTS = {
     "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*", "run:*"], []),
     "agent_deploy": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-autonomous"]),
     "agent_rollback": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-autonomous"]),
+    "agent_deploy_reviewed": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-reviewed"]),
+    "agent_rollback_reviewed": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-reviewed"]),
+    "agent_restart": ("agent", ["effect:restart"], ["run:process:*"], ["restart-autonomous"]),
+    "agent_restart_reviewed": ("agent", ["effect:restart"], ["run:process:*"], ["restart-reviewed"]),
+    # D31: the engineer sets production's objectives and limits, and decides switches Standard does not take alone.
+    "engineer": ("h1", ["observe", "certify:real"], ["run:policy/*", "run:release:*", "run:service:*", "run:process:*"], []),
     "agent_recipe": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-autonomous"]),
     "agent_review": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"]),
     "agent_integrate": ("agent", ["effect:integrate"], ["repo:contrib:*"], ["integrate-reviewed"]),

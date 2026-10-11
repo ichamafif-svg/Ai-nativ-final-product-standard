@@ -85,6 +85,9 @@ FLOORS = {
         # Switch production back from `from` to `to`, the release it replaced, repairing run:service:all.
         "rollback": {"args": {"from": "segment", "to": "segment"}, "resource": "run:service:all/{from}/{to}",
                      "profile": "capability"},
+        # Start the live release again (D31): the n-th restart of this release, so each one is judged once.
+        "restart": {"args": {"release": "segment", "n": "segment"}, "resource": "run:process:all/{release}/{n}",
+                    "profile": "capability"},
     },
     "conditions": {
         "remediate-autonomous": {"all": [{"observed": ["tests", "green", "real"]},
@@ -100,6 +103,14 @@ FLOORS = {
         "deploy-autonomous": {"all": [{"observed": ["deployable", "yes", "real"]}]},
         # The objective broke right after this release went live, and the one it replaced met it.
         "rollback-autonomous": {"all": [{"observed": ["regressed", "yes", "real"]}]},
+        # The same switches when the engineers keep them for themselves (D31): the scanner's fact that the switch is
+        # possible, and an engineer's signed decision on that exact switch.
+        "deploy-reviewed": {"all": [{"observed": ["candidate", "yes", "real"]},
+                                    {"observed": ["approved", "yes", "real"]}]},
+        "rollback-reviewed": {"all": [{"observed": ["previous", "yes", "real"]},
+                                      {"observed": ["requested", "yes", "real"]}]},
+        "restart-autonomous": {"all": [{"observed": ["restartable", "yes", "real"]}]},
+        "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
     },
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.
     "targets": [

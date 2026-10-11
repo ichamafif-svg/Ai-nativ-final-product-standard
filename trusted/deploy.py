@@ -1,4 +1,4 @@
-"""T07/T08 — the release adapter for `deploy` and `rollback` (D30): which commit of main runs in production.
+"""T07/T08 — the release adapter for `deploy`, `rollback` and `restart` (D30, D31): which commit of main runs.
 
 The live release is a symbolic link `current -> releases/<commit>` in a directory the guard owns. Both operations are
 the same compare-and-swap: switch `current` from exactly `from` to `to` (the commit exported from the canonical
@@ -7,7 +7,11 @@ repository, never from the agent's store), by an atomic rename of a new link ove
 through the configured restart command; a restart that fails leaves the effect `unknown`, for the readback to settle.
 
 Every switch is appended to history.jsonl: the instrument reads it to know which release came before, and which were
-rolled back (those are never offered again: no deploy/rollback loop).
+rolled back (those are never offered again: no deploy/rollback loop). A rollback only goes to a release that was live
+before; a restart asks the product's runner, through a file it watches, to start the same release again.
+
+Applied (T08) means production *serves* the release, not only that the link points to it: when the product exposes
+`build_info{version}`, the readback compares it, and a restart is applied once the process started after the request.
 """
 from __future__ import annotations
 
@@ -22,13 +26,14 @@ import time
 from pathlib import Path
 
 SHA = re.compile(r"[0-9a-f]{40}")
-OPS = ("deploy", "rollback")
+OPS = ("deploy", "rollback", "restart")
 
 
 class Releases:
-    def __init__(self, repo, root, restart=None, branch: str = "main", clock=None):
+    def __init__(self, repo, root, restart=None, branch: str = "main", clock=None, served=None):
         self.repo, self.root, self.restart, self.branch = Path(repo), Path(root), restart, branch
         self.clock = clock or (lambda: int(time.time() * 1000))
+        self.served = served or (lambda: {"version": None, "started": None})   # what answers, from the metrics
         self.link, self.dir, self.log = self.root / "current", self.root / "releases", self.root / "history.jsonl"
 
     def current(self) -> str | None:
@@ -65,6 +70,8 @@ class Releases:
         if not SHA.fullmatch(to) or not (frm == "none" or SHA.fullmatch(frm)):
             return "failed"                                  # nothing sent: the arguments cannot name commits
         op = "rollback" if resource.startswith("run:service:") else "deploy"
+        if op == "rollback" and to not in {h["to"] for h in self.history()}:
+            return "failed"                                  # only back to a release that was live before
         if op == "deploy" and subprocess.run(
                 ["git", "-C", str(self.repo), "merge-base", "--is-ancestor", to, f"refs/heads/{self.branch}"],
                 capture_output=True, timeout=120).returncode != 0:
@@ -99,5 +106,30 @@ class Releases:
                 return "unknown"                             # switched, but did the product restart? readback says
         return "ok"
 
-    def applied(self, to: str) -> bool:
-        return self.current() == to
+    def request_restart(self, resource: str, args: dict, reservation_key: str) -> str:
+        """restart (run:process:all/{release}/{n}): only the live release, through the runner's request file."""
+        release = args["release"]
+        if not SHA.fullmatch(release) or not re.fullmatch(r"[0-9]{1,6}", args["n"]):
+            return "failed"
+        with open(self.root / ".lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self.current() != release:
+                return "failed"                              # production moved: restarting it is not what was judged
+            tmp = self.root / f".restart-{reservation_key}"
+            tmp.write_text(f"{release} {args['n']} {reservation_key}\n")
+            tmp.chmod(0o644)
+            os.replace(tmp, self.root / "restart")
+            with open(self.log, "a") as f:
+                f.write(json.dumps({"at": self.clock(), "op": "restart", "from": release, "to": release,
+                                    "n": args["n"]}) + "\n")
+        return "ok"
+
+    def applied(self, it: dict) -> bool:
+        served = self.served()
+        if it["op"] == "restart":
+            asked = next((h["at"] for h in self.history() if h.get("op") == "restart" and h.get("n") == it["args"]["n"]
+                          and h.get("to") == it["args"]["release"]), None)
+            return (asked is not None and served["started"] is not None and served["started"] * 1000 >= asked
+                    and served["version"] in (None, it["args"]["release"]))
+        to = it["args"]["to"]
+        return self.current() == to and served["version"] in (None, to)
