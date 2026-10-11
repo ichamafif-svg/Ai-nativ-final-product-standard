@@ -5,7 +5,8 @@
   is not exactly the base, nothing moves. A response with errors is a definitive refusal; a lost response is unknown.
   `push_from=<mirror>` (where GraphQL is unreachable) does the same CAS over git: `push --force-with-lease=main:base`
   sends base as the expected old value and the server refuses the update if main is anything else.
-- applied (T08 readback): the compare API says whether main contains the head. Absence is never `not_applied`.
+- read (T08, D38 RESOLVE): the compare API says whether main contains the head. A request to a remote provider may
+  still land after a lost answer: absence is never `not_applied` (D09).
 - protections (instrument of the `branch` target): the rules GitHub enforces on main.
 
 The token is the guard's alone, held in the operator process. Proposed heads must already be in the repository
@@ -38,6 +39,8 @@ def http(method: str, url: str, token: str, body=None) -> tuple[int, dict]:
 
 
 class GitHub:
+    profile = "cas"
+
     def __init__(self, repository: str, token: str, *, api: str = "https://api.github.com", transport=http,
                  push_from=None):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -85,6 +88,15 @@ class GitHub:
     def applied(self, head: str) -> bool:
         status, body = self.http("GET", f"{self.api}/repos/{self.repository}/compare/{head}...main", self.token)
         return status == 200 and body.get("status") in ("identical", "ahead")
+
+    def perform(self, resource: str, args: dict, reservation_key: str) -> str:
+        return self.remediate(resource, args, reservation_key)
+
+    def read(self, it: dict, key: str) -> str | None:
+        return "applied" if self.applied(it["args"]["head"]) else None
+
+    def satisfied(self, it: dict) -> bool:
+        return self.applied(it["args"]["head"])
 
     def protections(self) -> set:
         status, body = self.http("GET", f"{self.api}/repos/{self.repository}/rules/branches/main", self.token)

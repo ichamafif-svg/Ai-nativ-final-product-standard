@@ -332,20 +332,25 @@ class Switch(unittest.TestCase):
         self.assertEqual(r.switch(f"run:service:all/{main}/{A}", {"from": main, "to": A}, "k5"), "failed")  # never live
         self.assertEqual([h["to"] for h in r.history()], [main])
 
-    def test_applied_means_served_and_a_restart_means_a_new_process(self):
+    def test_resolve_reads_the_registers_and_the_purpose_is_the_served_version(self):
         r, main = self.releases, self.main
-        r.switch(f"run:release:all/none/{main}", {"from": "none", "to": main}, "k")
+        effects = r.effects()
+        self.assertEqual((effects["deploy"].profile, effects["restart"].profile), ("cas", "observable"))
         deploy = {"op": "deploy", "args": {"from": "none", "to": main}}
+        self.assertEqual(effects["deploy"].read(deploy, "k"), "not_applied")          # the key never moved anything
+        r.switch(f"run:release:all/none/{main}", deploy["args"], "k")
+        self.assertEqual(effects["deploy"].read(deploy, "k"), "applied")              # the register moved
         self.served = {"version": A, "started": 1}
-        self.assertFalse(r.applied(deploy))                                            # the register moved, not the code
+        self.assertFalse(effects["deploy"].satisfied(deploy))                          # but the product serves A
         self.served = {"version": main, "started": 1}
-        self.assertTrue(r.applied(deploy))
+        self.assertTrue(effects["deploy"].satisfied(deploy))
         restart = {"op": "restart", "args": {"release": main, "n": "1"}}
+        self.assertEqual(effects["restart"].read(restart, "k6"), "not_sent")
         self.assertEqual(r.request_restart(f"run:process:all/{main}/1", restart["args"], "k6"), "ok")
         self.assertIn(main, r.get("restart"))
-        self.assertFalse(r.applied(restart))                                           # same process
+        self.assertIsNone(effects["restart"].read(restart, "k6"))                      # asked; same process: unknown
         self.served = {"version": main, "started": 10 ** 10}
-        self.assertTrue(r.applied(restart))
+        self.assertEqual(effects["restart"].read(restart, "k6"), "applied")
         self.assertEqual(r.request_restart("x", {"release": A, "n": "2"}, "k7"), "failed")   # not the live release
 
 
@@ -458,7 +463,9 @@ class Production(unittest.TestCase):
                 jobs[result["job"]] = jobs.get(result["job"], 0) + 1
             self.assertIn("production", jobs)
             host = replay.host_for(config)                                    # a record whose answer was forged
-            rec = json.loads(host.evidence.get(next(r for r in recorded if "production" in host.evidence.get(r).decode())))
+            bt = json.loads(host.evidence.get(next(r for r in recorded if b'"production"' in host.evidence.get(r))))
+            self.assertEqual((bt["bt"], bt["contract"]["form"]), ("observe", "composite"))   # D38: what it rests on
+            rec = json.loads(host.evidence.get(bt["material"]["run"]))
             rec["output"]["facts"] = [[r, p, "met" if p == "slo" else s, d] for r, p, s, d in rec["output"]["facts"]]
             rec["output"]["facts"].append([f"run:release:all/{m0}/{m1}", "candidate", "yes", []])   # stepped back from
             forged = host.evidence.put(json.dumps(rec, sort_keys=True).encode())

@@ -13,8 +13,9 @@ from pathlib import Path
 from fixture import Ledger, client_law
 
 from autonomy import Agent, Cycle, Route, WorkEngine
-from trusted import EffectPort, Journal, PinStore, Signer, TrustedService
-from trusted.adapters import GitRepository, Readback
+from trusted import Journal, PinStore, Signer, TrustedService
+from trusted.adapters import GitRepository
+from trusted.transactions import Boundary, ledger_of
 from instruments.data import TrustedData
 from trusted.host import Evidence, Host
 from trusted.operator import Instrument, Instruments, Prover
@@ -98,16 +99,20 @@ class Stand(unittest.TestCase):
         self.data = self.DATA(self.t) if self.DATA else TrustedData({"format": "standard-data/1", "taken_at": self.t})
         signer = lambda ident: Signer(ident, L.keys.private[ident][1])
         git_repo = GitRepository(self.repo, self.store)
-        self.service = TrustedService(
-            self.journal, boundary=Verified(), clock=clock, guard_signer=signer("guard"),
-            effect_port=EffectPort({"remediate": git_repo.remediate}),
-            reconciliation=Readback(git_repo, signer("oracle"), self.oracle_cap, clock))
         self.world = type("World", (), {"protections": lambda _: set()})()
         self.host = host_for(root, self.repo, self.data, self.world, clock=clock)
+        from floors import CONTRACTS, PROGRAMS
+        self.boundary = Boundary(self.host.evidence, root / "transactions.jsonl", CONTRACTS, PROGRAMS, clock,
+                                 ledger=lambda: ledger_of(self.journal))
+        effects = {"remediate": git_repo}
+        resolve = self.boundary.resolver(effects, signer("oracle"), self.oracle_cap)
+        self.service = TrustedService(
+            self.journal, boundary=Verified(), clock=clock, guard_signer=signer("guard"),
+            effect_port=self.boundary.port(effects), reconciliation=resolve)
         self.instruments = Instruments(self.service, Instrument(signer("scanner"), self.scanner_cap, clock),
-                                       self.host, self.repo, self.store)
+                                       self.host, self.boundary, self.repo, self.store)
         self.signer = signer
-        self.prover = Prover(self.service, git_repo, signer("oracle"), self.oracle_cap, clock)
+        self.prover = Prover(self.service, resolve, signer("oracle"), self.oracle_cap, clock)
         routes = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
                   Route("scanner", "RUN", "repo:*", frozenset({"observe", "cover", "prove"}))]
         self.cycle = Cycle(self.service, WorkEngine(root / "work.db"), Agent(signer("agent"), {"recipe": self.agent_cap, "review": self.review_cap},

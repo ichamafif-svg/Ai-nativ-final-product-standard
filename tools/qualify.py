@@ -79,6 +79,23 @@ def qualify(config_path) -> list:
     out.append(probe("T06 measures replay from their records", bool(results) and not bad, observed,
                      "the latest signed measures are what the pinned programs compute from what was recorded",
                      "that the recorded inputs are what the world was (a source's word, the host's fetch)"))
+    if sep:                                                 # D38 (E): count privileges, not only lines
+        import grp
+        guard = sep["guard_user"]
+        members = sorted(grp.getgrnam(guard).gr_mem)
+        expected = {sep.get("agent_user", "standard-agent"), "standard-web", "standard-gate"}
+        sudo = []
+        for f in [Path("/etc/sudoers"), *sorted(Path("/etc/sudoers.d").glob("*"))]:
+            try:
+                sudo += [f"{f.name}: {line.strip()}" for line in f.read_text().splitlines()
+                         if "standard" in line and not line.lstrip().startswith("#")]
+            except OSError:
+                pass
+        extra = [m for m in members if m not in expected]
+        out.append(probe("privileges around the guard", not extra,
+                         {"group " + guard: members, "beyond agent, web, gate": extra, "sudo": sudo},
+                         "who can read the guard's files and join its socket, and every sudo rule naming Standard",
+                         "privileges granted outside this host's groups and sudoers (cloud IAM, CI secrets)"))
     out.append(probe("T01 code release", c.get("demo") is not True,
                      f"running code {code_digest()}",
                      "the source files on disk hash to this release",

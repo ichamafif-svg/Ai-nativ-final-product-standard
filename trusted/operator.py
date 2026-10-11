@@ -3,11 +3,12 @@
 They run in the operator process with their own identities and keys, never an agent's. Each pass admits signed
 statements through the same journal and service as anyone else: nothing here bypasses the kernel.
 
-D37: this pass knows no measure. It gathers what exists (main, proposals, the inbox, the ledger's extract, the
-release registers), lets the pinned `plan` program say what to measure with which inputs, runs every job through the
-host, and signs what the jobs return: a property the floors pin to an instrument as a measurement whose method is the
-programs' digest and whose artifact is the run record; any other as an observation. A fact is signed again only when
-it changed or ages past a third of its freshness.
+D37, D38: this pass knows no measure. It records what the declared sources return (a capture transaction), gathers
+what exists (main, proposals, the inbox, the ledger's extract, the release registers), lets the pinned `plan` program
+say what to measure with which inputs, and runs every job as an OBSERVE boundary transaction: only what the job's
+contract lets it say is signed, a property the floors pin as a measurement whose method names the contract and whose
+artifact is the transaction; any other as an observation. A fact is signed again only when it changed or ages past
+a third of its freshness. The proof of application reads the purpose of each effect through RESOLVE.
 """
 from __future__ import annotations
 
@@ -16,7 +17,6 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from .adapters import applied
 from .host import Host
 from .signing import Signer, envelope
 
@@ -56,10 +56,11 @@ class Instrument:
 class Instruments:
     """T06 pass: plan, measure through the host, sign."""
 
-    def __init__(self, service, instrument: Instrument, host: Host, repo, proposals, *, anchor: str | None = None,
-                 inbox=None, findings=None, install: bool = False, holders=lambda: {}, sources=None,
-                 production: bool = False, registers=None):
+    def __init__(self, service, instrument: Instrument, host: Host, boundary, repo, proposals, *,
+                 anchor: str | None = None, inbox=None, findings=None, install: bool = False, holders=lambda: {},
+                 sources=None, production: bool = False, registers=None):
         self.service, self.instrument, self.host, self.repo = service, instrument, host, Path(repo)
+        self.boundary = boundary
         self.proposals, self.inbox, self.findings_path, self.install = proposals, inbox, findings, install
         self.holders, self.sources, self.production, self.registers = holders, sources or {}, production, registers
         clock = instrument.clock                          # statements never fall behind the ledger's last instant
@@ -105,19 +106,22 @@ class Instruments:
         return self.instrument.clock() - before[1] > fresh // 3
 
     def measure(self) -> dict:
-        self.host.observe(self.sources, self.fetch)
+        me = self.instrument.signer.identity
+        self.boundary.capture(me, self.host.observe(self.sources, self.fetch))
         view = self.service.view()
         domain, law = view["prefix"]["genesis"], view["law"]["effective"]
-        plan, _ = self.host.call("plan", {"subjects": {"value": self.subjects()}}, cache=False)
+        plan = self.boundary.observe(self.host, me, "plan", {"subjects": {"value": self.subjects()}}, cache=False)
         if "error" in plan:
             raise RuntimeError(f"plan: {plan['error']}")
-        admitted, errors = 0, {}
+        admitted, errors, refused = 0, {}, []
         for job in plan["jobs"]:
             live = job["job"] == "production"
-            out, record = self.host.call(job["job"], job["inputs"], network=job.get("network", False), cache=not live)
+            out = self.boundary.observe(self.host, me, job["job"], job["inputs"], network=job.get("network", False),
+                                        cache=not live)
             if "error" in out:
                 errors[job["job"]] = out["error"]
                 continue
+            refused += [f"{job['job']}: {r} {p} {st}" for r, p, st, _ in out["refused"]]
             if live:
                 extra = out["extra"]
                 self.served, self.fetch, self.canary_percent = extra["served"], extra["fetch"], extra["canary_percent"]
@@ -129,12 +133,14 @@ class Instruments:
             for resource, prop, status, details in out["facts"]:
                 self.instrument.findings[f"{resource}|{prop}"] = {"status": status, "details": details}
                 if self._due(law, resource, prop, status):
-                    self.service.admit(self.instrument.observation(domain, resource, prop, status, record,
-                                                                   self.host.method))
+                    self.service.admit(self.instrument.observation(domain, resource, prop, status, out["ref"],
+                                                                   out["method"]))
                     self.signed[(resource, prop)] = (status, self.instrument.clock())
                     admitted += 1
+        self.instrument.findings["boundary:refused"] = {"status": str(len(refused)), "details": refused[-50:]}
         self.publish()
-        return {"admitted": admitted, "jobs": len(plan["jobs"]), **({"errors": errors} if errors else {})}
+        return {"admitted": admitted, "jobs": len(plan["jobs"]), **({"errors": errors} if errors else {}),
+                **({"refused": len(refused)} if refused else {})}
 
     def publish(self) -> None:
         """Findings for whoever repairs (agent, human), readable by the agent's group. Information, never a fact."""
@@ -147,13 +153,11 @@ class Instruments:
 
 
 class Prover:
-    """Proof of application: an independent oracle attests that an applied intent's head is on main, or that
-    production runs the release it switched to."""
+    """Proof of application: an independent oracle attests that the purpose of an applied effect holds, as RESOLVE
+    reads it (main contains the head, production serves the release, a new process runs)."""
 
-    def __init__(self, service, repository, signer: Signer, capability: str, clock, releases=None):
-        self.service, self.repository, self.signer, self.capability, self.clock = (
-            service, repository, signer, capability, clock)
-        self.releases = releases
+    def __init__(self, service, resolve, signer: Signer, capability: str, clock):
+        self.service, self.resolve, self.signer, self.capability, self.clock = service, resolve, signer, capability, clock
 
     def prove_due(self) -> dict:
         state = self.service.journal.snapshot()
@@ -162,7 +166,7 @@ class Prover:
             if ob["stage"] != "proof":
                 continue
             it = state["intents"][ob["intent"]]
-            if not applied(it, self.repository, self.releases):
+            if not self.resolve.satisfied(it):
                 continue
             body = {"id": f"proof-{uuid.uuid4().hex}", "at": max(self.clock(), state["last_at"] + 1),
                     "author": self.signer.identity, "under": self.capability, "resource": it["resource"],

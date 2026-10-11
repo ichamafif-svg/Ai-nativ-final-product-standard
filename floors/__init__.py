@@ -59,9 +59,16 @@ ORGANISATIONAL = (
 # D33: the facts that open a right are measurements of a pinned instrument. The kernel admits them only from the
 # scanner, with this method and coverage, fresh; anyone else (a reviewer, an engineer) cannot sign them, so a person
 # cannot replace a measure by an opinion. People sign their own facts: review, approved, requested, ack.
-# D37: the method of every pinned property is the digest of the programs package (instruments/), which computes it
-# from recorded inputs; changing a program changes the release, and anyone can replay a measure from its record.
-# property -> (method, coverage, fresh)
+# D37: the instruments are the programs package (instruments/), pinned by its digest and replayable.
+# D38: every exchange with the outside world is a boundary transaction under a contract. An observation contract
+# names the jobs that compute it, what they may say (properties, resource prefixes) and how it is justified:
+#   reproducible  a pinned program on inputs identified by digest: anyone can compute it again
+#   attested      a source's word, signed or relayed, within stated limits (a provider's settings, a data snapshot)
+#   composite     a reproducible computation over attested material: as good as the weakest source it names
+# The method of a pinned property is `programs@<digest>/<contract>`: the kernel admits `tests` only from the suite
+# contract, so a compromised production program cannot sign it. An effect contract names the physical profile of
+# each operation: `cas` (a compare-and-swap on the very state: applied or not, decided by reading it back),
+# `observable` (a request whose effect a later observation establishes; never established absent by silence).
 
 
 def _programs() -> str:
@@ -72,14 +79,34 @@ def _programs() -> str:
 
 
 PROGRAMS = _programs()
-INSTRUMENTS = {
-    **{p: (PROGRAMS, "repo:inventory:all", DAY) for p in (
-        "tests", "regressions", "reproduced", "acceptance", "contract", "configured", "accepted")},
-    **{p: (PROGRAMS, "run:sources:all", 15 * MINUTE) for p in (
-        "candidate", "previous", "proven", "live", "running", "good",    # D36: what is, on an exact switch
-        "burn_fast", "failing_pct", "switched_min", "unanswered_s", "restarts_last_hour", "migrations_crossed",
-        "budget_pct", "canary_error_delta", "canary_requests", "canary_baked_min", "canary_p99_ms", "live_p99_ms",
-        "canary_error_pct", "live_error_pct", "live_requests")},
+RUN = ("candidate", "previous", "proven", "live", "running", "good",       # D36: what is, on an exact switch
+       "burn_fast", "failing_pct", "switched_min", "unanswered_s", "restarts_last_hour", "migrations_crossed",
+       "budget_pct", "canary_error_delta", "canary_requests", "canary_baked_min", "canary_p99_ms", "live_p99_ms",
+       "canary_error_pct", "live_error_pct", "live_requests")
+CONTRACTS = {
+    "observe": {
+        "floors": {"form": "composite", "jobs": ["floors"], "resources": ["repo:"],
+                   "properties": ["coverage", *sorted({t[2] for t in TECHNICAL + SETTINGS})],
+                   "attested": ["the pinned third-party data snapshot (D17)", "the provider's settings of main"]},
+        "suite": {"form": "reproducible", "jobs": ["remediation", "configure", "feature", "contribution"],
+                  "resources": ["repo:"],
+                  "properties": ["tests", "regressions", "reproduced", "acceptance", "configured"], "attested": []},
+        "request": {"form": "reproducible", "jobs": ["request"], "resources": ["build:request/"],
+                    "properties": ["contract", "accepted"], "attested": []},
+        "production": {"form": "composite", "jobs": ["production"], "resources": ["run:"],
+                       "properties": ["coverage", "slo", "lag", *RUN],
+                       "attested": ["the product's own metrics", "the runner's per-release measures",
+                                    "the probes' answers, as the host received them"]},
+        "capture": {"form": "attested", "jobs": [], "resources": [], "properties": [],
+                    "attested": ["the bytes each declared source returned to the host, at that time"]},
+    },
+    "effect": {"remediate": "cas", "integrate": "cas", "implement": "cas", "configure": "cas",
+               "deploy": "cas", "rollback": "cas", "canary": "cas", "abort": "cas", "restart": "observable"},
+}
+INSTRUMENTS = {   # property -> (method, coverage, fresh)
+    **{p: (f"{PROGRAMS}/suite", "repo:inventory:all", DAY) for p in CONTRACTS["observe"]["suite"]["properties"]},
+    **{p: (f"{PROGRAMS}/request", "repo:inventory:all", DAY) for p in CONTRACTS["observe"]["request"]["properties"]},
+    **{p: (f"{PROGRAMS}/production", "run:sources:all", 15 * MINUTE) for p in RUN},
 }
 
 

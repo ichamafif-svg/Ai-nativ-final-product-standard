@@ -6,17 +6,16 @@ primitive that guarantees the precondition atomically (§8.6, D05). Otherwise th
 - GitRepository: a repository on the guard's host. `git update-ref refs/heads/main HEAD BASE` is an atomic
   compare-and-swap: it moves main only if main is still exactly BASE. The head is fetched from the proposals store
   first; the agent never writes to the maintained repository.
-- readback (T08): `applied` when main contains head (or production runs `to`, D30); never `not_applied` by
-  absence (D09).
+- read (T08, D38 RESOLVE): `applied` when main contains head. `update-ref` runs to completion inside the adapter, and
+  main only moves forward by the guard's own compare-and-swap: once the adapter returned, a head main does not contain
+  was never written and no request can still land, so `not_applied` is established, for this reservation (D09).
 """
 from __future__ import annotations
 
 import re
 import subprocess
-import uuid
 from pathlib import Path
 
-from .signing import Signer, envelope
 
 SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -26,6 +25,8 @@ def _git(repo, *args) -> subprocess.CompletedProcess:
 
 
 class GitRepository:
+    profile = "cas"
+
     def __init__(self, repo, proposals, branch: str = "main"):
         self.repo, self.proposals, self.branch = Path(repo), str(proposals), branch
 
@@ -45,27 +46,13 @@ class GitRepository:
         current = _git(self.repo, "rev-parse", f"refs/heads/{self.branch}").stdout.strip()
         return "ok" if current == head else "failed"        # the compare-and-swap refused: main was not base
 
+    perform = remediate
+
     def applied(self, head: str) -> bool:
         return _git(self.repo, "merge-base", "--is-ancestor", head, f"refs/heads/{self.branch}").returncode == 0
 
+    def read(self, it: dict, key: str) -> str:
+        return "applied" if self.applied(it["args"]["head"]) else "not_applied"
 
-def applied(it: dict, repository, releases=None) -> bool:
-    """main contains the head (remediate, integrate), or production serves `to` or restarted (D31)."""
-    if it["op"] in ("remediate", "integrate", "implement", "configure"):
-        return repository.applied(it["args"]["head"])
-    return it["op"] in ("deploy", "rollback", "restart") and releases is not None and releases.applied(it)
-
-
-class Readback:
-    """T08: an independent reader of the provider, signing reconciliations under its own capability."""
-
-    def __init__(self, repository: GitRepository, signer: Signer, capability: str, clock, releases=None):
-        self.repository, self.signer, self.capability, self.clock = repository, signer, capability, clock
-        self.releases = releases
-
-    def readback(self, intent_id: str, state: dict):
-        if not applied(state["intents"][intent_id], self.repository, self.releases):
-            return None                                      # unknown stays unknown
-        body = {"id": f"rec-{uuid.uuid4().hex}", "at": max(self.clock(), state["last_at"] + 1),
-                "author": self.signer.identity, "under": self.capability, "intent": intent_id, "result": "applied"}
-        return envelope(state["domain"], "reconciliation", body, [self.signer])
+    def satisfied(self, it: dict) -> bool:
+        return self.applied(it["args"]["head"])

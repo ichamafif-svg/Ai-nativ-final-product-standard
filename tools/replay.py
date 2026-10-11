@@ -2,8 +2,8 @@
 
     python tools/replay.py standard.toml [--limit N] [RECORD ...]
 
-A measurement in the ledger names its method (`programs@<digest>`: the pinned programs, instruments/) and its
-artifact (the run record: job, inputs by digest, answer). This tool opens the ledger read-only, takes the records the
+A measurement in the ledger names its method (`programs@<digest>/<contract>`: the pinned programs, instruments/) and
+its artifact (the OBSERVE boundary transaction, D38, which names the run record: job, inputs by digest, answer). This tool opens the ledger read-only, takes the records the
 latest measurements name (or the ones given), runs each job again with the same programs on the same recorded inputs,
 in its own isolated runner, and compares the facts. It holds no key and signs nothing: anyone with a copy of the
 ledger, the evidence store and the repository can run it, on another machine, under another administrator.
@@ -33,6 +33,7 @@ from trusted.isolation import Isolation  # noqa: E402
 from trusted.journal import Journal, PinStore  # noqa: E402
 from trusted.release import code_digest  # noqa: E402
 
+
 def facts(output: dict) -> set:
     return {tuple(f[:3]) for f in output.get("facts", [])}
 
@@ -40,7 +41,9 @@ def facts(output: dict) -> set:
 def replay(host: Host, record: str) -> dict:
     try:
         rec = json.loads(host.evidence.get(record))
-    except (OSError, LookupError, ValueError) as exc:
+        if rec.get("bt") == "observe":                      # D38: a boundary transaction names its run record
+            rec = json.loads(host.evidence.get(rec["material"]["run"]))
+    except (OSError, LookupError, ValueError, KeyError) as exc:
         return {"record": record, "result": "unreadable", "why": f"{type(exc).__name__}: {exc}"}
     if rec.get("method") != host.method:
         return {"record": record, "result": "programs", "why": f"made by {rec.get('method')}, these are {host.method}"}

@@ -90,9 +90,10 @@ class Series:
         self.evidence, self.state = evidence, Path(state)
         self.index = json.loads(self.state.read_text()) if self.state.exists() else {}
 
-    def add(self, name: str, role: str, at: int, data: bytes | None) -> None:
+    def add(self, name: str, role: str, at: int, data: bytes | None) -> str | None:
         s = self.index.setdefault(name, {"role": role, "points": []})
-        s["points"].append([at, None if data is None else self.evidence.put(data)])
+        ref = None if data is None else self.evidence.put(data)
+        s["points"].append([at, ref])
         kept, last = [], {}
         for point in s["points"]:
             age = at - point[0]
@@ -108,6 +109,7 @@ class Series:
         tmp = self.state.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.index))
         tmp.replace(self.state)
+        return ref
 
     def chunks(self, now: int) -> dict:
         out = {}
@@ -249,18 +251,19 @@ class Host:
             shutil.rmtree(work, ignore_errors=True)
 
     # ---- the live world: scrapes and probes, recorded before any program reads them -------------------------------
-    def observe(self, sources: dict, fetch: list) -> None:
-        """sources: {name: (role, url)}; fetch: the probes the production program asked for on its last pass."""
+    def observe(self, sources: dict, fetch: list) -> list:
+        """sources: {name: (role, url)}; fetch: the probes the production program asked for on its last pass.
+        -> [(source, url, at, digest or None)]: the material of a capture transaction (D38)."""
         if self.series is None:
-            return
-        now, get = self.clock() // 1000, self.fetch
+            return []
+        now, get, points = self.clock() // 1000, self.fetch, []
         for name, (role, url) in sources.items():
             try:
                 data = get(url)
                 data = data.encode() if isinstance(data, str) else data
             except Exception:
                 data = None
-            self.series.add(name, role, now, data)
+            points.append((name, url, now, self.series.add(name, role, now, data)))
         if fetch:
             answers = []
             for pid, method, url, expected, path in fetch:
@@ -268,4 +271,5 @@ class Host:
                     continue
                 status, seconds = self.request(method, url)
                 answers.append([pid, method, path, expected, status, seconds])
-            self.series.add("probes", "probes", now, json.dumps(answers).encode())
+            points.append(("probes", "", now, self.series.add("probes", "probes", now, json.dumps(answers).encode())))
+        return points

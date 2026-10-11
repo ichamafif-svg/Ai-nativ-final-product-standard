@@ -22,13 +22,12 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from floors import RELEASE
+from floors import CONTRACTS, PROGRAMS, RELEASE
 from kernel import Kernel
 
-from .adapters import GitRepository, Readback
+from .adapters import GitRepository
 from .boundary import SignedAssessment
 from .gateway import AdmissionGateway
-from .guard import EffectPort
 from .host import Evidence, Host, Series
 from .isolation import Isolation
 from .journal import Journal, PinStore
@@ -37,6 +36,7 @@ from .register import Registers
 from .release import code_digest
 from .service import TrustedService
 from .signing import Signer, entry
+from .transactions import Boundary, ledger_of
 
 
 def key(keys_dir: Path, identity: str) -> Signer:
@@ -83,32 +83,30 @@ class Installation:
                          stores={"requests": resolve(c.get("build", {}).get("store", "requests"))},
                          data=(resolve(data["path"]), data["digest"]) if data else None, world=self.world,
                          series=Series(evidence, self.path.parent / "series.json"), clock=self.clock,
-                         pinned=RELEASE.floors["instruments"]["tests"]["method"])
+                         pinned=PROGRAMS)
         sources = {f"metrics-{i}": ("metrics", url) for i, url in enumerate(run.get("metrics", []))}
         if (deploy or {}).get("runner_metrics"):
             sources["runner"] = ("runner", deploy["runner_metrics"])
         self.releases = Registers(self.repo_path, resolve(deploy["root"]), clock=self.clock,
                                   served=lambda: self.instruments.served,
                                   canary_percent=lambda: self.instruments.canary_percent) if deploy else None
-        ports = {op: self.repository.remediate for op in MAIN_OPS} | ({
-            "deploy": self.releases.switch, "rollback": self.releases.switch,
-            "restart": self.releases.request_restart, "canary": self.releases.canary_switch,
-            "abort": self.releases.canary_switch} if self.releases else {})
+        # D38: every exchange with the outside world is a boundary transaction under the floors' contracts.
+        self.boundary = Boundary(evidence, self.path.parent / "transactions.jsonl", CONTRACTS, PROGRAMS, self.clock,
+                                 ledger=lambda: ledger_of(self.journal))
+        effects = {op: self.repository for op in MAIN_OPS} | (self.releases.effects() if self.releases else {})
+        self.resolve = self.boundary.resolver(effects, key(self.keys, "oracle"), grants["oracle"])
         self.service = TrustedService(
             self.journal, boundary=SignedAssessment(assessment, assessors), clock=self.clock,
-            guard_signer=key(self.keys, "guard"), effect_port=EffectPort(ports),
-            reconciliation=Readback(self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
-                                    releases=self.releases))
+            guard_signer=key(self.keys, "guard"), effect_port=self.boundary.port(effects), reconciliation=self.resolve)
         names = {gid: name for name, gid in grants.items()}
         self.instruments = Instruments(
-            self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock), self.host,
+            self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock), self.host, self.boundary,
             self.repo_path, self.proposals, anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
             inbox=resolve(repo["inbox"]) if repo.get("inbox") else None, findings=self.path.parent / "findings.json",
             holders=lambda: {names[gid]: g["holder"] for gid, g in self.journal.snapshot()["grants"].items()
                              if gid in names}, sources=sources, production=bool(sources) or deploy is not None,
             registers=self.releases)
-        self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
-                             releases=self.releases)
+        self.prover = Prover(self.service, self.resolve, key(self.keys, "oracle"), grants["oracle"], self.clock)
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):

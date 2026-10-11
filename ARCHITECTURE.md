@@ -308,15 +308,15 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 
 | Budget | Lignes / plafond | Contenu |
 |---|---|---|
-| Noyau K (sûreté) | **2 253 / 3 200** | jugement, langage, loi, obligations, FLOOR-0, floors |
-| Sûreté T | **1 186 / 1 186** | journal, garde, horloge, frontière, service, passerelle, livraison, release, processus opérateur |
-| Intégrations T06/T07/T08 (sûreté) | **782 / 782** | hôte des programmes (`host.py` : entrées par empreinte, exécution isolée, magasin de preuves, relevés), registres de release (`register.py`), passe opérateur, isolation, adaptateurs git et GitHub. Était 1 099 + 791 (production) avant D37 |
+| Noyau K (sûreté) | **2 280 / 3 200** | jugement, langage, loi, obligations, FLOOR-0, floors |
+| Sûreté T | **1 184 / 1 184** | journal, garde, horloge, frontière, service, passerelle, livraison, release, processus opérateur |
+| Intégrations T06/T07/T08 (sûreté) | **998 / 998** | transactions de frontière (`transactions.py`, §10.1), hôte des programmes (`host.py`), registres de release (`register.py`), passe opérateur, isolation, adaptateurs git et GitHub. Était 1 099 + 791 (production) avant D37, 782 avant D38 |
 | Hébergement (sûreté) | **71 / 71** | passerelle SSH à commande forcée |
 | Second juge (restrictif seul) | **797 / 797** | |
 | Redevabilité (visibilité) | **250 / 250** | |
 | *Hors TCB* : programmes épinglés | **1 278 / 1 278** | `instruments/` : toutes les mesures qui ouvrent un droit (sondes des floors, tests, régressions, recettes, contrat, règles, production). Épinglés par empreinte dans les floors, exécutés isolés, sans clé ni effet, **rejouables** (D37) |
 
-  TCB locale : **5 339 lignes** (6 846 avant D36, 6 436 avant D37), dont 2 289 hors noyau et second juge. **T est gelé** (D37) : sûreté T + intégrations + hébergement ≤ **2 039 lignes** (3 149 avant D37), vérifié par `make budget` (`_frozen`). Une nouvelle mesure est un programme épinglé, un nouvel effet un registre ; relever le gel est une décision consignée. Il reste du code **non relu**. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+  TCB locale : **5 580 lignes** (6 846 avant D36, 6 436 avant D37, 5 339 avant D38), dont 2 503 hors noyau et second juge. **T est gelé** (D37) : sûreté T + intégrations + hébergement ≤ **2 253 lignes** (3 149 avant D37 ; relevé une fois de 2 039 par D38 pour les transactions de frontière elles-mêmes), vérifié par `make budget` (`_frozen`). Une nouvelle mesure est un programme épinglé, un nouvel effet un adaptateur d'un profil existant ; relever le gel est une décision consignée. Il reste du code **non relu**. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -651,11 +651,59 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 |---|---|---|
 | T04, T05 | `trusted/journal.py`, `trusted/checker.py` | Journal SQLite append-only, pins sur un autre volume ; second juge qui reformule chaque admission |
 | T06 | `trusted/isolation.py` | Les programmes épinglés et le code des contributeurs tourne sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire ; il ne lit pas les clés de la garde. Sonde `qualify` : « T06 contributors' code runs isolated » |
-| T06 | `trusted/host.py`, `trusted/operator.py`, `instruments/` (hors T) | **Hôte générique (D37)** : le programme `plan` dit quoi mesurer ; l'hôte résout chaque entrée par son identité (commit exact, fichier à un commit, blob du magasin vérifié par son empreinte, données épinglées, relevés), exécute le job du paquet `instruments/` sous l'exécutant isolé, et garde un **enregistrement** (méthode, job, entrées par empreinte, réponse) dans un magasin adressé par contenu. Le scanner signe chaque propriété épinglée comme `measurement` dont la méthode est `programs@<empreinte du paquet>` et l'artefact l'enregistrement. Une observation d'une propriété épinglée est refusée (`PROV.INSTRUMENT`), une mesure d'une autre source aussi (`PROV.COVERAGE`) |
-| T06 | `trusted/host.py` (relevés) | Le monde réel : l'hôte récupère les octets des sources déclarées (métriques, lanceur) et les réponses des sondes, datés, par empreinte, à résolution décroissante (chaque relevé quelques minutes, un par minute des heures, un par heure des mois). Le programme de production les lit ; il ne va jamais lui-même sur le réseau |
-| T06 | `tools/replay.py` (hors T) | **Rejeu** : n'importe qui ayant le journal, le magasin de preuves et le dépôt rejoue les enregistrements avec les mêmes programmes et compare les faits (`agrees`, `disagrees`, `programs`, `unreadable`). Sonde `qualify` « T06 measures replay from their records ». Un enregistrement falsifié est détecté (test) |
-| T07, T08 | `trusted/guard.py`, `trusted/adapters.py`, `trusted/register.py` | CAS de `main` (git local ou GitHub). **Registres de release** (D37) : `current`, `canary`, `canary_weight`, `restart`, petits fichiers que seule la garde écrit, déplacés par compare-and-swap sous un verrou, chaque mouvement journalisé avec sa clé (un réessai après `unknown` ne rejoue rien). La garde ne construit ni n'exporte rien : le lanceur du produit lit le commit nommé dans le dépôt canonique. Readback `applied / not_applied / unknown` : appliqué = la version servie ; preuve par l'oracle |
+| T06, T07, T08 | `trusted/transactions.py`, `host.py`, `register.py`, `adapters.py`, `github.py`, `guard.py` ; `instruments/` et `tools/replay.py` hors T | Toute entrée et toute sortie sont des **transactions de frontière** (§10.1) |
 | T09 | `trusted/delivery.py` | Outbox et livraison ; **non branchée** sur e-mail ni messagerie (les alertes ne sont que dans l'interface) |
+
+### 10.1 Transactions de frontière (D38)
+
+**K juge. T garantit la frontière. U accomplit le travail.** Toute affirmation qui entre et tout effet qui sort passent par une **transaction de frontière** (BT), sous un contrat que les floors déclarent (`floors.CONTRACTS`). Une BT ne remplace aucun contrat T01–T09 : elle unifie leur représentation. Elle n'est pas une transaction ACID et n'ajoute aucune sémantique constitutionnelle : CAP, OBL, NIV, PROV, TYPE et HIST restent au noyau.
+
+Une BT est un enregistrement, gardé par empreinte dans le magasin de preuves et listé dans `transactions.jsonl` :
+
+| Propriété | Contenu |
+|---|---|
+| Identité | qui : le scanner, la garde, l'oracle ; jamais un agent |
+| Sujet | quoi exactement : un job et les ressources dont il a parlé, ou la ressource jugée |
+| Autorité | sous quoi : le contrat, la capacité, la clé de réservation |
+| Contrat | comment c'est justifié : `reproducible`, `attested`, `composite` (observation) ; `cas`, `observable` (effet) |
+| Matériel | ce qui a été lu ou envoyé, par empreinte : l'enregistrement d'exécution, la requête canonique, ce qui a été relu |
+| Causalité | la genèse, la tête du journal et la loi au moment de la transaction, et les transactions auxquelles elle répond |
+| Issue | `established` / `refused` ; `ok` / `failed` / `unknown` ; `applied` / `not_applied` / `unknown` |
+
+**OBSERVE — faire entrer une affirmation.** L'hôte exécute un job des programmes épinglés sur des entrées identifiées par empreinte, sous l'exécutant isolé. Seul ce que le **contrat du job** l'autorise à dire est signé (propriétés et préfixes de ressources) ; le reste est refusé, enregistré, jamais signé. Une propriété réservée au scanner est signée comme mesure dont la méthode nomme le contrat : `programs@<empreinte>/suite`. Le noyau n'admet `tests` que de la méthode `…/suite` : **un programme de production compromis ne peut pas signer un fait de test** (test adversarial, critère D). Trois formes de justification :
+
+| Contrat | Jobs | Forme | Ce qu'il peut dire | Ce sur quoi il repose |
+|---|---|---|---|---|
+| `floors` | sondes des floors | composite | les propriétés des cibles techniques et de réglage, sur `repo:` | l'instantané de données tierces épinglé (D17), les réglages de main que donne le fournisseur |
+| `suite` | réparation, règles, demande implémentée, contribution | reproductible | `tests`, `regressions`, `reproduced`, `acceptance`, `configured` | rien d'autre que les entrées identifiées |
+| `request` | contrat d'une demande | reproductible | `contract`, `accepted` sur `build:request/` | idem |
+| `production` | production | composite | couverture, `slo`, `lag`, ce qui est sur chaque bascule, les nombres (D36), sur `run:` | les métriques du produit (sa propre parole), les mesures du lanceur, les réponses des sondes |
+| `capture` | (l'hôte) | attestée | rien de signé : les octets que chaque source a renvoyés, datés | la source à ce moment-là |
+
+Le rejeu (`tools/replay.py`, sonde `qualify`) prouve la reproductibilité d'une mesure, pas la justesse du programme ; une signature prouve une attribution, pas la vérité physique. Une forme `composite` vaut sa source la plus faible, et la BT la nomme.
+
+**EFFECT — faire sortir un effet.** U prépare l'intention exacte, K la juge, la garde réserve, re-juge avec les deux juges et part une fois sous le verrou (ligne d'effet de FLOOR-0 inchangée). Le port de la garde n'atteint qu'un adaptateur dont le **profil physique** est celui que le contrat de l'opération exige ; sinon la route est non qualifiée et rien ne part (`failed:unqualified`, enregistré).
+
+| Profil | Garantie | Opérations |
+|---|---|---|
+| `cas` | compare-and-swap sur l'état lui-même : l'adaptateur s'exécute jusqu'au bout ; l'état relu décide | `remediate`, `integrate`, `implement`, `configure` (main) ; `deploy`, `rollback`, `canary`, `abort` (registres) |
+| `observable` | seule une demande part ; l'effet est établi par une observation ultérieure | `restart` (le lanceur redémarre ; un nouveau processus de cette version, démarré après la demande, l'établit) |
+
+Un redémarrage n'est pas un compare-and-swap parce qu'on l'écrit dans un registre : le registre ne fait que demander. Les profils « commande idempotente » et « action irréversible » ne sont pas encore utilisés ; une opération qui les exigerait n'a pas de route tant qu'aucun adaptateur ne les tient.
+
+**RESOLVE — établir les conséquences.** Après un effet incertain ou expiré, l'oracle relit, par profil :
+
+- `cas` : `applied` quand l'état montre le mouvement de cette clé ; `not_applied` quand il ne s'est pas produit et qu'aucune demande ne peut encore aboutir (git local : main ne contient pas la tête, et main n'avance que par le CAS de la garde ; registres : la clé n'est jamais entrée dans l'historique, écrit avant le mouvement). Sur GitHub, une requête distante peut encore aboutir après une réponse perdue : jamais `not_applied`.
+- `observable` : `applied` seulement quand l'observation le montre ; **jamais `not_applied` une fois la demande partie** ; `not_applied` seulement si la demande n'a jamais quitté la garde.
+- Aucun délai, aucun ACK perdu, aucun silence ne prouve une non-application. Un `unknown` ne se relance pas.
+
+Que l'effet soit appliqué n'est pas que son but soit atteint : la **preuve** reste une étape distincte (main contient la tête ; la version servie est celle basculée ; un nouveau processus tourne), signée par l'oracle.
+
+**Composition.** Une livraison est une suite de BT liées par empreinte : OBSERVE (tests du commit exact, sous `suite`) → K admet `integrate` → EFFECT (`cas` sur main) → RESOLVE → OBSERVE (production : candidat, nombres) → K admet `deploy` → EFFECT (`cas` sur `current`) → RESOLVE → OBSERVE (version servie) → preuve → K ferme l'obligation. Chaque fait signé garde sa provenance : méthode (programmes et contrat) et artefact (la BT, qui nomme son exécution).
+
+**Invariant de croissance.** Un nouveau produit, fournisseur, scanner ou outil SRE, réalisable par les contrats et profils existants, n'ajoute aucune ligne à K ni à T : un programme épinglé de plus, ou un adaptateur d'un profil existant. Une empreinte ne rend pas un programme fiable : il est relu, épinglé par la release, exécuté isolé, rejoué. Trois choses sont comptées à part : le code de confiance (`make budget`, T gelé), les dépendances physiques extérieures (la colonne « ce sur quoi il repose »), les privilèges réels (sonde `qualify` « privileges around the guard » : membres du groupe de la garde, règles sudo). Une dépendance reconnue sans code T reste dans la base de confiance effective.
+
+**Limites.** Restent dans T et hors de portée du rejeu : l'honnêteté du relevé (l'hôte a reçu ces octets), l'exclusivité des effets (T07 : aucun autre chemin privilégié), la justesse des adaptateurs. Un programme épinglé faux produit un fait faux que le rejeu recalcule à l'identique. T09 (livraison) n'est pas encore une BT.
 
 **Évaluation signée.** Une frontière (`TrustBoundary`) qualifie seulement les rôles utilisés par l'opération. Une évaluation Ed25519 signée lie release, genèse, journal et registre ; les clés de l'évaluateur sont épinglées par l'installation, hors de portée de l'agent. Sans temps fiable, une restriction peut être contrôlée à la date d'émission signée de l'évaluation ; cette voie ne peut jamais élargir. Une déclaration `VERIFIED` signée ne démontre pas la réalité physique.
 
@@ -1117,6 +1165,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D35 | **Les règles dans le dépôt ; la loi borne le jugement du scanner.** `standard/rules.json` sur main est la source de tous les réglages sauf les silences : on le change par une contribution relue, ou depuis l'interface en signant une fois le nouveau fichier (l'agent le commit à l'identique, le scanner vérifie que seul ce fichier change et que l'empreinte est celle signée par un ingénieur pour ce main, l'op `configure` l'intègre). Le noyau gagne un atome `compare` (comparaison décimale exacte, recalculée par le second juge) : les planchers bornent de l'extérieur ce que le jugement du scanner peut ouvrir (canary : au plus 2 points d'erreurs de plus, au moins 20 requêtes et une minute ; retour arrière dans les 240 min ; pas de 12e redémarrage dans l'heure) | Git pour l'ingénieur, le journal pour l'auditeur, un clic pour la personne pressée. Le jugement fin reste côté confiance (réglages plus stricts), mais un défaut de ce code ne peut plus dépasser les bornes que le noyau vérifie. La base de confiance n'a pas rétréci : la partie production est passée à 1 205 lignes |
 | D36 | **Le scanner mesure, la loi borne, l'agent se retient.** Le scanner ne juge plus rien de réglable : il signe ce qui est sur chaque bascule exacte (`candidate`, `previous`, `proven`, `live`, `running`) et des nombres (`burn_fast`, `failing_pct`, `switched_min`, `unanswered_s`, `restarts_last_hour`, `migrations_crossed`, `budget_pct`, deltas du canary). Les floors fixent la preuve minimale pour agir seul (§12), comparée par le noyau. Les réglages des ingénieurs passent dans U (`autonomy/policy.py`) : l'agent les applique avant de soumettre, et ils ne peuvent qu'exiger plus que la loi. Le délai sur les assouplissements de D31 disparaît des réglages : il reste là où il garantit quelque chose, sur la loi et les capacités (resserrer, révoquer, geler : tout de suite ; élargir : après le délai témoigné) | La production était 1 205 lignes de jugement non relu dans la TCB, dont 320 de réglages et ~150 de décisions qui ouvraient des droits. Un défaut dans la retenue de l'agent ne donne plus que ce que la loi permet déjà ; un défaut du scanner reste possible, mais sur des mesures, plus simples à vérifier qu'un jugement. Prix : un ingénieur qui assouplit un réglage, dans les bornes de la loi, est suivi dès l'intégration |
 | D37 | **T gelé : les mesures sont des programmes épinglés et rejouables, les effets des registres.** T ne contient plus aucune mesure : un hôte générique résout les entrées par leur identité, exécute un paquet de programmes (`instruments/`) épinglé par empreinte dans les floors sous l'exécutant isolé, garde chaque enregistrement (entrées par empreinte, réponse) et le scanner signe ce que le programme répond, avec la méthode `programs@<empreinte>` et l'enregistrement en artefact. Le monde réel entre par des relevés bruts, datés, gardés par empreinte, que le programme lit. Les bascules de production deviennent des registres déplacés par compare-and-swap ; le lanceur du produit construit lui-même ce qu'il sert. `tools/replay.py` rejoue n'importe quel enregistrement ailleurs ; `make budget` gèle T (2 039 lignes) | La confiance passe de « ce processus a dit vrai » à « cette fonction figée, que chacun peut recalculer, a répondu ceci à ces entrées ». Ajouter une mesure ajoute un programme, jamais une ligne de T (démontré par l'analyse canary ci-dessous : un changement de mesure sans toucher T). Restent dans T et non vérifiables par rejeu : l'honnêteté du relevé (l'hôte a récupéré ces octets), la vérité de la source (le produit dit ses propres métriques), l'exclusivité des effets (T07) ; un programme épinglé faux produit un fait faux que le rejeu ne révèle pas (il recalcule la même erreur) : sa relecture reste nécessaire |
+| D38 | **Transactions de frontière.** Toute interaction de T avec le monde extérieur est une BT (OBSERVE, EFFECT, RESOLVE) sous un contrat des floors, enregistrée avec identité, sujet, autorité, contrat, matériel, causalité et issue (§10.1). Chaque job ne signe que ce que son contrat permet, et la méthode d'une mesure nomme le contrat, que le noyau vérifie ; chaque opération exige un profil physique (`cas`, `observable`) ; RESOLVE établit `not_applied` par l'état pour un `cas` local et jamais par le silence pour un effet `observable` ; la preuve du but reste distincte de l'application | La revue BT a montré trois trous : un programme compromis avait toute l'autorité du scanner ; le redémarrage était présenté comme un compare-and-swap alors que le produit l'exécute ; les privilèges réels n'étaient pas comptés. Coût : T passe de 2 039 à 2 253 lignes, une fois, pour des mécanismes génériques ; ajouter une mesure ou un effet n'en ajoute toujours aucune. Corrigé au passage : `canary` et `abort` n'étaient jamais relus (T08) |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1187,9 +1236,10 @@ kernel/      K — jugement unique, six mécanismes, FLOOR-0, langage de loi (do
 floors/      Floors de la release, déclaratifs, couverts par le digest : cibles, opérations,
              conditions, instruments épinglés, ressource request.
 trusted/     T, gelé (D37) — journal, pins, garde, horloge, livraison, passerelle, service,
-             processus opérateur (daemon), second juge (checker), release ; host (programmes,
-             preuves, relevés), register (registres de release), operator (passe), adapters,
-             github, isolation (exécutant) ; hosting (passerelle SSH).
+             processus opérateur (daemon), second juge (checker), release ; transactions
+             (transactions de frontière, D38), host (programmes, preuves, relevés), register
+             (registres de release), operator (passe), adapters, github, isolation (exécutant) ;
+             hosting (passerelle SSH).
 instruments/ Programmes épinglés, hors T (D37) : plan, sondes des floors, recettes, données,
              suites de tests et contrats, production (métriques, SLO, bascules, nombres).
              N'importe que kernel ; aucun accès réseau, aucune clé, aucun effet.
@@ -1279,6 +1329,7 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Règles dans le dépôt (D35) | Fait et démontré en direct : passage en canary signé une fois par h1, fichier commité par l'agent, intégré par la loi, puis le changement lui-même passé en canary |
 | Production réduite à la mesure (D36) | Fait et testé (bout en bout, dont un retour arrière refusé par le noyau sur une consommation de 9,5) : budget production 1 205 → 791 lignes. Démontré en direct : canary promu après 10 min de cuisson, sans redémarrage |
 | T gelé (D37) | Fait, testé et démontré en direct : 2 039 lignes de T (3 149 avant), 1 278 lignes de programmes hors T ; mise en production par registres, lanceur qui exporte lui-même, mesures rejouées (`qualify` : PASS) ; un enregistrement falsifié est détecté. En direct, le rejeu des enregistrements a montré que l'analyse canary retirait des versions saines sur du bruit (1,5 point d'écart sur 300 requêtes, produit à 2 % d'erreurs) : la retenue de l'agent compare désormais l'écart à deux erreurs-types, changement fait dans un programme et dans U, sans toucher T |
+| Transactions de frontière (D38) | Fait et testé : un job de production qui dit `tests = green` est refusé par T et par le noyau ; une opération sans adaptateur du bon profil ne part pas ; un redémarrage demandé n'est jamais `not_applied` ; chaque observation, chaque effet et chaque relecture laisse une BT ; le rejeu suit les BT. Sonde `qualify` des privilèges : FAIL sur la démo (le produit est dans le groupe de la garde pour lire le dépôt), dit tel quel |
 | Tests | 125 tests (`make check` : couches, budgets, tests) |
 | Pas encore là | Agent avec un vrai modèle (jamais exécuté) ; adaptateurs Kubernetes et Prometheus managé ; livraison des alertes hors interface ; projection conformité ISO/NIS2/DORA ; métriques du canary vues par le seul lanceur (auto-déclarées par le produit) ; budget production (1 205 lignes) non relu, borné seulement par la loi |
 | Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |
