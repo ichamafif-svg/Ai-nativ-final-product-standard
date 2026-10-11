@@ -4,6 +4,7 @@
 #     bash tools/install_server.sh            phase 1: system, users, hosting, demo repository, ceremony (init)
 #     bash tools/install_server.sh activate   phase 2, at least one hour later (FLOOR-0): activate and start
 #
+# The interface listens on localhost only: reach it through an SSH tunnel.
 # DEMO installation: every human and witness key is on this server and the installation assesses itself. qualify.py
 # says so. What is physical here: the guard, the agent and the SSH gate are three Unix users, and only the guard
 # can move main.
@@ -35,6 +36,7 @@ phase1() {
   id standard-guard >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-guard
   id standard-agent >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-agent
   id standard-gate  >/dev/null 2>&1 || useradd -m -s /bin/sh -G standard-guard standard-gate
+  id standard-web   >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-web
   usermod -p '*' standard-gate                     # key login only, no password
 
   say "the agent's sandbox may open a network-less namespace (Ubuntu restricts it by default)"
@@ -61,6 +63,9 @@ EOF
   "$PY" tools/host.py create "$HOSTING/hosting.toml" app --from /srv/standard/seed \
         --guard-user standard-guard --gate-user standard-gate
   git config --global --add safe.directory "$HOSTING/repos/app.git"
+  for r in "$HOSTING/repos/app.git" "$HOSTING/inbox/app.git"; do   # the interface reads both, from outside
+    runuser -u standard-web -- env HOME=/home/standard-web git config --global --add safe.directory "$r"
+  done
   if [ -s /root/.ssh/authorized_keys ]; then
     head -1 /root/.ssh/authorized_keys > /tmp/owner.pub
     "$PY" tools/host.py authorize "$HOSTING/hosting.toml" app owner --key /tmp/owner.pub --write --gate-user standard-gate
@@ -135,15 +140,18 @@ phase2() {
   say "two services: the operator (guard) and the agent"
   unit standard-operator standard-guard "-m trusted serve $INSTALL/standard.toml 30"
   unit standard-agent standard-agent "-m autonomy run $INSTALL/standard.toml 60"
+  unit standard-web standard-web "-m surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
   systemctl enable --now standard-operator
   sleep 5
   systemctl enable --now standard-agent
+  systemctl enable --now standard-web
 
   say "qualification"
   "$PY" tools/qualify.py "$INSTALL/standard.toml" | "$PY" -c \
     'import json,sys; [print(p["result"], "|", p["probe"]) for p in json.load(sys.stdin)]' || true
   echo
+  echo "Interface: from your computer, ssh -L 8080:localhost:8080 root@<this server>, then open http://localhost:8080"
   echo "Follow:  journalctl -fu standard-agent    journalctl -fu standard-operator"
   echo "Status:  cd $CODE && $PY -m surface --socket $INSTALL/admission.sock status"
 }

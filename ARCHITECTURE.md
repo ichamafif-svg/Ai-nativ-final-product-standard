@@ -303,7 +303,7 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 155 / 1 155** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **801 / 801**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**, passerelle d'hébergement **71 / 71**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 160 / 1 160** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **801 / 801**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**, passerelle d'hébergement **71 / 71**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -713,6 +713,17 @@ Le juge reste séparé ; l'agent reçoit tout ce qui l'aide à réussir et rien 
 
 Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes au modèle, nouveau candidat ; il ne propose que ce qui passe ses propres contrôles. Le juge mesure ensuite le commit exact, sous une autre identité.
 
+### 11.9 L'interface (D27)
+
+`python -m surface.web standard.toml` : une application web sous son propre utilisateur Unix (`standard-web`), à l'écoute de `localhost` seulement (tunnel SSH ou proxy TLS devant). Deux contextes, le même système et la même loi :
+
+- **BUILD** (onglet Construction) : les demandes (étape suivante) et les contributions de la boîte de dépôt, avec leurs faits mesurés (tests, régressions, revue) et la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`).
+- **RUN** (onglet Exploitation) : les écarts rangés par qui s'en occupe (l'agent seul, l'agent puis un humain, les humains seuls), les réparations de l'agent et leurs faits, ses abandons avec leur dossier, les obligations du dépôt.
+- **Revues** : la file des transitions qui attendent une signature, le dossier, les différences, et deux boutons.
+- **Loi** : les exigences en vigueur et les conditions d'entrée dans `main`. **Identité** : la clé de la personne.
+
+Ce que l'interface ne fait pas : elle ne détient aucune clé et ne décide rien. Elle lit par la passerelle (la vue, qui publie aussi les faits sur les transitions exactes) et ce qui est publié pour les personnes (constats, notes de l'agent, dépôts en lecture), et transmet au noyau les enveloppes signées. **La signature se fait dans le navigateur** : la clé est importée dans WebCrypto, non exportable, gardée dans IndexedDB ; le navigateur construit lui-même l'énoncé canonique, le PAE et l'enveloppe à partir du corps qu'il affiche (`surface/static/sign.js`, identique octet pour octet à `trusted/signing.py`, vérifié par un test). Un serveur web compromis peut mentir sur ce qu'il affiche, pas faire signer autre chose que ce que le navigateur montre. En production, une passkey : le noyau vérifie déjà les assertions WebAuthn ES256, il reste à les enrôler par une rotation de racine.
+
 ## 12. Floors de la release
 
 Les floors portent la direction (autonomie, sécurité, conformité) dans le **même langage** qu'une loi client.
@@ -1022,6 +1033,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D24 | Le travail d'un client entre dans `main` par une opération de la loi, `integrate`, jamais par un droit d'écriture | Même ligne d'effet que `remediate` (CAS de la garde, readback, preuve, lignée) ; condition `integrate-reviewed` = tests de `main` verts sur le code de la contribution + revue humaine signée de cette transition exacte. Un commit par contribution, directement enfant du `main` courant, pour que chaque commit de `main` reste la tête d'un effet jugé. Le relecteur doit être une autre personne que l'auteur : tenu par l'organisation (les identités de l'hébergement ne sont pas des humains de la loi), pas encore par le noyau |
 | D25 | L'agent reçoit des **aides**, jamais des droits : constats localisés, verdicts du juge, bac à sable sans réseau, précontrôle de toute la loi, mémoire et budget, carte du dépôt, données de mise à jour, dossier du relecteur, porte LLM unique | Un agent qui oublie ses exigences en route est rejugé à chaque transition par la loi entière ; ces aides servent à ce qu'il réussisse du premier coup. Le précontrôle et le bac à sable ne prouvent rien : le juge reste séparé (§11.8) |
 | D26 | Une contribution ne peut pas ouvrir de nouvel écart | `integrate-reviewed` exige aussi `regressions = none`, mesuré par le scanner en comparant chaque cible des floors entre `main` et la contribution. Le relecteur juge le sens du changement ; la loi garantit qu'il n'ajoute ni secret, ni faille, ni licence interdite, ni action non épinglée, même s'il les a manqués. Les suivis qu'une recette referme seule ne bloquent pas. L'agent applique la même comparaison dans son précontrôle |
+| D27 | L'interface est une lecture plus un relais : aucune clé, aucune décision, signature dans le navigateur | Le serveur web est le composant le plus exposé ; il ne doit rien pouvoir faire qu'une personne n'ait signé elle-même. Il écoute localhost, sous son propre utilisateur ; le navigateur construit les octets qu'il signe (§11.9) |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1079,7 +1091,8 @@ trusted/     T — journal, pins, garde, adaptateurs d'effet, readback, horloge,
 floors/      Floors de la release, déclaratifs, couverts par le digest.
 autonomy/    U — découverte, projection, Work Engine, agent, cycle, bac à sable, précontrôle,
              mémoire, carte du dépôt, porte LLM, contributions.
-surface/     Interface humaine, point d'entrée agent (`python -m surface`).
+surface/     Interface : CLI (`python -m surface`) et web (`python -m surface.web`, static/ : page,
+             application, signature dans le navigateur).
 compliance/  Projection clauses ISO/NIS2/DORA (hors TCB, lecture seule).
 tests/       Un test par règle du registre §17, un par garantie G01–G16,
              les dix scénarios de §21.1, le différentiel des deux juges.
@@ -1146,7 +1159,7 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Travail unifié (U) | Fait : projection, Work Engine, agent, cycle, surface, revue et attestation humaines |
 | Installation | Fait : processus opérateur et agent sous deux utilisateurs Unix, cérémonie en deux phases, séparation, qualification, adaptateur GitHub |
 | Hébergement (D23, chantier 1) | Fait : passerelle SSH à commande forcée, canonique à la garde, boîte de dépôt par client, opération `integrate` (D24) ; démontré avec sshd réel : contribution poussée, tests mesurés, refus sans revue, revue signée, intégration par la garde, lignée intacte ; qualify : PASS |
-| Interface (D23, chantier 2) | À faire : application web au-dessus de `surface/`, signature humaine hors serveur |
+| Interface (D23, chantier 2) | Faite (v1, D27) : BUILD, RUN, revues signées dans le navigateur, loi, identité ; démontrée en direct (revue signée dans Chromium, admise par le noyau, contribution intégrée). Restent : les demandes de fonctionnalités, les passkeys, l'export des preuves |
 | Porte LLM (D23, chantier 3) | Fait : multi-fournisseurs (Anthropic, compatible OpenAI), niveaux, masquage, journal d'egress (§11.8) |
 | Outillage de l'agent (D25) | Fait et testé : constats, bac à sable, précontrôle, mémoire et budget, carte, dossier ; démontré en direct sous utilisateurs séparés. Non démontré : la boucle avec un vrai modèle (pas de clé dans la session) |
 | Jalon investisseur (D15) | Démontré en git local avec T07 physique (qualify : PASS) ; sur GitHub réel, une réparation SBOM a atteint `main` de bout en bout, mais par les accès de la session et non par un jeton de garde distinct |

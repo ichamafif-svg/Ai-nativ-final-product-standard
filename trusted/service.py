@@ -77,9 +77,14 @@ class TrustedService:
         now = self._require(TIMED)
         state = self.journal.snapshot()
         law = self.journal.kernel.law_of(state)
+        transitions = {}                                    # facts on exact transitions: tests, review, regressions…
+        for key, ob in state["observations"].items():
+            resource, prop, _ = key.rsplit("|", 2)
+            if "/" in resource:
+                transitions.setdefault(resource, {})[prop] = ob["status"]
         return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
                 "law": {"digest": law.digest, "effective": law.raw}, "health": self.health(required_at=now),
-                "assessment": self.assessment()}
+                "assessment": self.assessment(), "transitions": transitions}
 
     def assessment(self) -> str:
         """INDEPENDENT only when an independent, pinned assessor qualified this installation (D19)."""
