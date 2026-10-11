@@ -1,0 +1,11 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Demo service", "version": "1.0.0"},
+  "paths": {
+    "/health": {"get": {"summary": "Liveness"}},
+    "/users/{id}": {"get": {"summary": "Read a user"}},
+    "/search": {"get": {"summary": "Search the catalogue"}},
+    "/orders": {"post": {"summary": "Place an order"}},
+    "/orders/{id}": {"get": {"summary": "Read an order"}, "delete": {"summary": "Cancel an order"}}
+  }
+}

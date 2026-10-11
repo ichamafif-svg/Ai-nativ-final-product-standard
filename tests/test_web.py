@@ -109,3 +109,47 @@ class Server(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Telemetry(unittest.TestCase):
+    """The Run page's numbers: rates, error rate, quantiles and budget from cumulative Prometheus histograms."""
+
+    def exposition(self, ok, errors, fast, slow):
+        name = "http_server_request_duration_seconds"
+        out = []
+        for status, n, under in (("200", ok, fast), ("500", errors, 0)):
+            labels = f'http_request_method="GET",http_route="/users/{{id}}",http_response_status_code="{status}"'
+            out += [f'{name}_bucket{{{labels},le="0.1"}} {under}', f'{name}_bucket{{{labels},le="1"}} {n}',
+                    f'{name}_bucket{{{labels},le="+Inf"}} {n}', f"{name}_count{{{labels}}} {n}"]
+        return "\n".join(out) + f"\nsome_other_metric 3\n"
+
+    def test_rates_errors_quantiles_budget_and_restarts(self):
+        from surface.telemetry import Telemetry as T, declared_routes, quantile
+        pages = iter([self.exposition(0, 0, 0, 0), self.exposition(900, 100, 800, 0), self.exposition(50, 0, 50, 0)])
+        t = T(Path(tempfile.mkdtemp()) / "t.db", ["http://svc/metrics"], slo=0.999, fetch=lambda url: next(pages))
+        t.scrape(now=1000)
+        t.scrape(now=1100)
+        report = t.report([("GET", "/users/{id}"), ("DELETE", "/orders/{id}")], window=600, now=1100)
+        users = next(r for r in report["routes"] if r["route"] == "/users/{id}")
+        self.assertEqual((users["requests"], users["rps"]), (1000, 10.0))
+        self.assertAlmostEqual(users["error_rate"], 0.1)
+        self.assertEqual(users["state"], "failing")
+        self.assertLess(report["fleet"]["budget"], 0)                    # 10 % errors against a 99.9 % objective
+        self.assertEqual(users["p50"], 62.5)                              # 500th of 800 under 100 ms
+        idle = next(r for r in report["routes"] if r["route"] == "/orders/{id}")
+        self.assertEqual((idle["state"], idle["observed"], idle["declared"]), ("idle", False, True))
+        t.scrape(now=1200)                                                # the service restarted: counters fell
+        self.assertEqual(t.report(window=600, now=1200)["fleet"]["requests"], 1050)
+        self.assertIsNone(quantile(0.5, {}))
+        self.assertEqual(declared_routes('{"paths": {"/a": {"get": {}, "parameters": []}}}'), [("GET", "/a")])
+
+    def test_a_silent_source_is_reported_never_zero(self):
+        from surface.telemetry import Telemetry as T
+
+        def down(url):
+            raise OSError("connection refused")
+        t = T(Path(tempfile.mkdtemp()) / "t.db", ["http://svc/metrics"], fetch=down)
+        t.scrape(now=1000)
+        report = t.report(window=600, now=1000)
+        self.assertFalse(report["targets"][0]["up"])
+        self.assertIsNone(report["fleet"]["error_rate"])

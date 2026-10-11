@@ -57,12 +57,12 @@ function subject(s) {
 
 // ---- routing --------------------------------------------------------------------------------------------------------
 const ROUTES = {
-  overview: ["Aperçu", "run"], activity: ["Activité", "run"], requirements: ["Exigences", "run"],
+  run: ["Run", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
   contributions: ["Contributions", "build"], requests: ["Demandes", "build"],
   reviews: ["Revues", "both"], proofs: ["Preuves", "both"], settings: ["Réglages", "both"],
 };
 let state = null, signer = null;
-const route = () => (location.hash.slice(2) in ROUTES ? location.hash.slice(2) : "overview");
+const route = () => (location.hash.slice(2) in ROUTES ? location.hash.slice(2) : "run");
 window.addEventListener("hashchange", () => render());
 
 function pending() {
@@ -74,7 +74,7 @@ function frame() {
   const link = (id) => `<a href="#/${id}" ${id === here ? 'aria-current="page"' : ""}><span>${ROUTES[id][0]}</span>${
     id === "reviews" && reviews ? `<span class="badge">${reviews}</span>` : ""}</a>`;
   $("#nav").innerHTML = `
-    <div class="group">Exploitation</div>${link("overview")}${link("activity")}${link("requirements")}
+    <div class="group">Exploitation</div>${link("run")}${link("compliance")}${link("activity")}
     <div class="group">Construction</div>${link("contributions")}${link("requests")}
     <div class="group">Gouvernance</div>${link("reviews")}${link("proofs")}${link("settings")}`;
   const others = state.products.length > 1;
@@ -103,8 +103,9 @@ async function refresh() {
 function render() {
   if (!state) return;
   frame();
-  const views = { overview, activity, requirements, contributions, requests, reviews, proofs, settings };
+  const views = { run: runView, compliance, activity, contributions, requests, reviews, proofs, settings };
   $("#view").innerHTML = views[route()]();
+  if (route() === "run") loadRun();
   if (route() === "settings") bindSettings();
   document.querySelectorAll("[data-review]").forEach((b) => b.addEventListener("click", () => openReview(b.dataset.review)));
 }
@@ -114,21 +115,6 @@ function counts() {
   const by = (s) => state.requirements.filter((r) => r.state === s).length;
   return { total: state.requirements.length, held: by("held"), gap: by("gap"), escalated: by("escalated"),
     attest: by("attest"), unmeasured: by("unmeasured") };
-}
-
-function headline() {
-  const c = counts(), reviews = pending().length;
-  if (c.escalated) return ["esc", "Action requise", `${plural(c.escalated, "exigence a dépassé son échéance", "exigences ont dépassé leur échéance")} et attend une décision humaine.`];
-  if (c.gap || reviews) {
-    const gaveUp = new Set(state.run.abandoned.map((a) => a.target));
-    const auto = state.requirements.filter((r) => r.state === "gap" && r.who === "agent" && !gaveUp.has(r.id)).length;
-    const parts = [];
-    if (auto) parts.push(`l'agent répare ${plural(auto, "écart", "écarts")} seul`);
-    if (c.gap - auto > 0) parts.push(`${plural(c.gap - auto, "écart attend", "écarts attendent")} une personne`);
-    if (reviews) parts.push(`${plural(reviews, "revue vous attend", "revues vous attendent")}`);
-    return ["gap", "Sous contrôle", `${c.held} exigences sur ${c.total} sont tenues. ${parts.join(", ").replace(/^./, (x) => x.toUpperCase())}.`];
-  }
-  return ["", "Tout est tenu", `${c.held} exigences sur ${c.total} sont tenues et prouvées.`];
 }
 
 function map() {
@@ -145,12 +131,12 @@ function map() {
 
 function todo() {
   const items = [];
-  for (const e of state.health.escalated) items.push(["alert", `${name(e.target)} a dépassé son échéance`, "Décision humaine requise", "#/requirements", "Voir"]);
+  for (const e of state.health.escalated) items.push(["alert", `${name(e.target)} a dépassé son échéance`, "Décision humaine requise", "#/compliance", "Voir"]);
   for (const p of pending()) items.push(["wait", p.kind === "contribution" ? `Relire la contribution de ${p.author}` : `Relire la réparation « ${name(p.target)} »`,
     "Tests au vert, aucun nouvel écart", null, "Relire", p.resource]);
   for (const a of state.run.abandoned) items.push(["alert", `L'agent n'a pas su réparer « ${name(a.target)} »`, "Son dossier explique pourquoi", "#/activity", "Voir"]);
   const attest = counts().attest;
-  if (attest) items.push(["people", `${plural(attest, "exigence organisationnelle", "exigences organisationnelles")} à attester`, "Politiques, accès, continuité, fournisseurs", "#/requirements", "Voir"]);
+  if (attest) items.push(["people", `${plural(attest, "exigence organisationnelle", "exigences organisationnelles")} à attester`, "Politiques, accès, continuité, fournisseurs", "#/compliance", "Voir"]);
   if (!items.length) return `<div class="clear">Rien ne vous attend. L'agent surveille et répare en continu.</div>`;
   return `<div class="todo">${items.map(([kind, what, sub, href, cta, review]) => `
     <div class="task"><i class="dot ${kind}"></i><div class="what"><b>${esc(what)}</b><span>${esc(sub)}</span></div>
@@ -167,16 +153,100 @@ function feed(limit) {
   return `<ul class="feed">${rows.join("")}</ul>`;
 }
 
-function overview() {
-  const [tone, title, line] = headline();
-  return `
-    <div class="hero"><i class="beacon ${tone}"></i><div><h1>${title}</h1><p class="lede">${esc(line)}</p></div></div>
+function compliance() {
+  const c = counts();
+  return `<h1>Conformité</h1>
+    <p class="lede">${c.held} exigences tenues sur ${c.total}, mesurées par des instruments indépendants. On peut durcir une exigence à tout moment ; l'assouplir demande deux personnes et une heure de délai.</p>
     ${map()}
+    <section><h2>À traiter par vous</h2>${todo()}</section>
+    ${requirementTables()}`;
+}
+
+// ---- Run: the product's APIs and what an engineer on call needs ------------------------------------------------
+let runWindow = Number(localGet("window")) || 3600, runData = null;
+function localGet(k) { try { return localStorage.getItem("standard." + k); } catch { return null; } }
+function localSet(k, v) { try { localStorage.setItem("standard." + k, v); } catch { /* private mode */ } }
+const WINDOWS = [[900, "15 min"], [3600, "1 h"], [86400, "24 h"], [604800, "7 j"]];
+const nf = (v, d = 0) => v == null ? "—" : Number(v).toLocaleString("fr-FR", { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (v, d = 2) => v == null ? "—" : `${nf(v * 100, d)} %`;
+const msf = (v) => v == null ? "—" : v >= 1000 ? `${nf(v / 1000, 2)} s` : `${nf(v, v < 10 ? 1 : 0)} ms`;
+const ROUTE_STATE = { healthy: ["held", "Opérationnelle"], degraded: ["gap", "Dégradée"], failing: ["escalated", "En échec"], idle: ["pending", "Aucun trafic"] };
+
+function spark(values, w = 120, h = 28) {
+  const max = Math.max(...values, 0.0001), step = w / Math.max(values.length - 1, 1);
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><polyline points="${pts}"/></svg>`;
+}
+
+function area(values) {
+  const w = 1000, h = 140, max = Math.max(...values, 0.0001), step = w / Math.max(values.length - 1, 1);
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * (h - 12)).toFixed(1)}`);
+  return `<svg class="area" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Requêtes par seconde sur la période">
+    <polygon points="0,${h} ${pts.join(" ")} ${w},${h}"/><polyline points="${pts.join(" ")}"/></svg>
+    <div class="axis"><span>${WINDOWS.find(([s]) => s === runWindow)?.[1] || ""}</span><span>max ${nf(max, 1)} req/s</span><span>maintenant</span></div>`;
+}
+
+function runView() {
+  return `<div class="runhead"><div><h1>Run</h1>
+      <p class="lede">${esc(state.product)} en production, version <span class="sha">${short(state.main)}</span>.</p></div>
+    <div class="seg" role="group" aria-label="Période">${WINDOWS.map(([s, l]) => `<button data-window="${s}" class="${s === runWindow ? "on" : ""}">${l}</button>`).join("")}</div></div>
+    <div id="run"><p class="quiet">Chargement des métriques</p></div>`;
+}
+
+async function loadRun() {
+  try {
+    const r = await fetch(`/api/run?window=${runWindow}`, { cache: "no-store" });
+    runData = await r.json();
+    if (!r.ok) throw new Error(runData.error);
+  } catch (err) {
+    $("#run").innerHTML = `<div class="note bad">Les métriques sont indisponibles : ${esc(err.message)}</div>`;
+    return;
+  }
+  const d = runData, f = d.fleet, observed = d.routes.filter((r) => r.observed);
+  const total = d.routes.reduce((acc, r) => r.spark.map((v, i) => (acc[i] || 0) + v), []);
+  const budgetTone = f.budget == null ? "" : f.budget < 0 ? "bad" : f.budget < 0.25 ? "warn" : "";
+  const down = d.targets.filter((t) => !t.up);
+  const kpi = (label, value, sub, tone = "") => `<div class="kpi ${tone}"><div class="k">${label}</div><div class="v">${value}</div><div class="s">${sub}</div></div>`;
+  const order = { failing: 0, degraded: 1, healthy: 2, idle: 3 };
+  const routes = [...d.routes].sort((a, b) => order[a.state] - order[b.state] || b.rps - a.rps);
+  $("#run").innerHTML = `
+    ${!d.targets.length ? `<div class="note warn">Aucune source de métriques n'est configurée. Ajoutez dans standard.toml : <span class="sha">[run] metrics = ["http://127.0.0.1:9000/metrics"]</span>.</div>` : ""}
+    ${down.length ? `<div class="note bad">${plural(down.length, "source de métriques ne répond pas", "sources de métriques ne répondent pas")} : ${down.map((t) => esc(t.url)).join(", ")}.</div>` : ""}
+    <div class="kpis">
+      ${kpi("Requêtes", `${nf(f.rps, 1)}<small>/s</small>`, `${nf(f.requests)} sur la période`)}
+      ${kpi("Erreurs", pct(f.error_rate), "réponses 5xx", f.error_rate > 0.01 ? "bad" : "")}
+      ${kpi("Latence p50", msf(f.p50), "médiane")}
+      ${kpi("Latence p95", msf(f.p95), `p99 ${msf(f.p99)}`)}
+      ${kpi("Disponibilité", pct(f.availability, 3), `objectif ${pct(d.slo, 1)}`, f.availability != null && f.availability < d.slo ? "bad" : "")}
+      ${kpi("Budget d'erreur", f.budget == null ? "—" : f.budget < 0 ? "Épuisé" : pct(f.budget, 0),
+        f.budget == null ? "pas de trafic" : f.budget < 0 ? `consommé à ${pct(1 - f.budget, 0)}` : "restant sur la période", budgetTone)}
+    </div>
+    <section class="chart"><h2>Trafic</h2>${area(total.length ? total : [0, 0])}</section>
+    <section><h2>APIs <span class="quiet small">${plural(d.routes.length, "route", "routes")}${d.openapi ? ", déclarées dans openapi.json" : ""}</span></h2>
+      <table class="table api"><colgroup><col style="width:150px"><col style="width:76px"><col><col style="width:136px"><col style="width:86px"><col style="width:86px"><col style="width:80px"><col style="width:80px"><col style="width:80px"><col style="width:96px"></colgroup>
+      <thead><tr><th>État</th><th>Méthode</th><th>Route</th><th>Trafic</th><th class="num">Req/s</th><th class="num">Erreurs</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">Dispo.</th></tr></thead><tbody>
+      ${routes.map((r) => `<tr class="${r.state === "idle" ? "idle" : ""}">
+        <td><span class="state ${ROUTE_STATE[r.state][0]}"><i></i>${ROUTE_STATE[r.state][1]}</span></td>
+        <td><span class="verb ${esc(r.method.toLowerCase())}">${esc(r.method)}</span></td>
+        <td><span class="path">${esc(r.route)}</span>${r.observed && !r.declared && d.openapi ? `<div class="sub">absente d'openapi.json</div>` : ""}</td>
+        <td>${r.observed ? spark(r.spark) : ""}</td>
+        <td class="num">${r.observed ? nf(r.rps, 2) : "—"}</td>
+        <td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
+        <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td>
+        <td class="num">${pct(r.availability, 2)}</td></tr>`).join("")}
+      </tbody></table></section>
     <section class="cols">
-      <div><h2>À traiter par vous</h2>${todo()}</div>
-      <div><h2>Dernières mises en production</h2>${feed(6)}</div>
+      <div><h2>Mises en production</h2>${feed(6)}</div>
+      <div><h2>Sources</h2><div class="rows">${d.targets.map((t) => `<div class="rowi"><div class="main"><span class="sha">${esc(t.url)}</span>
+        <div class="facts">${fact(t.up ? "Répond" : `Ne répond pas : ${t.error}`, t.up ? "ok" : "bad")}${t.at ? fact(`dernière collecte ${ago(t.at * 1000)}`, "") : ""}</div></div></div>`).join("") || `<div class="rowi quiet">Aucune source</div>`}</div>
+        <p class="small quiet" style="margin-top:12px">${observed.length} routes observées. Les métriques sont des informations pour l'équipe : elles n'ouvrent aucun droit.</p></div>
     </section>`;
 }
+
+document.addEventListener("click", (e) => {
+  const w = e.target.closest("[data-window]");
+  if (w) { runWindow = Number(w.dataset.window); localSet("window", runWindow); render(); }
+});
 
 function activity() {
   const repairs = state.run.repairs;
@@ -198,10 +268,8 @@ function fact(text, tone) {
   return `<span class="fact ${tone}"><i></i>${esc(text)}</span>`;
 }
 
-function requirements() {
-  return `<h1>Exigences</h1>
-    <p class="lede">Ce que la loi impose à ce produit, mesuré par des instruments indépendants. On peut durcir une exigence à tout moment ; l'assouplir demande deux personnes et une heure de délai.</p>
-    ${DOMAINS.map(([label, test]) => {
+function requirementTables() {
+  return `${DOMAINS.map(([label, test]) => {
       const rs = state.requirements.filter(test);
       return rs.length ? `<section><h2>${label}</h2><table class="table req"><colgroup><col><col style="width:150px"><col style="width:190px"><col style="width:210px"></colgroup>
         <thead><tr><th>Exigence</th><th>État</th><th>Mesure</th><th>Réparée par</th></tr></thead><tbody>
@@ -302,7 +370,7 @@ document.addEventListener("click", (e) => {
     a.click();
   }
   const cell = e.target.closest("[data-req]");
-  if (cell) location.hash = "#/requirements";
+  if (cell) location.hash = "#/compliance";
 });
 
 // ---- reviewing and signing -----------------------------------------------------------------------------------------
@@ -355,4 +423,4 @@ async function openReview(resource) {
 // ---- start ----------------------------------------------------------------------------------------------------------
 signer = await loadSigner().catch(() => null);
 await refresh();
-setInterval(() => { if (!$("#dlg").open && route() !== "settings") refresh(); }, 10000);
+setInterval(() => { if (!$("#dlg").open && route() !== "settings") refresh(); }, 15000);

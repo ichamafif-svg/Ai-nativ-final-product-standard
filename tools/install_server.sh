@@ -81,6 +81,7 @@ EOF
   DATA=(); [ -s /srv/standard/data.json ] && DATA=(--data /srv/standard/data.json)
   "$PY" tools/ceremony.py init "$INSTALL" --repo "$HOSTING/repos/app.git" --inbox "$HOSTING/inbox/app.git" \
         --pins "$PINS" "${DATA[@]}"
+  printf '\n[run]\nmetrics = ["http://127.0.0.1:9000/metrics"]\nslo = 99.9\n' >> "$INSTALL/standard.toml"
   printf '\n[tests]\ninstall = true\n\n[hosting]\nconfig = "%s"\ngate_user = "standard-gate"\n' \
          "$HOSTING/hosting.toml" >> "$INSTALL/standard.toml"
 
@@ -141,11 +142,16 @@ phase2() {
   unit standard-operator standard-guard "-m trusted serve $INSTALL/standard.toml 30"
   unit standard-agent standard-agent "-m autonomy run $INSTALL/standard.toml 60"
   unit standard-web standard-web "-m surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
+  # DEMO: the demo product's API and steady traffic, so that Run shows real metrics.
+  id standard-demo >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-demo
+  unit standard-demo-service standard-demo "$CODE/demo/service.py 9000"
+  unit standard-demo-load standard-demo "$CODE/tools/demo_load.py http://127.0.0.1:9000 20"
   systemctl daemon-reload
   systemctl enable --now standard-operator
   sleep 5
   systemctl enable --now standard-agent
   systemctl enable --now standard-web
+  systemctl enable --now standard-demo-service standard-demo-load
 
   say "qualification"
   "$PY" tools/qualify.py "$INSTALL/standard.toml" | "$PY" -c \

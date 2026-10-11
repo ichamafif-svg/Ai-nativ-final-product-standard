@@ -72,6 +72,11 @@ class Installation:
         self.grants = {name: {"id": gid, "holder": HOLDERS.get(name)} for name, gid in c["grants"].items()
                        if name in HOLDERS}
         self.product = self.repo.name.removesuffix(".git")
+        run = c.get("run", {})
+        from .telemetry import Telemetry
+        self.telemetry = Telemetry(Path(run.get("store", Path.home() / ".standard" / "telemetry.db")).expanduser(),
+                                   run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100,
+                                   interval=float(run.get("interval", 15)))
         hosted = c.get("hosting", {}).get("config")
         self.products = sorted(_toml(hosted).get("repositories", {})) if hosted else [self.product]
 
@@ -185,6 +190,14 @@ class Installation:
             "signing": {"domain": view["prefix"]["genesis"], "as_of": health["as_of"], "grants": self.grants},
         }
 
+    def run_report(self, window: int) -> dict:
+        """The product in production: its APIs and their metrics, and the latest releases."""
+        openapi = git(self.repo, "show", "main:openapi.json", check=False)
+        from .telemetry import declared_routes
+        report = self.telemetry.report(declared_routes(openapi), window=window)
+        return {**report, "product": self.product, "releases": self.history(8),
+                "openapi": bool(openapi.strip())}
+
     def dossier(self, head: str) -> dict:
         if not SHA.fullmatch(head):
             raise ValueError("a commit is 40 hex characters")
@@ -225,6 +238,12 @@ def handler(inst: Installation):
                     return self._send(200, (STATIC / "app.css").read_bytes(), "text/css; charset=utf-8")
                 if route == "/api/state":
                     return self._ok(inst.state())
+                if route == "/api/run":
+                    query = dict(q.split("=", 1) for q in self.path.partition("?")[2].split("&") if "=" in q)
+                    window = int(query.get("window", 3600))
+                    if not 60 <= window <= 30 * 86400:
+                        raise ValueError("window: 60 s to 30 days")
+                    return self._ok(inst.run_report(window))
                 if route.startswith("/api/dossier/"):
                     return self._ok(inst.dossier(route.rsplit("/", 1)[1]))
                 return self._ok({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -256,6 +275,7 @@ def main(argv=None) -> int:
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)
     inst = Installation(args.config)
+    inst.telemetry.start()
     server = ThreadingHTTPServer((args.bind, args.port), handler(inst))
     print(f"Standard interface on http://{args.bind}:{args.port}", flush=True)
     server.serve_forever()
