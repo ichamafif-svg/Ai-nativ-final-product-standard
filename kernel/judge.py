@@ -497,7 +497,7 @@ class Kernel:
         attested by a chain sharing no holder with the actor's. A fact nobody names cannot crowd out those that matter."""
         s, at, law = c.s, c.at, c.law
         independent = lambda f: not set(f["label"]) & label
-        observed_props = language.named(atoms, "observed")
+        observed_props = language.named(atoms, "observed") | language.named(atoms, "compare")
         open_kinds, closed_kinds = language.named(atoms, "open"), language.named(atoms, "closed_at_least")
         return {
             "request": {**stmt, "author": stmt.get("author"), "resource": resource},

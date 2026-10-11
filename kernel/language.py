@@ -4,6 +4,8 @@
     eq              [path, scalar]           a request field equals a string or integer
     prefix          [path, text]             a request field starts with text
     observed        [property, status, level]  an eligible, independent observation of the request's resource
+    compare         [property, le|ge, bound, level]  the same, whose status is a decimal number at most / at least
+                                             bound (a decimal string or an integer); exact, no floating point
     closed_at_least [obligation, count]      at least count distinct keys closed, fresh, independent
     open            [obligation, path]       an independent, live instance keyed by a request field is open
     related         [relation, left, right]  a closed constitutional relation; $author, $resource, $under bind
@@ -14,10 +16,19 @@ checked for freshness and independence (F0-8); this module never looks for facts
 from __future__ import annotations
 
 import re
+from fractions import Fraction
 
 from .types import PATH, get_path
 
-ATOMS = ("eq", "prefix", "observed", "closed_at_least", "open", "related")
+ATOMS = ("eq", "prefix", "observed", "compare", "closed_at_least", "open", "related")
+NUMBER = re.compile(r"-?[0-9]{1,12}(\.[0-9]{1,6})?")
+
+
+def number(value):
+    """The exact value of a decimal string or an integer, or None: a status that is not a number never compares."""
+    if type(value) is int:
+        return Fraction(value)
+    return Fraction(value) if isinstance(value, str) and NUMBER.fullmatch(value) else None
 RELATIONS = ("role", "holds", "parent", "owns", "type", "state")
 BINDINGS = ("$author", "$resource", "$under")
 NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}")
@@ -40,7 +51,7 @@ def compile_program(program) -> tuple:
         if not isinstance(atom, dict) or len(atom) != 1:
             raise LanguageError("an atom has exactly one operator")
         op, args = next(iter(atom.items()))
-        arity = 3 if op in ("observed", "related") else 2
+        arity = 3 if op in ("observed", "related") else 4 if op == "compare" else 2
         if op not in ATOMS or not isinstance(args, list) or len(args) != arity:
             raise LanguageError(f"unknown atom or arity: {op}")
         if not all(type(a) is int or (isinstance(a, str) and 0 < len(a) <= 128) for a in args):
@@ -49,7 +60,9 @@ def compile_program(program) -> tuple:
             raise LanguageError("eq and prefix read a request field path")
         if op == "prefix" and not isinstance(args[1], str):
             raise LanguageError("prefix compares with text")
-        if op in ("observed", "closed_at_least", "open") and (not isinstance(args[0], str) or not NAME.fullmatch(args[0])):
+        if op == "compare" and (args[1] not in ("le", "ge") or number(args[2]) is None or not isinstance(args[3], str)):
+            raise LanguageError("compare reads property, le or ge, a decimal bound and a level")
+        if op in ("observed", "compare", "closed_at_least", "open") and (not isinstance(args[0], str) or not NAME.fullmatch(args[0])):
             raise LanguageError(f"{op} names a pinned fact kind")
         if op == "observed" and not all(isinstance(a, str) for a in args):
             raise LanguageError("observed names property, status and level")
@@ -86,6 +99,10 @@ def evaluate(atoms, *, request: dict, observations=frozenset(), closed=frozenset
             ok = isinstance(value, str) and value.startswith(args[1])
         elif op == "observed":
             ok = (request.get("resource"), *args) in observations
+        elif op == "compare":
+            bound = number(args[2])
+            ok = any(r == request.get("resource") and p == args[0] and lv == args[3] and (v := number(s)) is not None
+                     and (v <= bound if args[1] == "le" else v >= bound) for r, p, s, lv in observations)
         elif op == "closed_at_least":
             ok = len({key for kind, key in closed if kind == args[0]}) >= args[1]
         elif op == "open":

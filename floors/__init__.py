@@ -59,9 +59,12 @@ INSTRUMENTS = {
     "tests": ("main-suite", "repo:inventory:all", DAY), "regressions": ("floor-probes", "repo:inventory:all", DAY),
     "reproduced": ("recipe-replay", "repo:inventory:all", DAY),
     "acceptance": ("acceptance-suite", "repo:inventory:all", DAY),
-    "contract": ("acceptance-suite", "repo:inventory:all", DAY), "accepted": ("acceptance-suite", "repo:inventory:all", DAY),
+    "contract": ("acceptance-suite", "repo:inventory:all", DAY),
+    "configured": ("rules-diff", "repo:inventory:all", DAY), "accepted": ("acceptance-suite", "repo:inventory:all", DAY),
     **{p: ("production", "run:sources:all", 15 * MINUTE) for p in (
-        "candidate", "deployable", "previous", "regressed", "restartable", "canary_ready", "promotable", "canary_bad")},
+        "candidate", "deployable", "previous", "regressed", "restartable", "canary_ready", "promotable", "canary_bad",
+        # D35: numbers, so that the law itself bounds what the scanner's judgment may open
+        "canary_error_delta", "canary_requests", "canary_baked_min", "breach_age_min", "restarts_last_hour")},
 }
 
 
@@ -105,6 +108,9 @@ FLOORS = {
         # Fast-forward main from `base` to `head`, the agent's implementation of a contracted request (D34).
         "implement": {"args": {"request": "segment", "base": "segment", "head": "segment"},
                       "resource": "repo:feature:{request}/{base}/{head}", "profile": "capability"},
+        # Fast-forward main from `base` to `head`, a change of standard/rules.json an engineer signed (D35).
+        "configure": {"args": {"base": "segment", "head": "segment"}, "resource": "repo:config:rules/{base}/{head}",
+                      "profile": "capability"},
         # Start `to` on a share of traffic beside the live `from` (D32); promoting it is `deploy`.
         "canary": {"args": {"from": "segment", "to": "segment"}, "resource": "run:canary:all/{from}/{to}",
                    "profile": "capability"},
@@ -125,23 +131,36 @@ FLOORS = {
         # Main's head, never rolled back, replaces exactly the live release.
         "deploy-autonomous": {"all": [{"observed": ["deployable", "yes", "real"]}]},
         # The objective broke right after this release went live, and the one it replaced met it.
-        "rollback-autonomous": {"all": [{"observed": ["regressed", "yes", "real"]}]},
+        # D35: the scanner judges with the engineers' settings; the law bounds that judgment from outside, so a fault
+        # in the scanner's code still cannot step back hours after a switch, promote a canary that fails much more
+        # than the live release, or restart in a loop.
+        "rollback-autonomous": {"all": [{"observed": ["regressed", "yes", "real"]},
+                                        {"compare": ["breach_age_min", "le", 240, "real"]}]},
         # The same switches when the engineers keep them for themselves (D31): the scanner's fact that the switch is
         # possible, and an engineer's signed decision on that exact switch.
         "deploy-reviewed": {"all": [{"observed": ["candidate", "yes", "real"]},
                                     {"observed": ["approved", "yes", "real"]}]},
         "rollback-reviewed": {"all": [{"observed": ["previous", "yes", "real"]},
                                       {"observed": ["requested", "yes", "real"]}]},
-        "restart-autonomous": {"all": [{"observed": ["restartable", "yes", "real"]}]},
+        "restart-autonomous": {"all": [{"observed": ["restartable", "yes", "real"]},
+                                       {"compare": ["restarts_last_hour", "le", 11, "real"]}]},
         "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
         "canary-autonomous": {"all": [{"observed": ["canary_ready", "yes", "real"]}]},
+        # D35: the rules file changes from the interface with one signature: the scanner checks the commit changes
+        # only that file, to exactly what an engineer signed, and that main's tests and the floors hold.
+        "configure-signed": {"all": [{"observed": ["configured", "yes", "real"]},
+                                     {"observed": ["tests", "green", "real"]},
+                                     {"observed": ["regressions", "none", "real"]}]},
         # D34: a feature lands only if its signed contract's acceptance tests pass on this exact transition, main's
         # own tests still pass, no floor target got worse, and a person reviewed the code.
         "implement-reviewed": {"all": [{"observed": ["acceptance", "green", "real"]},
                                        {"observed": ["tests", "green", "real"]},
                                        {"observed": ["regressions", "none", "real"]},
                                        {"observed": ["review", "approved", "real"]}]},
-        "deploy-canary": {"all": [{"observed": ["promotable", "yes", "real"]}]},
+        "deploy-canary": {"all": [{"observed": ["promotable", "yes", "real"]},
+                                  {"compare": ["canary_error_delta", "le", "2", "real"]},
+                                  {"compare": ["canary_requests", "ge", 20, "real"]},
+                                  {"compare": ["canary_baked_min", "ge", 1, "real"]}]},
         "abort-autonomous": {"all": [{"observed": ["canary_bad", "yes", "real"]}]},
         "abort-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
     },

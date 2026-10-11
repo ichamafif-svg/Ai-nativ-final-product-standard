@@ -335,3 +335,34 @@ class Debt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Bounds(unittest.TestCase):
+    """D35: the law bounds the scanner's judgment with exact numeric comparisons, restated by the second judge."""
+
+    def test_the_language_compares_decimals_exactly(self):
+        from kernel.language import LanguageError, compile_program, evaluate
+        atoms = compile_program({"all": [{"compare": ["delta", "le", "0.5", "real"]}]})
+        holds = lambda status: evaluate(atoms, request={"resource": "r"}, observations={("r", "delta", status, "real")})
+        self.assertTrue(holds("0.5"))
+        self.assertTrue(holds("-3"))
+        self.assertFalse(holds("0.500001"))
+        self.assertFalse(holds("lots"))                                    # a word never compares
+        self.assertFalse(holds("1e-9"))                                    # nor an exponent
+        for bad in (["delta", "lt", 1, "real"], ["delta", "le", "1.5x", "real"], ["delta", "le", 1]):
+            with self.assertRaises(LanguageError):
+                compile_program({"all": [{"compare": bad}]})
+
+    def test_a_canary_the_scanner_calls_promotable_is_still_bounded_by_the_law(self):
+        L = Ledger()
+        agent = L.grant("agent", ["effect:deploy"], ["run:release:*"], conditions=["deploy-canary"])
+        scanner = L.grant("scanner", ["observe", "certify:real"], ["run:*"])
+        A, B = "a" * 40, "b" * 40
+        resource = f"run:release:all/{A}/{B}"
+        for prop, status in (("promotable", "yes"), ("canary_error_delta", "4.08"), ("canary_requests", "500"),
+                             ("canary_baked_min", "10")):
+            L.measure("scanner", scanner, resource, prop, status)
+        self.assertEqual(L.refused("intent", "agent", under=agent, op="deploy", args={"from": A, "to": B}),
+                         "CAP.CONDITION")                                  # 4.08 points worse: over the bound
+        L.measure("scanner", scanner, resource, "canary_error_delta", "0.120")
+        L.submit("intent", "agent", under=agent, op="deploy", args={"from": A, "to": B})

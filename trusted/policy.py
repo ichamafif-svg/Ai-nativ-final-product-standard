@@ -1,8 +1,10 @@
-"""T06 — the engineers' settings for production (D31, D32): objectives, SLOs, alerting, release policy, probes.
+"""T06 — the engineers' settings for production (D31, D32, D35): objectives, SLOs, alerting, release policy, probes.
 
-A setting is a statement an engineer signs in the browser and the kernel admits: an observation on
-`run:policy/<scope>/<key>` whose status is the value. The journal keeps who set what and when. Only the holders of the
-`engineer` grant are read; anything else on these resources is ignored.
+The settings live in the product's repository, in standard/rules.json on main (D35): they change like code, by a
+reviewed contribution, or from the interface with one signature (an engineer signs the new file's digest, the agent
+commits exactly that file, the law lands it). Git keeps the history for engineers, the journal the proof. Silences
+alone are statements an engineer signs in the browser (`run:policy/m-<id>/<key>`): a maintenance cannot wait for a
+review, and they change no signed fact.
 
 A setting that makes Standard stricter (a higher objective, a lower latency limit, less autonomy, a smaller canary, one
 more probe or SLO) applies at once. A setting that loosens it applies only after the law's witnessed delay, like any
@@ -155,41 +157,87 @@ class Policy:
         self.seen = saved.get("seen", {})                 # "scope/key" -> id of the last statement read
         self.history = saved.get("history", [])
 
-    def update(self, observations: dict, authors: set, now_ms: int) -> None:
+    def _set(self, name: str, raw, at: int, author: str) -> None:
+        """One change, from the rules file or a signed statement: stricter at once, looser after the delay.
+        raw None removes the setting (back to the global value or the default)."""
+        scope, key = name.split("/", 1)
+        try:
+            value = None if raw is None else parse(key, str(raw))
+        except (ValueError, KeyError) as exc:
+            self.history.append({"at": at, "author": author, "setting": name, "value": raw,
+                                 "outcome": f"ignored: {exc}"})
+            return
+        old = self.effective.get(name)
+        if old is None and key in ("objective", "p99_ms"):  # an override is compared with what it overrides
+            old = self.get(key)
+        elif old is None and scope == "global":
+            old = self.defaults[key]
+        if value is None and key in ("objective", "p99_ms"):    # back to the global value: compared with it
+            tighter = stricter(key, old, self.get(key))
+        elif value is None:                                     # a probe, an SLO setting removed: holds less
+            tighter = None if SCHEMA[key][2] is None else False
+        else:
+            tighter = stricter(key, old, value)
+        if tighter is not False:
+            if value is None:
+                self.effective.pop(name, None)
+            else:
+                self.effective[name] = value
+            self.pending.pop(name, None)
+            outcome = "applied"
+        else:
+            self.pending[name] = {"value": value, "at": at, "author": author, "applies_at": at + self.delay_ms}
+            outcome = "pending"
+        self.history.append({"at": at, "author": author, "setting": name,
+                             "value": "(retiré)" if value is None else value, "outcome": outcome})
+
+    def apply_document(self, doc: dict, at: int, author: str) -> None:
+        """D35: the rules file on main (standard/rules.json) is the source of every setting but silences. What it
+        changes since the last main read is applied like any change; what it no longer names goes back to default."""
+        flat = {}
+        for k, v in (doc.get("global") or {}).items():
+            if k in SCOPES["global"]:
+                flat[f"global/{k}"] = v
+        for part, prefix in (("components", "c"), ("slos", "s"), ("probes", "p")):
+            for scope, keys in (doc.get(part) or {}).items():
+                if RESOURCE.fullmatch(f"run:policy/{scope}/x") and scope.startswith(prefix + "-") and isinstance(keys, dict):
+                    flat.update({f"{scope}/{k}": v for k, v in keys.items() if k in SCOPES[prefix]})
+        for name, value in flat.items():
+            current = self.pending.get(name, {}).get("value", self.effective.get(name, self.defaults.get(
+                name.split("/", 1)[1]) if name.startswith("global/") else None))
+            if str(value) != str(current):
+                self._set(name, value, at, author)
+        for name in list(self.effective):
+            if not name.startswith("m-") and name not in flat:
+                if name.startswith("global/"):
+                    key = name.split("/", 1)[1]
+                    if str(self.effective[name]) != str(self.defaults[key]):
+                        self._set(name, self.defaults[key], at, author)
+                else:
+                    self._set(name, None, at, author)
+
+    def update(self, observations: dict, authors: set, now_ms: int, document=None) -> None:
+        """Silences from the journal (signed statements, applied at once), the rules file from main if given
+        (document, at, author), then the loosenings whose delay has passed."""
+        if document is not None and document[2] != self.seen.get("rules"):
+            doc, at, label = document
+            self.seen["rules"] = label
+            self.apply_document(doc, at, label)
         for o in sorted(observations.values(), key=lambda o: o["at"]):
             m = RESOURCE.fullmatch(o["resource"])
-            if not m or o["property"] != "value" or o["author"] not in authors:
+            if not m or o["property"] != "value" or o["author"] not in authors or not m[1].startswith("m-"):
                 continue
-            scope, key = m[1], m[2]
-            name = f"{scope}/{key}"
-            if self.seen.get(name) == o["id"] or key not in SCOPES[scope if scope == "global" else scope[0]]:
+            name = f"{m[1]}/{m[2]}"
+            if self.seen.get(name) == o["id"] or m[2] not in SCOPES["m"]:
                 continue
             self.seen[name] = o["id"]
-            try:
-                value = parse(key, o["status"])
-            except (ValueError, KeyError) as exc:
-                self.history.append({"at": o["at"], "author": o["author"], "setting": name, "value": o["status"],
-                                     "outcome": f"ignored: {exc}"})
-                continue
-            old = self.effective.get(name)
-            if old is None and key in ("objective", "p99_ms"):  # an override is compared with what it overrides
-                old = self.get(key)
-            elif old is None and scope == "global":
-                old = self.defaults[key]
-            tighter = stricter(key, old, value)
-            if tighter is not False:
-                self.effective[name] = value
-                self.pending.pop(name, None)
-                outcome = "applied"
-            else:
-                self.pending[name] = {"value": value, "at": o["at"], "author": o["author"],
-                                      "applies_at": o["at"] + self.delay_ms}
-                outcome = "pending"
-            self.history.append({"at": o["at"], "author": o["author"], "setting": name, "value": value,
-                                 "outcome": outcome})
+            self._set(name, o["status"], o["at"], o["author"])
         for name, p in list(self.pending.items()):
             if now_ms >= p["applies_at"]:
-                self.effective[name] = p["value"]
+                if p["value"] is None:
+                    self.effective.pop(name, None)
+                else:
+                    self.effective[name] = p["value"]
                 del self.pending[name]
         self.history = self.history[-200:]
         if self.path is not None:

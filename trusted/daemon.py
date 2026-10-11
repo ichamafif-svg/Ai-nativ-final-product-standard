@@ -108,7 +108,9 @@ class Installation:
                                        anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
                                        inbox=resolve(repo["inbox"]) if repo.get("inbox") else None,
                                        findings=self.path.parent / "findings.json",
-                                       requests=resolve(c.get("build", {}).get("store", "requests")))
+                                       requests=resolve(c.get("build", {}).get("store", "requests")),
+                                       engineers=lambda: {g["holder"] for gid, g in self.journal.snapshot()["grants"].items()
+                                                          if gid == grants.get("engineer")})
         self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
                              releases=self.releases)
         engineer = grants.get("engineer")

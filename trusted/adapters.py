@@ -51,7 +51,7 @@ class GitRepository:
 
 def applied(it: dict, repository, releases=None) -> bool:
     """main contains the head (remediate, integrate), or production serves `to` or restarted (D31)."""
-    if it["op"] in ("remediate", "integrate", "implement"):
+    if it["op"] in ("remediate", "integrate", "implement", "configure"):
         return repository.applied(it["args"]["head"])
     return it["op"] in ("deploy", "rollback", "restart") and releases is not None and releases.applied(it)
 

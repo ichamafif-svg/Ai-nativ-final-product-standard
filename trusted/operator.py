@@ -5,6 +5,7 @@ statements through the same journal and service as anyone else: nothing here byp
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -17,7 +18,8 @@ from .data import EMPTY
 from .recipes import recipes_for
 from .signing import Signer, envelope
 
-MAIN_OPS = ("remediate", "integrate", "implement")                 # the operations that move main, by the same compare-and-swap
+MAIN_OPS = ("remediate", "integrate", "implement", "configure")                 # the operations that move main, by the same compare-and-swap
+RULES, RULES_TRAILER = "standard/rules.json", re.compile(r"(?m)^Standard-Rules: (sha256:[0-9a-f]{64})$")
 AUTHOR = re.compile(r"refs/heads/([a-z0-9][a-z0-9_-]{0,63})/[^\s]+")
 REMEASURE_MS = 12 * 3_600_000
 
@@ -30,9 +32,11 @@ class Instruments:
     signed human review."""
 
     def __init__(self, service, instrument: instruments.Instrument, repo, proposals, *, data=EMPTY, world=None,
-                 anchor: str | None = None, install: bool = False, inbox=None, findings=None, requests=None):
+                 anchor: str | None = None, install: bool = False, inbox=None, findings=None, requests=None,
+                 engineers=lambda: set()):
         self.service, self.instrument, self.repo, self.proposals = service, instrument, Path(repo), Path(proposals)
         self.requests, self.cache = requests, {}            # D34: the request store; measures per (commit, contract)
+        self.engineers = engineers                          # D35: who may sign a change of the rules file
         self.inbox, self.measured, self.findings_path = inbox, {}, findings
         self.data, self.world, self.install = data, world, install
         clock = instrument.clock                          # statements never fall behind the ledger's last instant
@@ -68,6 +72,10 @@ class Instruments:
             if parents[1:] != [main]:
                 continue                                    # only transitions from the current main are measured
             head = instruments.git(self.repo, "rev-parse", ref).strip()
+            signed = RULES_TRAILER.search(instruments.git(self.repo, "log", "-1", "--format=%B", head))
+            if signed is not None:                          # D35: a change of the rules file
+                admitted += self.configure(domain, main, head, signed[1], targets)
+                continue
             rid = build.claimed(self.repo, head)
             if rid is not None:                             # D34: an implementation of a contracted request
                 admitted += self.feature(domain, main, head, rid, targets)
@@ -120,6 +128,35 @@ class Instruments:
             "regressions": self._once((main, head, "regressions"), lambda: instruments.regressions(
                 self.repo, main, head, targets, {"data": self.data}, frozenset(recipes_for(self.data)))),
         }
+        admitted = 0
+        for prop, (status, details) in facts.items():
+            self.instrument.findings[f"{resource}|{prop}"] = {"status": status, "details": details}
+            admitted += self._admit(self.instrument.observation(domain, resource, prop, status))
+        return admitted
+
+    def configure(self, domain: str, main: str, head: str, digest: str, targets: dict) -> int:
+        """`configured`, tests and regressions on repo:config:rules/{main}/{head}: yes only if the commit changes
+        standard/rules.json alone, to bytes whose digest an engineer signed for this very main."""
+        resource = f"repo:config:rules/{main}/{head}"
+        changed = instruments.git(self.repo, "diff", "--name-only", main, head).split()
+        content = subprocess.run(["git", "-C", str(self.repo), "cat-file", "blob", f"{head}:{RULES}"],
+                                 capture_output=True, timeout=60).stdout
+        signers = self.engineers()
+        signed = any(o["resource"] == f"repo:config:rules/{main}" and o["property"] == "rules"
+                     and o["status"] == digest and o["author"] in signers
+                     for o in self.service.journal.snapshot()["observations"].values())
+        why = [] if changed == [RULES] else [f"changes {changed}, not only {RULES}"]
+        why += [] if "sha256:" + hashlib.sha256(content).hexdigest() == digest else ["content differs from the signed digest"]
+        why += [] if signed else ["no engineer signed this digest for this main"]
+        try:
+            json.loads(content)
+        except ValueError:
+            why.append(f"{RULES} is not JSON")
+        facts = {"configured": ("no" if why else "yes", why),
+                 "tests": self._once((main, head, "tests"),
+                                     lambda: instruments.tests_report(self.repo, main, head, install=self.install)),
+                 "regressions": self._once((main, head, "regressions"), lambda: instruments.regressions(
+                     self.repo, main, head, targets, {"data": self.data}, frozenset(recipes_for(self.data))))}
         admitted = 0
         for prop, (status, details) in facts.items():
             self.instrument.findings[f"{resource}|{prop}"] = {"status": status, "details": details}

@@ -388,10 +388,14 @@ def _canary(live: str, release: str, history: list, now_ms: int, get, canary_sta
             f"canary p99 {c['p99']:.0f} ms over {limit:.0f} ms"
     if baked < get("canary_bake_min") or c["requests"] < need:
         return [], f"canary baking: {baked}/{get('canary_bake_min')} min, {c['requests']}/{need} requests, no worse so far"
-    return [(f"run:release:all/{live}/{release}", "promotable", "yes")], \
+    numbers = [(f"run:release:all/{live}/{release}", "canary_error_delta", f"{delta * 100:.3f}"),
+               (f"run:release:all/{live}/{release}", "canary_requests", str(int(c["requests"]))),
+               (f"run:release:all/{live}/{release}", "canary_baked_min", str(int(baked)))]
+    return [(f"run:release:all/{live}/{release}", "promotable", "yes"), *numbers], \
         f"canary held {baked} min on {c['requests']} requests, {delta * 100:+.2f} points of errors: promoted"
 
 
+RULES = "standard/rules.json"      # D35: the engineers' settings, in the product's repository
 START_GRACE_MS = 90_000      # a release that does not answer this long after its switch never started
 
 
@@ -463,14 +467,16 @@ def release_facts(slo: str, live: str | None, main: str, history: list, good: se
             elif get("auto_rollback") != "on":
                 why["rollback"] = "automatic rollback is off: an engineer decides"
             elif not_started:
-                facts.append((f"run:service:all/{live}/{prev}", "regressed", "yes"))
+                facts += [(f"run:service:all/{live}/{prev}", "regressed", "yes"),
+                          (f"run:service:all/{live}/{prev}", "breach_age_min", str(age // 60_000))]
                 why["rollback"] = f"{live[:7]} never answered: {served[:7]} still serves"
             elif prev not in good:
                 why["rollback"] = "no earlier release is known to have met the objective"
             elif age > get("rollback_horizon_min") * 60_000:
                 why["rollback"] = f"live for {age // 60_000} min before the breach: not attributable to the switch"
             else:
-                facts.append((f"run:service:all/{live}/{prev}", "regressed", "yes"))
+                facts += [(f"run:service:all/{live}/{prev}", "regressed", "yes"),
+                          (f"run:service:all/{live}/{prev}", "breach_age_min", str(age // 60_000))]
     if live and slo.startswith("breached") and not any(p == "regressed" for _, p, _ in facts):
         restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == live]
         recent = [h for h in restarts if now_ms - h["at"] < 3_600_000]
@@ -481,7 +487,8 @@ def release_facts(slo: str, live: str | None, main: str, history: list, good: se
         elif len(recent) >= get("restarts_per_hour"):
             why["restart"] = f"{len(recent)} restarts in the last hour: the budget is spent, people decide"
         else:
-            facts.append((f"run:process:all/{live}/{len(restarts) + 1}", "restartable", "yes"))
+            facts += [(f"run:process:all/{live}/{len(restarts) + 1}", "restartable", "yes"),
+                      (f"run:process:all/{live}/{len(restarts) + 1}", "restarts_last_hour", str(len(recent)))]
     return facts, why
 
 
@@ -502,8 +509,17 @@ class Pass:
 
     def measure(self) -> dict:
         now = self.instrument.clock()
-        if self.policy is not None:
-            self.policy.update(self.service.journal.snapshot()["observations"], self.authors(), now)
+        if self.policy is not None:                         # D35: the rules file on main, and signed silences
+            main = self._main()
+            shown = subprocess.run(["git", "-C", str(self.repo), "show", f"{main}:{RULES}"], capture_output=True,
+                                   timeout=60)
+            try:
+                doc = json.loads(shown.stdout) if shown.returncode == 0 else {}
+            except ValueError:
+                doc = {}
+                self.instrument.findings["run:rules"] = {"status": "invalid", "details": [f"{RULES} is not JSON"]}
+            self.policy.update(self.service.journal.snapshot()["observations"], self.authors(), now,
+                               document=(doc if isinstance(doc, dict) else {}, now, f"main@{main[:12]}"))
         domain = self.service.view()["prefix"]["genesis"]
         link = self.releases.current() if self.releases else None
         served = self.production.served()

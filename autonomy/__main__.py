@@ -71,6 +71,13 @@ def build(config_path) -> tuple[Cycle, callable]:
     switches = {name: gid for name, gid in c["grants"].items()
                 if name.startswith(("agent_deploy", "agent_rollback", "agent_restart", "agent_canary",
                                     "agent_promote", "agent_abort"))}
+    if "agent_configure" in c["grants"]:                  # D35: commit the rules an engineer signed
+        from .rules import Configurer
+        configurer = Configurer(cycle.service, signer, c["grants"]["agent_configure"], store,
+                                resolve(c.get("build", {}).get("store", "requests")), main=main,
+                                clock=lambda: cycle.clock(), notes=store.parent / "rules.json")
+        run_rules = cycle.run
+        cycle.run = lambda mode="RUN": {**run_rules(mode), "rules": configurer.run()}
     if "agent_implement" in c["grants"]:                  # D34: build what contracted requests ask for
         from .build import Builder
         builder = Builder(cycle.service, signer, {k: c["grants"][k] for k in ("agent_implement", "agent_deliver")

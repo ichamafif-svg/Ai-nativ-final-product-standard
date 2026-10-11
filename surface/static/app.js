@@ -563,7 +563,8 @@ const ZONES = ["UTC", "Europe/Paris", "Europe/London", "Europe/Berlin", "America
 let settingsData = null, objTab = localGet("objtab") || "slos";
 function objectivesView() {
   return `<h1>Objectifs et règles</h1><p class="lede">Ce que la production doit tenir, comment on est prévenu et ce que Standard a le droit d'y faire seul.
-    Chaque réglage est une signature de votre navigateur, gardée au journal. <b>Plus strict : appliqué tout de suite. Plus souple : appliqué après le délai de la loi.</b></p>
+    Tout vit dans <span class="sha">standard/rules.json</span>, dans le dépôt : chaque changement fait ici est ce fichier, signé une fois, commité par l'agent et intégré par la loi.
+    <b>Plus strict : appliqué dès l'intégration. Plus souple : après le délai de la loi.</b></p>
     <div class="tabs" role="tablist">${TABS.map(([id, label]) => `<button role="tab" data-objtab="${id}" aria-selected="${id === objTab}">${label}</button>`).join("")}</div>
     <div id="obj"><p class="quiet">Chargement</p></div>`;
 }
@@ -690,7 +691,7 @@ async function loadObjectives() {
           <select id="md" ${dis}><option value="30">30 min</option><option value="60" selected>1 h</option><option value="240">4 h</option><option value="1440">24 h</option></select>
           <input class="num" id="mr" type="text" placeholder="raison" ${dis}><button class="btn primary" id="madd" ${dis}>Silencer</button></div><div class="sp"></div></div></div>`;
     },
-    code: () => `<p class="small quiet">Toutes les règles en vigueur, en un document. Modifiez-le, comparez, puis signez les changements un par un : chacun suit la même loi (plus strict tout de suite, plus souple après le délai).</p>
+    code: () => `<p class="small quiet">Le fichier <span class="sha">standard/rules.json</span> de la branche principale${s.rules_file ? "" : " (pas encore créé : les valeurs par défaut s'appliquent)"}. Modifiez-le ici et signez-le une fois, ou changez-le par une contribution relue, comme du code. Les silences n'y figurent pas : ils sont signés à part.</p>
       <textarea id="code" spellcheck="false" ${dis}>${esc(JSON.stringify(p.document, null, 2))}</textarea>
       <div class="decide"><button class="btn" id="codediff" ${dis}>Comparer</button><a class="btn" id="codedl" download="standard-rules.json" href="data:application/json,${encodeURIComponent(JSON.stringify(p.document, null, 2))}">Télécharger</a></div><div id="diff"></div>`,
     history: () => `<div class="rows">${p.history.map((h) => `<div class="rowi"><div class="main"><b>${esc(label(h.setting, h.value))}</b>
@@ -710,19 +711,47 @@ async function loadObjectives() {
         ${!fresh ? `<button class="btn danger" data-sloff="${sid}" ${dis}>Retirer</button>` : ""}</div><div class="preview" id="pv-${sid}"></div></div>`;
   }
 
-  $("#obj").innerHTML = `${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour modifier ces règles.</div>`
+  $("#obj").innerHTML = `${(s.rules_landing || []).filter((x) => x.state !== "admitted").map((x) => `<div class="note warn">Changement de règles signé, en cours d'intégration : ${esc(x.state || "commit en préparation")}</div>`).join("")}
+    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour modifier ces règles.</div>`
       : !can ? `<div class="note warn">Seul ${esc(s.signing.grant?.holder || "l'ingénieur habilité")} peut modifier ces règles.</div>` : ""}
     ${tabs[objTab]()}<p id="objmsg" class="small quiet"></p>`;
   document.querySelectorAll("[data-objtab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.objtab === objTab)));
 
   const at = () => Math.max(Date.now(), s.signing.as_of + 1);
-  const set = async (resource, status, el) => {
-    $("#objmsg").textContent = "Signature dans ce navigateur";
+  // D35: every rule lives in standard/rules.json on main. A change here is the whole new file, stored by digest and
+  // signed once; the agent commits exactly that file and the law lands it after the scanner's checks. Silences
+  // alone are signed statements, applied at once.
+  const signRules = async (doc, el) => {
+    $("#objmsg").textContent = "Signature du nouveau standard/rules.json dans ce navigateur";
     try {
-      await signFact(s.signing.domain, at(), s.signing.grant, `run:policy/${resource}`, "value", status);
-      $("#objmsg").textContent = "Signé. Le scanner l'applique à son prochain passage.";
+      const r = await fetch("/api/rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ document: doc }) });
+      const stored = await r.json();
+      if (!r.ok) throw new Error(stored.error);
+      await signFact(s.signing.domain, at(), s.signing.grant, `repo:config:rules/${stored.base}`, "rules", stored.digest);
+      $("#objmsg").textContent = "Signé. L'agent commit standard/rules.json, la loi l'intègre après les mesures (tests, aucun écart).";
       return true;
-    } catch (err) { $("#objmsg").textContent = `Refusé par le noyau : ${err.message}`; if (el) el.disabled = false; return false; }
+    } catch (err) { $("#objmsg").textContent = `Refusé : ${err.message}`; if (el) el.disabled = false; return false; }
+  };
+  const draft = () => { const d = JSON.parse(JSON.stringify(p.document)); delete d.silences; return d; };
+  const put = (doc, name, status) => {
+    const [scope, key] = name.split("/"), num = Number(status);
+    const value = status === null ? null : status !== "" && !Number.isNaN(num) && !["deploy_hours", "base_url", "name", "spec", "selector", "deploy_days"].includes(key) ? num : status;
+    if (scope === "global") { doc.global[key] = value; return doc; }
+    const part = { c: "components", s: "slos", p: "probes" }[scope[0]];
+    doc[part] ||= {};
+    if (value === null) { if (doc[part][scope]) delete doc[part][scope][key]; } else (doc[part][scope] ||= {})[key] = value;
+    return doc;
+  };
+  const set = async (name, status, el) => {
+    if (name.startsWith("m-")) {
+      $("#objmsg").textContent = "Signature dans ce navigateur";
+      try {
+        await signFact(s.signing.domain, at(), s.signing.grant, `run:policy/${name}`, "value", status);
+        $("#objmsg").textContent = "Signé. Appliqué au prochain passage du scanner.";
+        return true;
+      } catch (err) { $("#objmsg").textContent = `Refusé par le noyau : ${err.message}`; if (el) el.disabled = false; return false; }
+    }
+    return signRules(put(draft(), name, status), el);
   };
   const reload = () => setTimeout(loadObjectives, 1500);
   document.querySelectorAll("[data-save]").forEach((b) => b.onclick = async () => {
@@ -735,11 +764,12 @@ async function loadObjectives() {
   });
   document.querySelectorAll("[data-savecomp]").forEach((b) => b.onclick = async () => {
     b.disabled = true;
+    const doc = draft();
     for (const key of ["objective", "p99_ms"]) {
       const input = document.querySelector(`[data-set="${b.dataset.savecomp}/${key}"]`);
-      if (input.value.trim()) await set(`${b.dataset.savecomp}/${key}`, input.value.trim(), b);
+      put(doc, `${b.dataset.savecomp}/${key}`, input.value.trim() || null);
     }
-    reload();
+    if (await signRules(doc, b)) reload();
   });
   document.querySelectorAll("[data-probe-off]").forEach((b) => b.onclick = async () => { b.disabled = true; if (await set(`${b.dataset.probeOff}/spec`, "off", b)) reload(); });
   $("#padd")?.addEventListener("click", async () => {
@@ -767,8 +797,9 @@ async function loadObjectives() {
     const sid = b.dataset.saveslo, v = sloValues(sid), old = (p.slos || {})[sid] || {};
     b.disabled = true;
     const keys = ["target", "sli", "threshold_ms", "window_d", "selector", "name"].filter((k) => v[k] !== "" && String(v[k]) !== String(old[k] ?? ""));
-    for (const k of keys) if (!await set(`${sid}/${k}`, v[k], b)) return;
-    reload();
+    const doc = draft();
+    for (const k of keys) put(doc, `${sid}/${k}`, v[k]);
+    if (keys.length && await signRules(doc, b)) reload();
   });
   document.querySelectorAll("[data-sloff]").forEach((b) => b.onclick = async () => { b.disabled = true; if (await set(`${b.dataset.sloff}/state`, "off", b)) reload(); });
   $("#madd")?.addEventListener("click", async () => {
@@ -804,11 +835,12 @@ async function loadObjectives() {
       const w = way(k.split("/")[1], before[k], v);
       return `<div class="rowi"><div class="main"><span class="sha">${esc(k)}</span> <span class="del">${esc(String(before[k] ?? "—"))}</span> → <span class="add">${esc(String(v))}</span>
         <div class="facts">${fact(w === "plus souple" ? `plus souple : appliqué dans ${Math.round(p.delay_ms / 60000)} min` : w === "neutre" ? "appliqué tout de suite" : "plus strict : appliqué tout de suite", w === "plus souple" ? "wait" : "ok")}</div></div></div>`; }).join("")}</div>
-      <div class="decide"><button class="btn primary" id="codesign">Signer ${changes.length} changement${changes.length > 1 ? "s" : ""}</button></div>`;
+      <div class="decide"><button class="btn primary" id="codesign">Signer ce fichier (${changes.length} changement${changes.length > 1 ? "s" : ""})</button>
+        <span class="small quiet">Une signature : l'agent commit le fichier, la loi l'intègre après les mesures.</span></div>`;
     $("#codesign").onclick = async () => {
       $("#codesign").disabled = true;
-      for (const [k, v] of changes) if (!await set(k, String(v))) return;
-      reload();
+      delete doc.silences;
+      if (await signRules(doc, $("#codesign"))) reload();
     };
   });
 }

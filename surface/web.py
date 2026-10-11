@@ -213,6 +213,19 @@ class Installation:
                         "agent": notes.get(rid, {}).get("state"), "features": features})
         return out
 
+    def store_rules(self, body: dict) -> dict:
+        """D35: keep a new standard/rules.json by digest, as the bytes the agent will commit; the engineer signs it."""
+        import hashlib
+        doc = body.get("document")
+        if not isinstance(doc, dict):
+            raise ValueError("a rules document is a JSON object")
+        doc = {k: v for k, v in doc.items() if k in ("global", "components", "slos", "probes")}
+        data = (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()
+        digest = hashlib.sha256(data).hexdigest()
+        self.requests.mkdir(parents=True, exist_ok=True)
+        (self.requests / digest).write_bytes(data)
+        return {"digest": f"sha256:{digest}", "base": git(self.repo, "rev-parse", "main").strip()}
+
     def store_request(self, body: dict) -> dict:
         """Keep a request's specification and contract by digest; the person then signs the digests."""
         import hashlib
@@ -403,7 +416,12 @@ class Installation:
         components = [{k: r.get(k) for k in ("id", "kind", "operation", "name", "state", "availability", "p99",
                                              "counted")} for rows in report["components"].values() for r in rows
                       if r.get("id")]
-        return {"policy": findings.get("run:policy", {}).get("details") if policy else None, "components": components,
+        main = git(self.repo, "rev-parse", "main").strip()
+        notes = _json(self.request_notes.with_name("rules.json"))
+        landing = [{"digest": k.split("/", 1)[1], **v} for k, v in notes.items() if k.startswith(main + "/")]
+        return {"main": main, "rules_landing": landing,
+                "rules_file": bool(git(self.repo, "ls-tree", "--name-only", "main", "standard/rules.json", check=False).strip()),
+                "policy": findings.get("run:policy", {}).get("details") if policy else None, "components": components,
                 "slos": findings.get("run:slos", {}).get("details", {}),
                 "probes": findings.get("run:probes", {}).get("details", []), "configured": self.deploy_root is not None,
                 "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
@@ -598,16 +616,17 @@ def handler(inst: Installation):
                 return self._ok({"error": f"{type(exc).__name__}: {exc}"[:400]}, HTTPStatus.SERVICE_UNAVAILABLE)
 
         def do_POST(self):
-            if self.path not in ("/api/admit", "/api/requests"):
+            if self.path not in ("/api/admit", "/api/requests", "/api/rules"):
                 return self._ok({"error": "not found"}, HTTPStatus.NOT_FOUND)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self._ok({"error": "application/json only"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
             size = int(self.headers.get("Content-Length") or 0)
             if not 0 < size <= MAX_BODY:
                 return self._ok({"error": "bad length"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-            if self.path == "/api/requests":                   # D34: store, nothing signed or admitted here
+            if self.path in ("/api/requests", "/api/rules"):   # D34, D35: store, nothing signed or admitted here
                 try:
-                    return self._ok(inst.store_request(json.loads(self.rfile.read(size))))
+                    body = json.loads(self.rfile.read(size))
+                    return self._ok(inst.store_request(body) if self.path == "/api/requests" else inst.store_rules(body))
                 except (ValueError, OSError) as exc:
                     return self._ok({"error": str(exc)[:300]}, HTTPStatus.BAD_REQUEST)
             try:

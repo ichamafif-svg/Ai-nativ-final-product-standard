@@ -53,6 +53,7 @@ GRANTS = {
     "agent_canary": ("agent", ["effect:canary"], ["run:canary:*"], ["canary-autonomous"]),
     # D34: the agent implements contracted requests (always reviewed) and records their delivery.
     "agent_implement": ("agent", ["effect:implement"], ["repo:feature:*"], ["implement-reviewed"]),
+    "agent_configure": ("agent", ["effect:configure"], ["repo:config:*"], ["configure-signed"]),
     "agent_deliver": ("agent", ["transition:request:deliver"], ["build:request/*"], []),
     # The product owner writes requests and signs their contracts; the reviewer (h3) reviews the code.
     "product": ("h1", ["register:request", "transition:request:contract", "transition:request:withdraw"],
@@ -62,7 +63,7 @@ GRANTS = {
     "agent_abort_reviewed": ("agent", ["effect:abort"], ["run:canary:*"], ["abort-reviewed"]),
     # D31: the engineer sets production's objectives and limits, and decides switches Standard does not take alone.
     "engineer": ("h1", ["observe", "certify:real"], ["run:policy/*", "run:release:*", "run:service:*", "run:process:*",
-                                                   "run:canary:*"], []),
+                                                   "run:canary:*", "repo:config:*"], []),
     "agent_recipe": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-autonomous"]),
     "agent_review": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"]),
     "agent_integrate": ("agent", ["effect:integrate"], ["repo:contrib:*"], ["integrate-reviewed"]),

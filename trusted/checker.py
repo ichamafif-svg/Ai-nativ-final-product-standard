@@ -17,6 +17,8 @@ import base64
 import copy
 import hashlib
 import json
+import re
+from fractions import Fraction
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -80,6 +82,14 @@ def _field(body, path):
     for part in path.split("."):
         value = value.get(part) if isinstance(value, dict) else None
     return value if isinstance(value, (str, int)) and type(value) is not bool else None
+
+
+def _number(value):
+    if type(value) is int:
+        return Fraction(value)
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]{1,12}(\.[0-9]{1,6})?", value):
+        return Fraction(value)
+    return None
 
 
 def _live(ob, at) -> bool:
@@ -441,6 +451,13 @@ class Checker:
                 ok = any((o["resource"], o["property"], o["status"], o["level"]) == (request["resource"], *args)
                          and self._eligible(pre, o, at) and not label & set(o["label"])
                          for o in pre["observations"].values())
+            elif op == "compare":                       # D35: decimal bounds, restated with exact arithmetic
+                bound = _number(args[2])
+                ok = bound is not None and any(
+                    (o["resource"], o["property"], o["level"]) == (request["resource"], args[0], args[3])
+                    and (v := _number(o["status"])) is not None and (v <= bound if args[1] == "le" else v >= bound)
+                    and self._eligible(pre, o, at) and not label & set(o["label"])
+                    for o in pre["observations"].values())
             elif op == "open":
                 value = _field(request, args[1])
                 ok = value is not None and any(

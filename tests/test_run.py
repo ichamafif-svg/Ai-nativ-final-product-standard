@@ -1,6 +1,8 @@
 """Production (D30): the scanner proves the service from its metrics, the agent deploys main and rolls back a release
 that broke the objective, and a release rolled back is never deployed again: that gap goes to people."""
 import argparse
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -138,6 +140,22 @@ class Facts(unittest.TestCase):
         self.assertEqual(assessed["components"][0]["why"]["rule"], "error_rate")
 
 
+def change(policy, name, value, at):
+    """A change of standard/rules.json on main (D35): the policy reads the whole file as main has it."""
+    doc = policy.document()
+    scope, key = name.split("/", 1)
+    if scope == "global":
+        doc["global"][key] = value
+    else:
+        part = {"c": "components", "s": "slos", "p": "probes"}[scope[0]]
+        doc[part].setdefault(scope, {})[key] = value
+    for scoped, pending in policy.pending.items():          # the file holds what was written, pending or not
+        s, k = scoped.split("/", 1)
+        if s == "global":
+            doc["global"].setdefault(k, pending["value"])
+    policy.update({}, set(), at, document=(doc, at, f"main@{at}"))
+
+
 class Settings(unittest.TestCase):
     """What engineers set: stricter applies at once, looser after the law's delay; only the engineer is read."""
 
@@ -149,41 +167,41 @@ class Settings(unittest.TestCase):
 
     def test_stricter_at_once_looser_after_the_delay(self):
         policy = Policy(60_000)
-        policy.update(self.statement("global/objective", "99.95", 1_000), {"h1"}, 1_000)
+        change(policy, "global/objective", "99.95", 1_000)
         self.assertEqual(policy.get("objective"), 99.95)                             # stricter: now
-        policy.update(self.statement("global/objective", "99", 2_000), {"h1"}, 2_000)
+        change(policy, "global/objective", "99", 2_000)
         self.assertEqual(policy.get("objective"), 99.95)                             # looser: not yet
         self.assertIn("global/objective", policy.published()["pending"])
         policy.update({}, {"h1"}, 62_000)
         self.assertEqual(policy.get("objective"), 99.0)                              # after the delay
-        policy.update(self.statement("global/auto_restart", "on", 63_000), {"h1"}, 63_000)
+        change(policy, "global/auto_restart", "on", 63_000)
         self.assertEqual(policy.get("auto_restart"), "off")                          # more autonomy waits too
-        policy.update(self.statement("global/auto_deploy", "off", 64_000), {"h1"}, 64_000)
+        change(policy, "global/auto_deploy", "off", 64_000)
         self.assertEqual(policy.get("auto_deploy"), "off")                           # less autonomy: now
 
     def test_only_the_engineer_within_bounds_is_read(self):
         policy = Policy(60_000)
-        policy.update(self.statement("global/objective", "99.99", 1_000, author="agent"), {"h1"}, 1_000)
-        self.assertEqual(policy.get("objective"), 99.9)
-        policy.update(self.statement("global/objective", "120", 2_000), {"h1"}, 2_000)
+        policy.update(self.statement("m-x/until", "99999999999999", 1_000, author="agent"), {"h1"}, 1_000)
+        self.assertEqual(policy.silences(2_000), {})                                 # a silence only from h1
+        change(policy, "global/objective", "120", 2_000)
         self.assertEqual(policy.get("objective"), 99.9)
         self.assertIn("ignored", policy.published()["history"][0]["outcome"])
-        policy.update(self.statement("p-x/spec", "rm -rf /", 3_000), {"h1"}, 3_000)
+        change(policy, "p-x/spec", "rm -rf /", 3_000)
         self.assertEqual(policy.probes(), [])
 
     def test_a_component_override_and_its_counting(self):
         policy = Policy(60_000)
         cid = component_id("api", "POST", "/orders")
-        policy.update(self.statement(f"{cid}/p99_ms", "200", 1_000), {"h1"}, 1_000)
+        change(policy, f"{cid}/p99_ms", "200", 1_000)
         self.assertEqual(policy.limits("api", "POST", "/orders")["p99_ms"], 200)    # stricter than 1000: now
         self.assertEqual(policy.limits("api", "GET", "/health")["p99_ms"], 1000.0)
         self.assertFalse(policy.limits("dependency", "POST", "pay")["counted"])      # outside: shown, not counted
-        policy.update(self.statement(f"{cid}/counted", "off", 2_000), {"h1"}, 2_000)
+        change(policy, f"{cid}/counted", "off", 2_000)
         self.assertTrue(policy.limits("api", "POST", "/orders")["counted"])          # uncounting loosens: waits
 
     def test_probes_see_what_the_product_does_not_report(self):
         policy = Policy(60_000, defaults={"base_url": "http://shop"})
-        policy.update(self.statement("p-a/spec", "GET /health 200", 1_000), {"h1"}, 1_000)
+        change(policy, "p-a/spec", "GET /health 200", 1_000)
         metrics = Metrics()
         answers = iter([200, 200, 503, 503])
         production = runtime.Production(["http://x/metrics"], fetch=metrics, policy=policy,
@@ -273,15 +291,15 @@ class Objectives(unittest.TestCase):
     def test_settings_that_narrow_apply_at_once(self):
         policy = Policy(60_000)
         s = Settings.statement
-        policy.update(s(self, "global/deploy_days", "mon,tue", 1_000), {"h1"}, 1_000)
+        change(policy, "global/deploy_days", "mon,tue", 1_000)
         self.assertEqual(policy.get("deploy_days"), "mon,tue")                       # fewer days: now
-        policy.update(s(self, "global/deploy_days", "mon,tue,wed", 2_000), {"h1"}, 2_000)
+        change(policy, "global/deploy_days", "mon,tue,wed", 2_000)
         self.assertEqual(policy.get("deploy_days"), "mon,tue")                       # more days: waits
-        policy.update(s(self, "s-api/target", "99.5", 3_000), {"h1"}, 3_000)
+        change(policy, "s-api/target", "99.5", 3_000)
         self.assertIn("s-api", policy.slos())                                         # a new SLO: now
-        policy.update(s(self, "s-api/state", "off", 4_000), {"h1"}, 4_000)
+        change(policy, "s-api/state", "off", 4_000)
         self.assertIn("s-api", policy.slos())                                         # removing one waits
-        policy.update(s(self, "global/strategy", "canary", 5_000), {"h1"}, 5_000)
+        change(policy, "global/strategy", "canary", 5_000)
         self.assertEqual(policy.get("strategy"), "canary")                           # canary is stricter
         policy.update(s(self, "m-x/until", "99999999999999", 6_000), {"h1"}, 6_000)
         self.assertIn("m-x", policy.silences(7_000))                                  # a silence holds no bar
@@ -459,7 +477,10 @@ class Production(unittest.TestCase):
                     "under": operator.config["grants"]["engineer"], "resource": resource, "property": prop,
                     "status": status, "level": "real"}, [h1]))
 
-            decide("run:policy/global/auto_deploy", "value", "off")
+            (repo / "standard").mkdir(exist_ok=True)                           # D35: the rules file, by git
+            (repo / "standard" / "rules.json").write_text(json.dumps({"global": {"auto_deploy": "off"}}))
+            git("add", "-A", cwd=repo)
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "rules", cwd=repo)
             (repo / "app.py").write_text("def add(a, b):\n    return a + b  # fixed\n")
             git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "fix", cwd=repo)
             m2 = git("rev-parse", "main", cwd=repo)
@@ -536,29 +557,53 @@ class CanaryEndToEnd(unittest.TestCase):
             from surface.human import load_signer
             from trusted.signing import envelope
             h1 = load_signer("h1", install / "keys" / "h1.key")
-            s = operator.journal.snapshot()
-            operator.service.admit(envelope(s["domain"], "observation", {
-                "id": "h1-strategy", "at": max(clock(), s["last_at"] + 1), "author": "h1",
-                "under": operator.config["grants"]["engineer"], "resource": "run:policy/global/strategy",
-                "property": "value", "status": "canary", "level": "real"}, [h1]))
             m0 = git("rev-parse", "main", cwd=repo)
             rounds(2)
             self.assertEqual(operator.releases.current(), m0)                 # a first release: nothing to compare
+
+            # D35: the engineer changes the rules from the interface with one signature; the agent commits exactly
+            # that file; the scanner checks it; the law lands it.
+            doc = json.dumps({"global": {"strategy": "canary"}}, indent=2, sort_keys=True).encode() + b"\n"
+            digest = "sha256:" + hashlib.sha256(doc).hexdigest()
+            (install / "requests").mkdir(exist_ok=True)
+            (install / "requests" / digest[7:]).write_bytes(doc)
+            s = operator.journal.snapshot()
+            operator.service.admit(envelope(s["domain"], "observation", {
+                "id": "h1-rules", "at": max(clock(), s["last_at"] + 1), "author": "h1",
+                "under": operator.config["grants"]["engineer"], "resource": f"repo:config:rules/{m0}",
+                "property": "rules", "status": digest, "level": "real"}, [h1]))
+            rounds(3)
+            r1 = git("rev-parse", "main", cwd=repo)
+            self.assertNotEqual(r1, m0)
+            self.assertEqual(git("show", f"{r1}:standard/rules.json", cwd=repo).encode() + b"\n", doc)
+            self.assertEqual(operator.policy.get("strategy"), "canary")
+            rounds(2)
+            self.assertEqual((operator.releases.current(), operator.releases.canary()), (m0, r1))   # on a share
+            rounds(9)
+            self.assertEqual((operator.releases.current(), operator.releases.canary()), (r1, None))   # promoted
 
             def commit(text):
                 (repo / "app.py").write_text(text)
                 git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", text[:9], cwd=repo)
                 return git("rev-parse", "main", cwd=repo)
-            m1 = commit("def add(a, b):\n    return a + b  # v1\n")
-            rounds(2)
-            self.assertEqual((operator.releases.current(), operator.releases.canary()), (m0, m1))   # on a share
-            rounds(9)
-            self.assertEqual((operator.releases.current(), operator.releases.canary()), (m1, None))   # promoted
+            m1 = r1
             m2 = commit("def add(a, b):\n    return a + b  # v2\n")
             bad[m2] = 30                                                      # 30 % of its requests fail
             rounds(4)
             self.assertEqual((operator.releases.current(), operator.releases.canary()), (m1, None))   # taken out
             self.assertIn("abort", [h["op"] for h in operator.releases.history()])
+
+            # D35: a rules commit that changes anything else, or bytes nobody signed, is never `configured`.
+            from autonomy.agent import commit_files
+            here = git("rev-parse", "main", cwd=repo)
+            sneaky = commit_files(cycle.agent.store, here, {"standard/rules.json": doc, "app.py": b"evil = 1\n"},
+                                  f"rules\n\nStandard-Rules: {digest}\n")
+            unsigned = commit_files(cycle.agent.store, here, {"standard/rules.json": b"{}\n"},
+                                    "rules\n\nStandard-Rules: sha256:" + "1" * 64 + "\n")
+            operator.tick()
+            facts = operator.service.view()["transitions"]
+            self.assertEqual(facts[f"repo:config:rules/{here}/{sneaky}"]["configured"], "no")
+            self.assertEqual(facts[f"repo:config:rules/{here}/{unsigned}"]["configured"], "no")
             self.assertEqual(operator.policy.get("strategy"), "canary")
         finally:
             gateway.shutdown()
