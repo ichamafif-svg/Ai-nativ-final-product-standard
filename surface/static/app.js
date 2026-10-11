@@ -28,12 +28,14 @@ const NAMES = {
   audit: "Audit indépendant", physical: "Sécurité physique", crypto: "Politique cryptographique",
   resilience: "Tests de résilience", assets: "Inventaire des actifs", infra: "Socle d'infrastructure",
   monitoring: "Supervision", threat: "Veille sur les menaces",
+  "run-sources": "Métriques de production collectées", "run-slo": "Objectif de service tenu", "run-live": "main en production",
 };
 const DOMAINS = [
   ["Sécurité du code", (r) => repo(r) && r.domain === "code"],
   ["Dépendances et chaîne logicielle", (r) => repo(r) && ["deps", "supply"].includes(r.domain)],
   ["Intégration continue", (r) => repo(r) && r.domain === "ci"],
   ["Gouvernance du code", (r) => repo(r) && ["settings", "main", "inventory"].includes(r.domain)],
+  ["Production", (r) => r.resource.startsWith("run:")],
   ["Organisation", (r) => r.resource.startsWith("org:")],
 ];
 const repo = (r) => r.resource.startsWith("repo:");
@@ -53,7 +55,7 @@ const RAISE = {
   observed: "Une opération d'exploitation dans la loi (par exemple revenir à la version précédente), exécutée par la garde sous conditions mesurées.",
 };
 const levelTag = (lv) => `<span class="state ${LEVEL[lv][0]}"><i></i>${LEVEL[lv][1]}</span>`;
-const VALUES = { none: "aucun", current: "à jour", complete: "complète", green: "au vert", red: "en échec", all: "toutes",
+const VALUES = { met: "tenu", behind: "en retard", none: "aucun", current: "à jour", complete: "complète", green: "au vert", red: "en échec", all: "toutes",
   compliant: "conformes", "guard-only": "garde seule" };
 function measure(r) {
   if (!r.measured) return r.state === "held" ? "prouvée" : r.state === "attest" ? "attestation attendue" : "en attente";
@@ -68,11 +70,11 @@ function subject(s) {
 
 // ---- routing --------------------------------------------------------------------------------------------------------
 const ROUTES = {
-  run: ["Run", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
+  run: ["Run", "run"], alerts: ["Alertes", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
   contributions: ["Contributions", "build"], requests: ["Demandes", "build"],
   reviews: ["Revues", "both"], proofs: ["Preuves", "both"], settings: ["Réglages", "both"],
 };
-let state = null, signer = null;
+let state = null, signer = null, alerting = null;
 const route = () => (location.hash.slice(2) in ROUTES ? location.hash.slice(2) : "run");
 window.addEventListener("hashchange", () => render());
 
@@ -81,11 +83,13 @@ function pending() {
 }
 
 function frame() {
-  const here = route(), reviews = pending().length;
-  const link = (id) => `<a href="#/${id}" ${id === here ? 'aria-current="page"' : ""}><span>${ROUTES[id][0]}</span>${
-    id === "reviews" && reviews ? `<span class="badge">${reviews}</span>` : ""}</a>`;
+  const here = route(), reviews = pending().length, untaken = alerting?.untaken || 0;
+  const badge = (id) => id === "reviews" && reviews ? `<span class="badge">${reviews}</span>`
+    : id === "alerts" && untaken ? `<span class="badge alarm">${untaken}</span>` : "";
+  const link = (id) => `<a href="#/${id}" ${id === here ? 'aria-current="page"' : ""}><span>${ROUTES[id][0]}</span>${badge(id)}</a>`;
+  document.title = untaken ? `(${untaken}) Standard` : "Standard";
   $("#nav").innerHTML = `
-    <div class="group">Exploitation</div>${link("run")}${link("autonomy")}${link("compliance")}${link("activity")}
+    <div class="group">Exploitation</div>${link("run")}${link("alerts")}${link("autonomy")}${link("compliance")}${link("activity")}
     <div class="group">Construction</div>${link("contributions")}${link("requests")}
     <div class="group">Gouvernance</div>${link("reviews")}${link("proofs")}${link("settings")}`;
   const others = state.products.length > 1;
@@ -101,10 +105,11 @@ function frame() {
 // ---- data -----------------------------------------------------------------------------------------------------------
 async function refresh() {
   try {
-    const r = await fetch("/api/state", { cache: "no-store" });
+    const [r, a] = await Promise.all([fetch("/api/state", { cache: "no-store" }), fetch("/api/alerts", { cache: "no-store" })]);
     const body = await r.json();
     if (!r.ok) throw new Error(body.error || r.statusText);
     state = body;
+    alerting = a.ok ? await a.json() : null;
     render();
   } catch (err) {
     $("#view").innerHTML = `<div class="note bad">Standard ne répond pas ou n'est pas qualifié sur ce serveur : ${esc(err.message)}. Rien n'est attesté ni autorisé tant que ce n'est pas rétabli.</div>`;
@@ -114,11 +119,12 @@ async function refresh() {
 function render() {
   if (!state) return;
   frame();
-  const views = { run: runView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
-  $("#view").innerHTML = views[route()]();
+  const views = { run: runView, alerts: alertsView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
+  $("#view").innerHTML = banner() + views[route()]();
   if (route() === "run") loadRun();
   if (route() === "settings") bindSettings();
   document.querySelectorAll("[data-review]").forEach((b) => b.addEventListener("click", () => openReview(b.dataset.review)));
+  document.querySelectorAll("[data-ack]").forEach((b) => b.addEventListener("click", () => take(b)));
 }
 
 // ---- RUN: the product in production -------------------------------------------------------------------------------
@@ -326,12 +332,12 @@ async function loadRun() {
     <section class="frontier"><h2>Frontière d'autonomie <span class="quiet small">ce que Standard fait seul pour ces ${d.frontier_total.of} composants</span></h2>
       <div class="caps">${Object.keys(CAP).map((k) => { const n = d.frontier_total[k], all = d.frontier_total.of, on = n === all && all > 0;
         return `<div class="cap ${on ? "on" : n ? "part" : "off"}"><div class="ck"><i></i>${CAP[k]}</div><div class="cv">${n} sur ${all}</div>
-          <p>${esc(on ? d.frontier_reasons[k].yes : d.frontier_reasons[k].no)}</p></div>`; }).join("")}</div>
-      ${d.uncovered.length ? `<div class="uncov"><h3>${plural(d.uncovered.length, "écart n'est couvert", "écarts ne sont couverts")} par aucune autonomie : une personne doit les prendre</h3>
+          <p>${esc(on || (n && k !== "prove") ? d.frontier_reasons[k].yes : n ? `${d.frontier_reasons[k].yes} Les processus et les services externes sont montrés, pas comptés dans ce fait.` : d.frontier_reasons[k].no)}</p></div>`; }).join("")}</div>
+      ${d.uncovered.length ? `<div class="uncov"><h3>${d.live.configured ? `${plural(d.uncovered.length, "composant dégradé", "composants dégradés")} sur la période : une personne doit les prendre, sauf retour de version` : `${plural(d.uncovered.length, "écart n'est couvert", "écarts ne sont couverts")} par aucune autonomie : une personne doit les prendre`}</h3>
         ${d.uncovered.map((u) => `<div class="ucrow"><span class="state ${ROUTE_STATE[u.state]?.[0] || "pending"}"><i></i>${ROUTE_STATE[u.state]?.[1] || u.state}</span>
           <b>${esc([u.operation && u.kind !== "worker" ? u.operation : "", u.name].filter(Boolean).join(" "))}</b><span class="quiet">${esc(KIND[u.kind][1])}</span>
-          <span class="why">${esc(u.seen ? reason(u.why) : "Standard ne le voit plus")}. ${u.seen ? "Standard l'a vu ; il ne prévient personne et n'agit pas." : "Rien ne garantit son état."}</span></div>`).join("")}</div>`
-        : `<p class="small quiet">Aucun composant dégradé en ce moment. Si l'un se dégrade, Standard le verra mais ne préviendra personne et n'agira pas : la frontière ci-dessus s'applique.</p>`}
+          <span class="why">${esc(u.seen ? reason(u.why) : "Standard ne le voit plus")}. ${u.seen ? `Signalé dans <a href="#/alerts">Alertes</a>. ${d.live.configured ? "Retour de version seulement s'il suit une mise en production." : "Standard n'agit pas."}` : "Rien ne garantit son état."}</span></div>`).join("")}</div>`
+        : `<p class="small quiet">Aucun composant dégradé en ce moment. Si l'un se dégrade, il est signalé dans Alertes ; ${d.live.configured ? "Standard revient à la version précédente seulement si la dégradation suit une mise en production" : "Standard n'agit pas"}.</p>`}
       <a class="small" href="#/autonomy">Toute l'autonomie, code compris</a>
     </section>
     <div class="kpis">
@@ -346,8 +352,9 @@ async function loadRun() {
     ${c.api.length ? `<section class="chart"><h2>Trafic des APIs</h2>${area(total.length ? total : [0, 0])}</section>` : ""}
     ${kinds.map((k) => `<section id="k-${k}"><h2>${KIND[k][0]} <span class="quiet small">${c[k].length}${k === "api" && d.openapi ? ", déclarées dans openapi.json" : ""}</span></h2>
       ${SECTIONS[k]([...c[k]].sort((a, b) => order[a.state] - order[b.state] || (b.rps || 0) - (a.rps || 0)), d)}</section>`).join("")}
+    ${liveSection(d.live)}
     <section class="cols">
-      <div><h2>Mises en production</h2>${feed(6)}</div>
+      <div><h2>Branche principale</h2>${feed(6)}</div>
       <div><h2>Sources</h2><div class="rows">${d.targets.map((t) => `<div class="rowi"><div class="main"><span class="sha">${esc(t.url)}</span>
         <div class="facts">${fact(t.up ? "Répond" : `Ne répond pas : ${t.error}`, t.up ? "ok" : "bad")}${t.at ? fact(`dernière collecte ${ago(t.at * 1000)}`, "") : ""}</div></div></div>`).join("") || `<div class="rowi quiet">Aucune source</div>`}</div>
         <p class="small quiet" style="margin-top:12px">Les métriques sont des informations pour l'équipe : elles n'ouvrent aucun droit.</p></div>
@@ -358,6 +365,83 @@ document.addEventListener("click", (e) => {
   const w = e.target.closest("[data-window]");
   if (w) { runWindow = Number(w.dataset.window); localSet("window", runWindow); render(); }
 });
+
+const SWITCH = { deploy: "Mise en production", rollback: "Retour à la version précédente" };
+const LAG = { none: ["held", "main est en production"], behind: ["gap", "main n'est pas en production"] };
+const DETAIL = {
+  "main's head was rolled back: a new commit on main is needed": ["La version de main a été retirée par un retour arrière : il faut un nouveau commit sur main", "bad"],
+  "no earlier release is known to have met the objective": ["Aucune version précédente n'a tenu l'objectif : pas de retour possible", "wait"],
+};
+function liveDetail(x) {
+  const [k, ...rest] = x.split(": "), v = rest.join(": ");
+  if (k === "live") return fact(`en production : ${v.slice(0, 7) || "aucune"}`, "");
+  if (k === "main") return fact(`main : ${v.slice(0, 7)}`, "");
+  if (k === "rolled_back") return v ? fact(`versions retirées : ${v.split(", ").map((s) => s.slice(0, 7)).join(", ")}`, "") : "";
+  const known = DETAIL[v] || (/^live for (\d+) min/.test(v) ? [`En production depuis ${v.match(/\d+/)[0]} min avant la rupture : le retour de version ne lui est pas attribué, une personne décide`, "wait"] : [v, ""]);
+  return fact(known[0], known[1]);
+}
+function liveSection(live) {
+  if (!live.configured) {
+    return `<section><h2>Version en production</h2><div class="note warn">Aucune mise en production n'est confiée à Standard. Ajoutez dans standard.toml une section <span class="sha">[deploy] root = "run"</span> : Standard déploiera main et reviendra à la version précédente si l'objectif casse.</div></section>`;
+  }
+  const lag = LAG[live.lag] || ["pending", live.lag ? "non mesuré" : "pas encore mesuré"];
+  return `<section><h2>Version en production <span class="quiet small">faits signés par le scanner, bascules faites par le gardien</span></h2>
+    <div class="rows"><div class="rowi"><div class="main"><span class="state ${lag[0]}"><i></i>${lag[1]}</span>
+      <div class="facts">${live.slo ? fact(`objectif sur les 5 dernières minutes, signé : ${live.slo === "met" ? "tenu" : live.slo.startsWith("breached") ? "rompu" : "non mesuré"}`, live.slo === "met" ? "ok" : live.slo.startsWith("breached") ? "bad" : "wait") : ""}${live.details.map(liveDetail).filter(Boolean).join("")}</div></div></div>
+    ${live.switches.map((s) => `<div class="rowi"><div class="main"><b>${SWITCH[s.op] || esc(s.op)}</b> <span class="sha">${short(s.from)}</span> → <span class="sha">${short(s.to)}</span>
+      <div class="facts">${fact(ago(s.at), "")}${fact(s.op === "rollback" ? "par l'agent, sur une rupture de l'objectif" : "par l'agent, main jugée", s.op === "rollback" ? "wait" : "ok")}</div></div></div>`).join("")
+      || `<div class="rowi quiet">Aucune bascule pour l'instant</div>`}</div></section>`;
+}
+
+// ---- ALERTS: what is wrong now, and who took it -------------------------------------------------------------------
+const ALERT_STATE = { failing: ["escalated", "En échec"], degraded: ["gap", "Dégradé"], escalated: ["escalated", "Échéance dépassée"],
+  resolved: ["held", "Résolu"] };
+function banner() {
+  if (!alerting || !alerting.open || route() === "alerts") return "";
+  const u = alerting.unattended;
+  return `<a class="alarm-bar ${u ? "hot" : ""}" href="#/alerts"><i></i><b>${plural(alerting.open, "alerte ouverte", "alertes ouvertes")}</b>
+    <span>${alerting.untaken ? `${alerting.untaken} sans personne pour la prendre${u ? `, dont ${u} depuis plus de ${alerting.ack_ms / 60000} min` : ""}` : "toutes prises en charge"}</span><em>Voir</em></a>`;
+}
+function alertsView() {
+  if (!alerting) return `<h1>Alertes</h1><div class="note bad">Les alertes sont indisponibles.</div>`;
+  const grant = alerting.signing.grant, can = Boolean(signer && grant && signer.identity === grant.holder);
+  const what = (a) => a.kind === "obligation" ? `Écart réglementaire : ${esc(name(a.name.replace(/^target:/, "")))}`
+    : a.kind === "source" ? `Source de métriques ${esc(a.name)}` : `${esc(KIND[a.kind]?.[1] || a.kind)} <b>${esc([a.operation, a.name].filter(Boolean).join(" "))}</b>`;
+  const why = (a) => a.why?.rule === "overdue" ? `échéance du ${due(a.why.due)} dépassée` : a.why?.rule === "source_down" ? "ne répond pas" : reason(a.why);
+  const row = (a) => {
+    const s = ALERT_STATE[a.closed_at ? "resolved" : a.state] || ["pending", a.state];
+    return `<div class="rowi"><div class="main"><span class="state ${s[0]}"><i></i>${s[1]}</span> ${what(a)}
+      <div class="facts">${fact(`depuis ${ago(a.opened_ms)}`, "")}${a.why ? fact(why(a), "") : ""}
+        ${a.closed_at ? fact(`résolu ${ago(a.closed_at * 1000)}`, "ok") : ""}
+        ${a.taken ? fact("Prise en charge signée", "ok") : a.closed_at ? "" : fact(a.unattended ? "Personne ne l'a prise" : "En attente d'une personne", a.unattended ? "bad" : "wait")}</div></div>
+      ${!a.closed_at && !a.taken ? `<button class="btn primary" data-ack="${esc(a.resource)}" ${can ? "" : "disabled"}>Prendre en charge</button>` : ""}</div>`;
+  };
+  const open = alerting.alerts.filter((a) => !a.closed_at), closed = alerting.alerts.filter((a) => a.closed_at);
+  return `<h1>Alertes</h1><p class="lede">Ce qui se dégrade en production et les écarts dont l'échéance est passée. Prendre une alerte en charge
+    est une signature faite dans ce navigateur et gardée dans le journal : c'est la preuve qu'une personne a été prévenue et a répondu.</p>
+    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour prendre une alerte en charge.</div>`
+      : !can ? `<div class="note warn">Seul ${esc(grant?.holder || "le détenteur du droit de revue")} peut prendre une alerte en charge ici.</div>` : ""}
+    <section><h2>Ouvertes <span class="quiet small">${open.length}</span></h2><div class="rows">${open.map(row).join("") || `<div class="rowi quiet">Aucune alerte ouverte</div>`}</div></section>
+    ${closed.length ? `<section><h2>Résolues ces dernières 24 h</h2><div class="rows">${closed.map(row).join("")}</div></section>` : ""}
+    <p class="small quiet">Une alerte s'ouvre quand un composant passe dégradé ou en échec sur les 5 dernières minutes, ou quand une source se tait ;
+      elle se ferme quand il revient. Pas encore d'e-mail ni de messagerie : seulement cette page, le badge et le titre de l'onglet.</p>`;
+}
+async function take(button) {
+  const grant = alerting.signing.grant;
+  button.disabled = true;
+  button.textContent = "Signature";
+  const statement = { id: `ack-${crypto.randomUUID().replaceAll("-", "")}`, at: Math.max(Date.now(), alerting.signing.as_of + 1),
+    author: signer.identity, under: grant.id, resource: button.dataset.ack, property: "ack", status: "taken", level: "real" };
+  try {
+    const env = await envelope(alerting.signing.domain, "observation", statement, signer);
+    const r = await fetch("/api/admit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(env) });
+    const out = await r.json();
+    if (!r.ok) throw new Error(out.refused || out.error);
+    refresh();
+  } catch (err) {
+    button.textContent = `Refusé : ${err.message}`;
+  }
+}
 
 function activity() {
   const repairs = state.run.repairs;

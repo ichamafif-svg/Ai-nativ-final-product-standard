@@ -205,7 +205,9 @@ class Memory_(unittest.TestCase):
                 raise AgentError("nothing passes")
 
         import autonomy.cycle as cycle_module
+        real = cycle_module.project
         cycle_module.project = lambda view, routes, qualify, mode: {"state": "IN_PROGRESS", "tasks": []}
+        self.addCleanup(setattr, cycle_module, "project", real)              # never leak into the next test
         root = Path(tempfile.mkdtemp())
         cycle = Cycle(Service(), Engine(), Failing(), [], clock=lambda: 1, main=lambda: "b1",
                       state_path=root / "proposals.json", memory=Memory(root / "memory.json", budget=2))

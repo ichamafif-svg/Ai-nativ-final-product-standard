@@ -282,3 +282,13 @@ input[type=text] { width: 100%; max-width: 360px; padding: 9px 12px; border-radi
 .f.on { background: var(--held-soft); color: var(--held); }
 @media (max-width: 1100px) { .caps { grid-template-columns: repeat(2, 1fr); } .cap:nth-child(3) { border-left: 0; }
   .cap:nth-child(n+3) { border-top: 1px solid var(--hair); } .ucrow { grid-template-columns: 1fr; } }
+
+/* alerts */
+.badge.alarm { background: var(--esc); color: #fff; }
+.alarm-bar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 24px; border-radius: var(--r-md);
+  background: var(--gap-soft); color: var(--gap); text-decoration: none; font-size: 14px; }
+.alarm-bar.hot { background: var(--esc-soft); color: var(--esc); }
+.alarm-bar i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
+.alarm-bar span { flex: 1; } .alarm-bar em { font-style: normal; font-weight: 600; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .alarm-bar i { animation: none; } }

@@ -10,12 +10,17 @@ one exact commit (base) to one exact child (head), so the object of the effect i
 Autonomy is reproducibility (§11.4): without a human, a repair needs `tests = green` and `reproduced = yes` from an
 independent instrument; otherwise a signed review of this exact transition. Organisational measures are attested by
 the compliance officer and have no automatic repair: their gap goes to people.
+
+Production (D30) is measured by the same scanner from the product's own metrics: every declared source answers, the
+service meets its objective, and production runs main's head. `deploy` and `rollback` switch the live release by a
+compare-and-swap; each is autonomous only on a fact the independent instrument signed on that exact switch.
 """
 from kernel import FORMAT, Release, floor0_digest
 from kernel.floor0 import MIN_DELAY_MS
 
 ROLES = ("owner", "inventory_source", "scanner", "compliance_officer")
 DAY = 86_400_000
+MINUTE = 60_000
 
 # (id, resource, property, expect, fresh days, due days) observed by @scanner, repaired by `remediate`.
 TECHNICAL = (
@@ -74,6 +79,12 @@ FLOORS = {
         # One judged transition is one commit: the author rebases and squashes onto the current main.
         "integrate": {"args": {"contributor": "segment", "base": "segment", "head": "segment"},
                       "resource": "repo:contrib:{contributor}/{base}/{head}", "profile": "capability"},
+        # Switch production from release `from` (a commit of main, or none) to main's head `to` (D30).
+        "deploy": {"args": {"from": "segment", "to": "segment"}, "resource": "run:release:all/{from}/{to}",
+                   "profile": "capability"},
+        # Switch production back from `from` to `to`, the release it replaced, repairing run:service:all.
+        "rollback": {"args": {"from": "segment", "to": "segment"}, "resource": "run:service:all/{from}/{to}",
+                     "profile": "capability"},
     },
     "conditions": {
         "remediate-autonomous": {"all": [{"observed": ["tests", "green", "real"]},
@@ -85,6 +96,10 @@ FLOORS = {
         "integrate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
                                        {"observed": ["regressions", "none", "real"]},
                                        {"observed": ["review", "approved", "real"]}]},
+        # Main's head, never rolled back, replaces exactly the live release.
+        "deploy-autonomous": {"all": [{"observed": ["deployable", "yes", "real"]}]},
+        # The objective broke right after this release went live, and the one it replaced met it.
+        "rollback-autonomous": {"all": [{"observed": ["regressed", "yes", "real"]}]},
     },
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.
     "targets": [
@@ -94,6 +109,15 @@ FLOORS = {
         {"id": "soa", "kind": "coverage", "resource": "org:controls:soa", "property": "coverage",
          "expect": "complete", "min_level": "real", "fresh_ms": 365 * DAY, "due_ms": 30 * DAY, "owner": "@owner",
          "sources": ["@compliance_officer"], "human": True},
+        {"id": "run-sources", "kind": "coverage", "resource": "run:sources:all", "property": "coverage",
+         "expect": "complete", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": 60 * MINUTE,
+         "owner": "@owner", "sources": ["@scanner"], "human": True},
+        {"id": "run-slo", "kind": "property", "coverage": "run-sources", "resource": "run:service:all",
+         "property": "slo", "expect": "met", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": 30 * MINUTE,
+         "owner": "@owner", "sources": ["@scanner"], "repair": "rollback"},
+        {"id": "run-live", "kind": "property", "coverage": "run-sources", "resource": "run:release:all",
+         "property": "lag", "expect": "none", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": DAY,
+         "owner": "@owner", "sources": ["@scanner"], "repair": "deploy"},
         *(_target(*t, "inventory", "@scanner", repair="remediate") for t in TECHNICAL),
         *(_target(*t, "inventory", "@scanner", human=True) for t in SETTINGS),
         *(_target(i, r, "attested", "current", f, 30, "soa", "@compliance_officer", human=True)

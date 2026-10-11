@@ -26,7 +26,6 @@ This is information for people. It opens no right and the kernel never reads it.
 from __future__ import annotations
 
 import json
-import math
 import re
 import sqlite3
 import threading
@@ -34,95 +33,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+([-+0-9.eE]+|NaN|\+Inf|-Inf)(?:\s+-?\d+)?$')
-LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
-
-
-def _pick(labels: dict, *keys, default=None):
-    return next((labels[k] for k in keys if labels.get(k)), default)
-
-
-# family -> (kind, function of the labels giving the row's (operation, name), or None to skip)
-HISTOGRAMS = {
-    "http_server_request_duration_seconds": ("api", lambda l: (_pick(l, "http_request_method", "method", default="GET").upper(),
-                                                               _pick(l, "http_route", "route", "handler", "path"))),
-    "http_request_duration_seconds": ("api", lambda l: (_pick(l, "method", "http_request_method", default="GET").upper(),
-                                                        _pick(l, "route", "handler", "http_route", "path"))),
-    "messaging_process_duration_seconds": ("worker", lambda l: (_pick(l, "messaging_operation_name", default="process"),
-                                                                _pick(l, "messaging_destination_name", "queue"))),
-    "db_client_operation_duration_seconds": ("database", lambda l: (
-        _pick(l, "db_operation_name", "db_operation", default="query").upper(),
-        "/".join(x for x in (_pick(l, "db_system_name", "db_system"), _pick(l, "db_namespace", "db_collection_name")) if x)
-        or None)),
-    "http_client_request_duration_seconds": ("dependency", lambda l: (
-        _pick(l, "http_request_method", "method", default="GET").upper(), _pick(l, "server_address", "net_peer_name"))),
-}
-GAUGES = {   # family -> (kind, field, label holding the row's name)
-    "messaging_queue_depth": ("worker", "backlog", ("messaging_destination_name", "queue")),
-    "job_last_success_timestamp_seconds": ("job", "last_success", ("job", "job_name")),
-    "job_last_duration_seconds": ("job", "duration", ("job", "job_name")),
-    "job_period_seconds": ("job", "period", ("job", "job_name")),
-    "job_last_status": ("job", "ok", ("job", "job_name")),
-    "process_cpu_seconds_total": ("process", "cpu_seconds", ("job", "service_name")),
-    "process_resident_memory_bytes": ("process", "memory", ("job", "service_name")),
-    "process_start_time_seconds": ("process", "started", ("job", "service_name")),
-}
-KINDS = ("api", "worker", "job", "database", "dependency", "process")
-
-
-def _failed(labels: dict) -> bool:
-    status = _pick(labels, "http_response_status_code", "status", "code", default="")
-    return status[:1] == "5" or bool(labels.get("error_type"))
-
-
-def parse(text: str, process_name: str = "service") -> tuple[dict, dict]:
-    """(histograms, gauges) of one scrape: {(kind, operation, name): {"count", "errors", "buckets"}} and
-    {(kind, name, field): value}."""
-    hist, gauges = {}, {}
-    for raw in text.splitlines():
-        m = LINE.match(raw.strip())
-        if not m or raw.startswith("#"):
-            continue
-        name, labels, value = m[1], dict(LABEL.findall(m[2] or "")), float(m[3])
-        if math.isnan(value):
-            continue
-        if name in GAUGES:
-            kind, field, keys = GAUGES[name]
-            row = _pick(labels, *keys, default=process_name if kind == "process" else None)
-            if row:
-                gauges[(kind, row, field)] = value
-            continue
-        family = next((f for f in HISTOGRAMS if name in (f + "_bucket", f + "_count")), None)
-        if family is None:
-            continue
-        kind, key = HISTOGRAMS[family]
-        operation, row = key(labels)
-        if not row:
-            continue
-        entry = hist.setdefault((kind, operation, row), {"count": 0.0, "errors": 0.0, "buckets": {}})
-        if name.endswith("_bucket") and "le" in labels:
-            entry["buckets"][labels["le"]] = entry["buckets"].get(labels["le"], 0.0) + value
-        elif name.endswith("_count"):
-            entry["count"] += value
-            if _failed(labels):
-                entry["errors"] += value
-    return hist, gauges
-
-
-def quantile(q: float, buckets: dict) -> float | None:
-    """histogram_quantile: linear interpolation inside the bucket that holds the q-th observation."""
-    bounds = sorted(((math.inf if le == "+Inf" else float(le)), n) for le, n in buckets.items())
-    if not bounds or bounds[-1][1] <= 0:
-        return None
-    rank, prev_bound, prev_count = q * bounds[-1][1], 0.0, 0.0
-    for bound, count in bounds:
-        if count >= rank:
-            if math.isinf(bound):
-                return prev_bound
-            inside = count - prev_count
-            return prev_bound + (bound - prev_bound) * ((rank - prev_count) / inside if inside else 0)
-        prev_bound, prev_count = bound, count
-    return prev_bound
+from trusted.runtime import GAUGES, HISTOGRAMS, KINDS, parse, quantile  # noqa: F401  (one reading, shared with T06)
+import trusted.runtime as runtime
 
 
 class Telemetry:
@@ -138,6 +50,8 @@ class Telemetry:
                             "name TEXT, count REAL, errors REAL, buckets TEXT)")
             self.db.execute("CREATE TABLE IF NOT EXISTS gauge (at INTEGER, target TEXT, kind TEXT, name TEXT, "
                             "field TEXT, value REAL)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS incident (id INTEGER PRIMARY KEY, kind TEXT, operation TEXT, "
+                            "name TEXT, opened_at INTEGER, closed_at INTEGER, state TEXT, worst TEXT, why TEXT)")
             self.db.execute("CREATE INDEX IF NOT EXISTS hist_at ON hist (at)")
             self.db.execute("CREATE INDEX IF NOT EXISTS gauge_at ON gauge (at)")
             self.db.commit()
@@ -162,53 +76,69 @@ class Telemetry:
             except Exception as exc:                       # a target that does not answer is visible, never zero
                 self.status[target] = {"up": False, "at": now, "error": f"{type(exc).__name__}: {exc}"[:200]}
 
+    INCIDENT_WINDOW = 300   # an incident opens or closes on the last five minutes, not on one noisy scrape
+
+    def track(self, now: float | None = None) -> None:
+        """Open an incident when a component turns degraded or failing (or its source falls silent), keep it while it
+        stays so, close it when it recovers. Incidents are what the console alerts on."""
+        now = int(now if now is not None else time.time())
+        report = self.report(window=self.INCIDENT_WINDOW, now=now)
+        bad = {}
+        for kind, rows in report["components"].items():
+            for r in rows:
+                if r["state"] in ("degraded", "failing"):
+                    bad[(kind, r.get("operation") or "", r["name"])] = (r["state"], r.get("why"))
+        for target in report["targets"]:
+            if not target["up"]:
+                bad[("source", "", target["url"])] = ("failing", {"rule": "source_down", "detail": target["error"]})
+        with self.lock:
+            open_ = {(k, o, n): (i, worst) for i, k, o, n, worst in self.db.execute(
+                "SELECT id, kind, operation, name, worst FROM incident WHERE closed_at IS NULL")}
+            for key, (state, why) in bad.items():
+                if key in open_:
+                    i, worst = open_[key]
+                    self.db.execute("UPDATE incident SET state = ?, why = ?, worst = ? WHERE id = ?",
+                                    (state, json.dumps(why), "failing" if "failing" in (state, worst) else state, i))
+                else:
+                    self.db.execute("INSERT INTO incident (kind, operation, name, opened_at, state, worst, why) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?)", (*key, now, state, state, json.dumps(why)))
+            for key, (i, _) in open_.items():
+                if key not in bad:
+                    self.db.execute("UPDATE incident SET closed_at = ?, state = 'resolved' WHERE id = ?", (now, i))
+            self.db.commit()
+
+    def incidents(self, since: int) -> list:
+        with self.lock:
+            rows = self.db.execute("SELECT id, kind, operation, name, opened_at, closed_at, state, worst, why FROM incident "
+                                   "WHERE closed_at IS NULL OR closed_at >= ? ORDER BY closed_at IS NOT NULL, opened_at DESC",
+                                   (since,)).fetchall()
+        return [{"id": i, "kind": k, "operation": o, "name": n, "opened_at": a, "closed_at": c, "state": s, "worst": w,
+                 "why": json.loads(why) if why else None} for i, k, o, n, a, c, s, w, why in rows]
+
     def start(self) -> None:
         def loop():
             while True:
                 self.scrape()
+                try:
+                    self.track()
+                except Exception:
+                    pass                                    # tracking never stops collection
                 time.sleep(self.interval)
         threading.Thread(target=loop, daemon=True).start()
 
     # ---- reading ---------------------------------------------------------------------------------------------
-    @staticmethod
-    def _deltas(samples: list) -> list:
-        """(at, requests, errors, {le: n}) between consecutive scrapes; a lower counter is a restart."""
-        out = []
-        for (_, c0, e0, b0), (at, c1, e1, b1) in zip(samples, samples[1:]):
-            restart = c1 < c0
-            out.append((at, c1 if restart else c1 - c0, e1 if restart else e1 - e0,
-                        {le: (n if restart else n - b0.get(le, 0.0)) for le, n in b1.items()}))
-        return out
+    _deltas = staticmethod(runtime.deltas)
+    FAILING, SLOW_P99_MS = runtime.FAILING, runtime.SLOW_P99_MS
 
     def _stats(self, deltas: list, seconds: float) -> dict:
-        requests, errors, buckets = sum(d[1] for d in deltas), sum(d[2] for d in deltas), {}
-        for d in deltas:
-            for le, n in d[3].items():
-                buckets[le] = buckets.get(le, 0.0) + n
-        error_rate = errors / requests if requests else None
-        ms = lambda q: None if (v := quantile(q, buckets)) is None else round(v * 1000, 1)
-        return {"requests": int(requests), "rps": round(requests / seconds, 2) if seconds else 0.0,
-                "error_rate": error_rate, "availability": None if error_rate is None else 1 - error_rate,
-                "budget": None if error_rate is None else 1 - error_rate / (1 - self.slo),
-                "p50": ms(0.5), "p95": ms(0.95), "p99": ms(0.99)}
-
-    FAILING = 0.05          # an error rate at or above this: the component fails a request in twenty or more
-    SLOW_P99_MS = 1000.0    # a p99 above this: one request in a hundred takes more than a second
+        return runtime.stats(deltas, seconds, self.slo)
 
     def rules(self) -> dict:
-        return {"slo": self.slo, "failing_error_rate": self.FAILING, "slow_p99_ms": self.SLOW_P99_MS, "late_periods": 2}
+        return {"slo": self.slo, "failing_error_rate": self.FAILING, "slow_p99_ms": self.SLOW_P99_MS,
+                "late_periods": runtime.LATE_PERIODS}
 
     def _state(self, s: dict) -> tuple[str, dict | None]:
-        """(state, why): the rule that decided it, with the measured value and the limit it crossed."""
-        if s["requests"] == 0:
-            return "idle", {"rule": "no_traffic"}
-        if s["error_rate"] >= self.FAILING:
-            return "failing", {"rule": "error_rate", "value": s["error_rate"], "limit": self.FAILING}
-        if s["availability"] < self.slo:
-            return "degraded", {"rule": "availability", "value": s["availability"], "limit": self.slo}
-        if (s["p99"] or 0) > self.SLOW_P99_MS:
-            return "degraded", {"rule": "p99", "value": s["p99"], "limit": self.SLOW_P99_MS}
-        return "healthy", None
+        return runtime.judge(s, self.slo)
 
     def report(self, declared=(), window: int = 3600, now: float | None = None) -> dict:
         now = int(now if now is not None else time.time())
@@ -255,12 +185,9 @@ class Telemetry:
         for name in sorted({n for (k, n, _) in latest if k == "job"}):
             get = lambda f: latest.get(("job", name, f))
             last, period, ok = get("last_success"), get("period"), get("ok")
-            late = bool(last and period and now - last > 2 * period)
-            why = ({"rule": "job_failed"} if ok == 0 else {"rule": "job_never"} if not last else
-                   {"rule": "job_late", "value": now - last, "limit": 2 * period} if late else None)
+            state, why = runtime.judge_job(last, period, ok, now)
             components["job"].append({"kind": "job", "name": name, "last_success": last, "duration": get("duration"),
-                                      "period": period, "ok": ok, "why": why,
-                                      "state": "failing" if ok == 0 else "degraded" if late or not last else "healthy"})
+                                      "period": period, "ok": ok, "why": why, "state": state})
         for name in sorted({n for (k, n, _) in latest if k == "process"}):
             cpu = history.get(("process", name, "cpu_seconds"), [])
             usage = None

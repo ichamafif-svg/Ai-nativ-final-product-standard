@@ -75,7 +75,10 @@ class Server(unittest.TestCase):
         operator.tick()
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
-        web = ThreadingHTTPServer(("127.0.0.1", 0), handler(Installation(root / "install" / "standard.toml")))
+        with open(root / "install" / "standard.toml", "a") as f:     # this test's own telemetry, not the user's
+            f.write(f'\n[run]\nstore = "{root / "telemetry.db"}"\n')
+        inst = Installation(root / "install" / "standard.toml")
+        web = ThreadingHTTPServer(("127.0.0.1", 0), handler(inst))
         threading.Thread(target=web.serve_forever, daemon=True).start()
         url = f"http://127.0.0.1:{web.server_address[1]}"
         try:
@@ -95,6 +98,36 @@ class Server(unittest.TestCase):
             self.assertEqual(set(run["frontier_reasons"]), {"see", "alert", "act", "prove"})
             self.assertTrue(all(r["no"] for r in run["frontier_reasons"].values()))   # every "no" says why
             self.assertEqual(run["frontier_total"]["act"], 0)                        # nothing acts in production
+            self.assertFalse(run["live"]["configured"])                               # no [deploy]: said, not hidden
+
+            # Prévenir: a silent source opens an alert; a person takes it by a signature the kernel admits.
+            inst.telemetry.targets, inst.telemetry.fetch = ["http://product/metrics"], lambda u: (_ for _ in ()).throw(OSError("down"))
+            inst.telemetry.scrape()
+            inst.telemetry.track()
+            alerts = json.loads(urllib.request.urlopen(f"{url}/api/alerts").read())
+            self.assertIn("target:run-sources", [a["name"] for a in alerts["alerts"]])  # overdue gaps alert too
+            source = [a for a in alerts["alerts"] if a["source"] == "run"]
+            self.assertEqual(len(source), 1)
+            before = alerts["untaken"]
+            alert = source[0]
+            self.assertEqual((alert["kind"], alert["why"]["rule"]), ("source", "source_down"))
+            from surface.human import load_signer
+            from trusted.signing import envelope
+            ack = envelope(alerts["signing"]["domain"], "observation", {
+                "id": "ack-1", "at": max(clock(), alerts["signing"]["as_of"] + 1), "author": "h3",
+                "under": alerts["signing"]["grant"]["id"], "resource": alert["resource"], "property": "ack",
+                "status": "taken", "level": "real"}, [load_signer("h3", root / "install" / "keys" / "h3.key")])
+            admitted = urllib.request.Request(f"{url}/api/admit", data=json.dumps(ack).encode(),
+                                              headers={"Content-Type": "application/json"})
+            self.assertEqual(urllib.request.urlopen(admitted).status, 200)
+            alerts = json.loads(urllib.request.urlopen(f"{url}/api/alerts").read())
+            self.assertEqual(alerts["untaken"], before - 1)                       # taken, and the journal keeps who
+            self.assertTrue(next(a for a in alerts["alerts"] if a["resource"] == alert["resource"])["taken"])
+            inst.telemetry.fetch = lambda u: ""
+            inst.telemetry.scrape()
+            inst.telemetry.track()
+            alerts = json.loads(urllib.request.urlopen(f"{url}/api/alerts").read())
+            self.assertFalse([a for a in alerts["alerts"] if a["source"] == "run" and a["closed_at"] is None])  # closed
             for asset in ("/app.css", "/sign.js", "/app.js"):
                 self.assertEqual(urllib.request.urlopen(f"{url}{asset}").status, 200)
             main = state["main"]

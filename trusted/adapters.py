@@ -6,7 +6,8 @@ primitive that guarantees the precondition atomically (§8.6, D05). Otherwise th
 - GitRepository: a repository on the guard's host. `git update-ref refs/heads/main HEAD BASE` is an atomic
   compare-and-swap: it moves main only if main is still exactly BASE. The head is fetched from the proposals store
   first; the agent never writes to the maintained repository.
-- readback (T08): `applied` when main contains head; never `not_applied` by absence (D09).
+- readback (T08): `applied` when main contains head (or production runs `to`, D30); never `not_applied` by
+  absence (D09).
 """
 from __future__ import annotations
 
@@ -48,15 +49,22 @@ class GitRepository:
         return _git(self.repo, "merge-base", "--is-ancestor", head, f"refs/heads/{self.branch}").returncode == 0
 
 
+def applied(it: dict, repository, releases=None) -> bool:
+    """main contains the head (remediate, integrate), or production runs `to` (deploy, rollback)."""
+    if it["op"] in ("remediate", "integrate"):
+        return repository.applied(it["args"]["head"])
+    return it["op"] in ("deploy", "rollback") and releases is not None and releases.applied(it["args"]["to"])
+
+
 class Readback:
     """T08: an independent reader of the provider, signing reconciliations under its own capability."""
 
-    def __init__(self, repository: GitRepository, signer: Signer, capability: str, clock):
+    def __init__(self, repository: GitRepository, signer: Signer, capability: str, clock, releases=None):
         self.repository, self.signer, self.capability, self.clock = repository, signer, capability, clock
+        self.releases = releases
 
     def readback(self, intent_id: str, state: dict):
-        it = state["intents"][intent_id]
-        if it["op"] not in ("remediate", "integrate") or not self.repository.applied(it["args"]["head"]):
+        if not applied(state["intents"][intent_id], self.repository, self.releases):
             return None                                      # unknown stays unknown
         body = {"id": f"rec-{uuid.uuid4().hex}", "at": max(self.clock(), state["last_at"] + 1),
                 "author": self.signer.identity, "under": self.capability, "intent": intent_id, "result": "applied"}

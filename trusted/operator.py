@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from . import instruments
+from .adapters import applied
 from .data import EMPTY
 from .recipes import recipes_for
 from .signing import Signer, envelope
@@ -127,11 +128,13 @@ class Instruments:
 
 
 class Prover:
-    """Proof of application: an independent oracle attests that an applied intent's head is on main."""
+    """Proof of application: an independent oracle attests that an applied intent's head is on main, or that
+    production runs the release it switched to."""
 
-    def __init__(self, service, repository, signer: Signer, capability: str, clock):
+    def __init__(self, service, repository, signer: Signer, capability: str, clock, releases=None):
         self.service, self.repository, self.signer, self.capability, self.clock = (
             service, repository, signer, capability, clock)
+        self.releases = releases
 
     def prove_due(self) -> dict:
         state = self.service.journal.snapshot()
@@ -140,7 +143,7 @@ class Prover:
             if ob["stage"] != "proof":
                 continue
             it = state["intents"][ob["intent"]]
-            if it["op"] not in MAIN_OPS or not self.repository.applied(it["args"]["head"]):
+            if not applied(it, self.repository, self.releases):
                 continue
             body = {"id": f"proof-{uuid.uuid4().hex}", "at": max(self.clock(), state["last_at"] + 1),
                     "author": self.signer.identity, "under": self.capability, "resource": it["resource"],

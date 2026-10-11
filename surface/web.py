@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import tomllib
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -77,6 +78,8 @@ class Installation:
         self.telemetry = Telemetry(Path(run.get("store", Path.home() / ".standard" / "telemetry.db")).expanduser(),
                                    run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100,
                                    interval=float(run.get("interval", 15)))
+        self.rollback = bool(c.get("deploy")) and "agent_rollback" in c["grants"]     # D30: can act in production
+        self.deploy_root = resolve(c["deploy"]["root"]) if c.get("deploy") else None
         hosted = c.get("hosting", {}).get("config")
         self.products = sorted(_toml(hosted).get("repositories", {})) if hosted else [self.product]
 
@@ -202,11 +205,16 @@ class Installation:
             "autonomous": "La correction se recalcule à l'identique par un instrument indépendant : la loi peut l'accepter sans personne.",
             "supervised": "La correction demande un jugement. Aucun instrument ne peut prouver qu'elle est juste, donc une personne signe.",
             "human": "Ce qui est demandé n'est pas dans le code : une procédure, un registre ou un réglage de plateforme qu'une personne atteste.",
-            "observed": "Standard mesure ce composant mais n'agit pas dessus : la loi ne contient encore aucune opération d'exploitation "
-                        "(redémarrer, revenir à la version précédente, ajouter de la capacité). Une telle opération passerait par la garde, "
-                        "comme les changements de code.",
+            "observed": "Standard mesure ce composant mais n'agit pas dessus : aucune mise en production ne lui est confiée sur "
+                        "cette installation (section [deploy]). Il ne déploie pas et ne revient pas à la version précédente.",
         }
+        why["acting"] = ("Standard met main en production et revient seul à la version précédente quand l'objectif casse juste "
+                         "après une mise en production, sur des faits signés par le scanner et par la garde, comme les "
+                         "changements de code. Il ne redémarre pas une machine et n'ajoute pas de capacité.")
         conditions = {
+            "run-slo": "Seulement si la rupture suit de moins de 30 min une mise en production et que la version remplacée "
+                       "tenait l'objectif ; sinon une personne, à l'échéance.",
+            "run-live": "Sauf une version déjà retirée par un retour arrière : il faut alors un nouveau commit sur main.",
             "vulns": "Seulement si l'instantané de données connaît une version corrigée ; sinon une personne décide.",
             "actions": "Seulement si l'instantané de données connaît le commit de l'action ; sinon une personne décide.",
             "sbom": None,
@@ -216,25 +224,38 @@ class Installation:
         for r in requirements:
             lv = level[r["who"]]
             blocked = r["state"] == "unmeasured"
-            rows.append({"id": r["id"], "level": lv, "why": why[lv], "condition": conditions.get(r["id"]),
+            production = r["resource"].startswith("run:") and lv == "autonomous"
+            rows.append({"id": r["id"], "level": lv, "why": why["acting"] if production else why[lv],
+                         "condition": conditions.get(r["id"]),
                          "blocked": "Non mesurée sur cette installation : aucune autonomie possible tant que rien ne la mesure."
                          if blocked else None})
         count = {lv: sum(1 for x in rows if x["level"] == lv) for lv in ("autonomous", "supervised", "human")}
-        return {"levels": why, "requirements": rows, "count": count, "total": len(rows),
-                "runtime": {"level": "observed", "why": why["observed"]}}
+        runtime = {"level": "autonomous", "why": why["acting"]} if self.rollback else {"level": "observed",
+                                                                                         "why": why["observed"]}
+        return {"levels": why, "requirements": rows, "count": count, "total": len(rows), "runtime": runtime}
 
     def run_report(self, window: int) -> dict:
         """The product in production: its APIs and their metrics, and the latest releases."""
         openapi = git(self.repo, "show", "main:openapi.json", check=False)
         from .telemetry import declared_routes
         report = self.telemetry.report(declared_routes(openapi), window=window)
-        self.frontier(report)
-        return {**report, "product": self.product, "releases": self.history(8),
+        findings = _json(self.findings)
+        self.frontier(report, findings)
+        return {**report, "product": self.product, "releases": self.history(8), "live": self.live(findings),
                 "openapi": bool(openapi.strip())}
+
+    def live(self, findings: dict) -> dict:
+        """What production runs, as the scanner signed it, and the switches the guard made (D30)."""
+        lag = findings.get("run:release:all|lag", {})
+        history = []
+        if self.deploy_root and (self.deploy_root / "history.jsonl").exists():
+            history = [json.loads(x) for x in (self.deploy_root / "history.jsonl").read_text().splitlines() if x][-10:]
+        return {"configured": self.deploy_root is not None, "lag": lag.get("status"), "details": lag.get("details", []),
+                "slo": findings.get("run:service:all|slo", {}).get("status"), "switches": history[::-1]}
 
     FRONTIER = ("see", "alert", "act", "prove")
 
-    def frontier(self, report: dict) -> None:
+    def frontier(self, report: dict, findings: dict | None = None) -> None:
         """For every component, what Standard does about it without a person, capability by capability, and why not.
 
         see: its metrics are collected and judged against published rules; alert: someone is told when it degrades;
@@ -245,22 +266,60 @@ class Installation:
         reasons = {
             "see": (f"Mesuré toutes les {interval} s depuis ses métriques et jugé selon les seuils publiés.",
                     "Source muette ou absente : Standard ne voit pas ce composant en ce moment."),
-            "alert": (None, "Personne n'est prévenu automatiquement : Standard n'envoie encore aucune alerte depuis la production."),
-            "act": (None, "Aucune action en production n'existe dans la loi : Standard ne redémarre pas, ne revient pas à la version "
-                          "précédente et n'ajoute pas de capacité."),
-            "prove": (None, "Ces mesures ne sont pas des faits signés du journal : elles ne prouvent rien à un auditeur."),
+            "alert": ("Signalé dans l'interface dès qu'il se dégrade ; une personne le prend en charge par une signature. "
+                      "Pas encore d'e-mail ni de messagerie.",
+                      "Personne n'est prévenu : Standard ne le voit pas en ce moment."),
+            "act": ("Retour automatique à la version précédente si l'objectif casse dans les 30 min qui suivent une mise en "
+                    "production et que la version remplacée l'avait tenu ; mise en production automatique de main. Au-delà, "
+                    "ou si la cause est hors du code (service externe, machine), une personne.",
+                    "Aucune action en production n'est configurée : Standard ne déploie pas, ne revient pas à la version "
+                    "précédente, ne redémarre pas et n'ajoute pas de capacité."),
+            "prove": ("Son état entre dans le fait signé « run:service:all slo » du journal, vérifiable par un auditeur.",
+                      "Ces mesures ne sont pas des faits signés du journal : elles ne prouvent rien à un auditeur."),
         }
+        slo = (findings or {}).get("run:service:all|slo", {}).get("status") or ""
+        signed = bool(slo) and not slo.startswith("uncovered")
         report["frontier_reasons"] = {k: {"yes": v[0], "no": v[1]} for k, v in reasons.items()}
         report["uncovered"] = []
         for kind, rows in report["components"].items():
             for row in rows:
                 seen = sources_up and (row.get("observed", True) or row["state"] == "idle")
-                row["frontier"] = {"see": seen, "alert": False, "act": False, "prove": False}
+                judged = seen and kind not in ("process", "dependency")   # shown, not counted in the signed objective
+                row["frontier"] = {"see": seen, "alert": seen, "act": seen and self.rollback,
+                                   "prove": judged and signed}
                 if row["state"] in ("degraded", "failing") or not seen:
                     report["uncovered"].append({"kind": kind, "name": row["name"], "operation": row.get("operation"),
                                                 "state": row["state"], "why": row.get("why"), "seen": seen})
         rows = [r for rs in report["components"].values() for r in rs]
         report["frontier_total"] = {k: sum(1 for r in rows if r["frontier"][k]) for k in self.FRONTIER} | {"of": len(rows)}
+
+    ACK_MS = 10 * 60_000      # an alert nobody takes within ten minutes is flagged as not taken
+
+    def alerts(self, view: dict | None = None) -> dict:
+        """Production incidents and overdue obligations, each with who took it. Taking an alert is a statement a person
+        signs in their browser (property `ack` on `repo:alert/<kind>/<name>/<opened>`), admitted by the kernel and kept
+        in the journal: the proof that someone was told is the person's own signature, not a delivery receipt."""
+        view = view or self.client.view()
+        now = int(time.time() * 1000)
+        slug = lambda s: re.sub(r"[^A-Za-z0-9._@-]+", "-", str(s)).strip("-")[:80] or "x"
+        out = []
+        for i in self.telemetry.incidents(int(time.time()) - 86400):
+            resource = f"repo:alert/{i['kind']}/{slug(i['operation'] + '-' + i['name'] if i['operation'] else i['name'])}/{i['opened_at']}"
+            out.append({**i, "source": "run", "resource": resource, "opened_ms": i["opened_at"] * 1000})
+        for e in view["health"]["escalated"]:
+            resource = f"repo:alert/obligation/{slug(e['obligation'])}/{e['opened']}"
+            out.append({"id": e["obligation"], "kind": "obligation", "operation": "", "name": e["obligation"],
+                        "state": "escalated", "worst": "escalated", "why": {"rule": "overdue", "due": e["due"]},
+                        "opened_ms": e["due"], "closed_at": None, "source": "law", "resource": resource})
+        for a in out:
+            facts = view["transitions"].get(a["resource"], {})
+            a["taken"] = facts.get("ack") == "taken"
+            a["unattended"] = a["closed_at"] is None and not a["taken"] and now - a["opened_ms"] > self.ACK_MS
+        live = [a for a in out if a["closed_at"] is None]
+        return {"alerts": out, "open": len(live), "untaken": sum(1 for a in live if not a["taken"]),
+                "unattended": sum(1 for a in live if a["unattended"]), "ack_ms": self.ACK_MS,
+                "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
+                            "grant": self.grants.get("reviewer")}}
 
     def dossier(self, head: str) -> dict:
         if not SHA.fullmatch(head):
@@ -302,6 +361,8 @@ def handler(inst: Installation):
                     return self._send(200, (STATIC / "app.css").read_bytes(), "text/css; charset=utf-8")
                 if route == "/api/state":
                     return self._ok(inst.state())
+                if route == "/api/alerts":
+                    return self._ok(inst.alerts())
                 if route == "/api/run":
                     query = dict(q.split("=", 1) for q in self.path.partition("?")[2].split("&") if "=" in q)
                     window = int(query.get("window", 3600))

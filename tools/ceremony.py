@@ -42,8 +42,10 @@ IDENTITIES = {"h1": "human", "h2": "human", "h3": "human", "h4": "human", "w1": 
               "guard": "guard", "agent": "agent", "scanner": "service", "oracle": "oracle", "sentinel": "sentinel"}
 YEAR = 365 * 86_400_000
 GRANTS = {
-    "scanner": ("scanner", ["observe", "certify:real"], ["repo:*"], []),
-    "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*"], []),
+    "scanner": ("scanner", ["observe", "certify:real"], ["repo:*", "run:*"], []),
+    "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*", "run:*"], []),
+    "agent_deploy": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-autonomous"]),
+    "agent_rollback": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-autonomous"]),
     "agent_recipe": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-autonomous"]),
     "agent_review": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"]),
     "agent_integrate": ("agent", ["effect:integrate"], ["repo:contrib:*"], ["integrate-reviewed"]),

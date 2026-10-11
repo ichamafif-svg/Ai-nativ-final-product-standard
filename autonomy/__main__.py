@@ -68,6 +68,13 @@ def build(config_path) -> tuple[Cycle, callable]:
                                 main=main, clock=lambda: cycle.clock(), notes=store.parent / "contributions.json")
         run = cycle.run
         cycle.run = lambda mode="RUN": {**run(mode), "integrate": integrator.run()}
+    switches = {op: c["grants"][f"agent_{op}"] for op in ("deploy", "rollback") if f"agent_{op}" in c["grants"]}
+    if switches:                                          # D30: production follows main, and steps back on a breach
+        from .release import Releaser
+        releaser = Releaser(cycle.service, signer, switches, clock=lambda: cycle.clock(),
+                            notes=store.parent / "releases.json")
+        run_release = cycle.run
+        cycle.run = lambda mode="RUN": {**run_release(mode), "release": releaser.run()}
     return cycle, refresh
 
 

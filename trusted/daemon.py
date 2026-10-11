@@ -28,12 +28,14 @@ from kernel import Kernel
 from .adapters import GitRepository, Readback
 from .boundary import SignedAssessment
 from .data import EMPTY, TrustedData
+from .deploy import OPS as RUN_OPS, Releases
 from .gateway import AdmissionGateway
 from .guard import EffectPort
 from .instruments import Instrument, git
 from .journal import Journal, PinStore
 from .operator import MAIN_OPS, Instruments, Prover
 from .release import code_digest
+from .runtime import Pass, Production
 from .service import TrustedService
 from .signing import Signer, entry
 
@@ -75,18 +77,28 @@ class Installation:
                                      push_from=resolve(repo["mirror"]) if repo.get("api") == "git" else None)
             self.repo_path = self.proposals = resolve(repo["mirror"])
             self.world = self.repository
+        run, deploy = c.get("run", {}), c.get("deploy")
+        self.releases = Releases(self.repo_path, resolve(deploy["root"]), deploy.get("restart"),
+                                 clock=self.clock) if deploy else None
+        ports = {op: self.repository.remediate for op in MAIN_OPS} | (
+            {op: self.releases.switch for op in RUN_OPS} if self.releases else {})
         data = c.get("data")
         self.data = TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY
         self.service = TrustedService(
             self.journal, boundary=SignedAssessment(assessment, assessors), clock=self.clock,
-            guard_signer=key(self.keys, "guard"), effect_port=EffectPort({op: self.repository.remediate for op in MAIN_OPS}),
-            reconciliation=Readback(self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock))
+            guard_signer=key(self.keys, "guard"), effect_port=EffectPort(ports),
+            reconciliation=Readback(self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
+                                    releases=self.releases))
         self.instruments = Instruments(self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock),
                                        self.repo_path, self.proposals, data=self.data, world=self.world,
                                        anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
                                        inbox=resolve(repo["inbox"]) if repo.get("inbox") else None,
                                        findings=self.path.parent / "findings.json")
-        self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock)
+        self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
+                             releases=self.releases)
+        self.production = Pass(self.service, self.instruments.instrument, Production(
+            run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100), self.repo_path, releases=self.releases,
+            state=self.path.parent / "production.json")
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):
@@ -114,6 +126,7 @@ class Installation:
     def tick(self) -> dict:
         report = {}
         for name, step in (("witness", self.witness), ("sync", self.sync), ("measure", self.instruments.measure),
+                           ("production", self.production.measure), ("publish", self.instruments.publish),
                            ("witness2", self.witness), ("dispatch", self.service.dispatch_due),
                            ("reconcile", self.service.reconcile_due), ("prove", self.prover.prove_due)):
             try:
