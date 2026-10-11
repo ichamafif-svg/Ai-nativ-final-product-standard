@@ -83,6 +83,12 @@ class Server(unittest.TestCase):
             self.assertEqual(state["assessment"], "SELF_ASSESSED")
             self.assertIn("sbom", [g["target"] for g in state["run"]["gaps"]])
             self.assertEqual(state["signing"]["grants"]["reviewer"]["holder"], "h3")
+            self.assertEqual(state["product"], "repo")
+            states = {r["id"]: r["state"] for r in state["requirements"]}
+            self.assertEqual(states["sbom"], "gap")                     # the product's state, whatever the product
+            self.assertEqual(states["isms"], "attest")
+            for asset in ("/app.css", "/sign.js", "/app.js"):
+                self.assertEqual(urllib.request.urlopen(f"{url}{asset}").status, 200)
             main = state["main"]
             self.assertIn("initial", json.loads(urllib.request.urlopen(f"{url}/api/dossier/{main}").read())["message"])
             page = urllib.request.urlopen(f"{url}/").read().decode()

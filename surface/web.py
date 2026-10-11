@@ -22,7 +22,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from autonomy.projection import Route, project
+from trusted.data import EMPTY
 from trusted.gateway import GatewayClient
+from trusted.recipes import recipes_for
 
 STATIC = Path(__file__).with_name("static")
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -38,6 +40,13 @@ def git(repo, *args, check=True) -> str:
     if check and r.returncode != 0:
         raise RuntimeError(r.stderr.strip()[:300])
     return r.stdout
+
+
+def _toml(path) -> dict:
+    try:
+        return tomllib.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def _json(path) -> dict:
@@ -62,6 +71,41 @@ class Installation:
         self.findings, self.memory, self.proposals = base / "findings.json", agent / "memory.json", agent / "proposals.json"
         self.grants = {name: {"id": gid, "holder": HOLDERS.get(name)} for name, gid in c["grants"].items()
                        if name in HOLDERS}
+        self.product = self.repo.name.removesuffix(".git")
+        hosted = c.get("hosting", {}).get("config")
+        self.products = sorted(_toml(hosted).get("repositories", {})) if hosted else [self.product]
+
+    # ---- the product, whatever it is: requirements by domain and their state ---------------------------------
+    def requirements(self, view: dict, findings: dict) -> list:
+        """One line per requirement of the effective law. held: proven or measured as expected; gap: measured off;
+        unmeasured: no instrument could cover it here; attest: waits for a person's attestation; escalated: past due."""
+        health = view["health"]
+        proven = {p.get("target") for p in health["proven"]}
+        escalated = {e.get("target") for e in health["escalated"]}
+        opened = {o.get("target") for o in health["open"]}
+        autonomous = set(recipes_for(EMPTY))
+        out = []
+        for t in view["law"]["effective"]["targets"]:
+            f = findings.get(f"{t['resource']}|{t['property']}")
+            status = f["status"] if f else None
+            if t["id"] in escalated:
+                state = "escalated"
+            elif status == t["expect"] or (t["id"] in proven and t["id"] not in opened):
+                state = "held"
+            elif status and status.startswith("uncovered"):
+                state = "unmeasured"
+            elif status:
+                state = "gap"
+            elif t["resource"].startswith("org:") or t.get("human"):
+                state = "attest"
+            else:
+                state = "pending"
+            who = ("people" if t.get("human") or t["resource"].startswith("org:") else
+                   "agent" if t["id"] in autonomous else "review" if t.get("repair") == "remediate" else "agent")
+            out.append({"id": t["id"], "domain": t["resource"].split(":")[1], "resource": t["resource"],
+                        "property": t["property"], "expect": t["expect"], "measured": status, "state": state,
+                        "who": who, "where": [d.splitlines()[0][:200] for d in (f or {}).get("details", [])[:8]]})
+        return out
 
     # ---- RUN: the product in production, maintained -----------------------------------------------------------
     def run(self, view: dict, findings: dict) -> dict:
@@ -132,6 +176,8 @@ class Installation:
             "health": {"state": health["state"], "open": len(health["open"]), "escalated": health["escalated"],
                        "proven": len(health["proven"]), "as_of": health["as_of"]},
             "main": main, "history": self.history(),
+            "product": self.product, "products": self.products,
+            "requirements": self.requirements(view, findings),
             "run": self.run(view, findings), "build": self.build(view, findings, main),
             "law": {"targets": [{k: t.get(k) for k in ("id", "resource", "property", "expect", "coverage", "repair",
                                                         "human", "due_ms")} for t in law["targets"]],
@@ -175,6 +221,8 @@ def handler(inst: Installation):
                     return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
                 if route in ("/sign.js", "/app.js"):
                     return self._send(200, (STATIC / route[1:]).read_bytes(), "text/javascript; charset=utf-8")
+                if route == "/app.css":
+                    return self._send(200, (STATIC / "app.css").read_bytes(), "text/css; charset=utf-8")
                 if route == "/api/state":
                     return self._ok(inst.state())
                 if route.startswith("/api/dossier/"):

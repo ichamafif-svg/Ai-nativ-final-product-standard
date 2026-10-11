@@ -715,7 +715,7 @@ Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes
 
 ### 11.9 L'interface (D27)
 
-`python -m surface.web standard.toml` : une application web sous son propre utilisateur Unix (`standard-web`), à l'écoute de `localhost` seulement (tunnel SSH ou proxy TLS devant). Deux contextes, le même système et la même loi :
+`python -m surface.web standard.toml` : une application web sous son propre utilisateur Unix (`standard-web`), à l'écoute de `localhost` seulement (tunnel SSH ou proxy TLS devant). Une console d'exploitation, sobre, qui **s'ouvre sur le produit en production** (RUN) et le décrit de façon générique, quel que soit le produit : un état (« Tout est tenu », « Sous contrôle », « Action requise »), la carte des exigences par domaine (sécurité du code, dépendances et chaîne logicielle, intégration continue, gouvernance du code, organisation), ce qui attend une personne, et les dernières mises en production. La construction (BUILD : contributions, demandes) est une section à côté. Les spécificités d'un produit (ses propres indicateurs) viendront ensuite, au-dessus de cette abstraction. Le détail :
 
 - **BUILD** (onglet Construction) : les demandes (étape suivante) et les contributions de la boîte de dépôt, avec leurs faits mesurés (tests, régressions, revue) et la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`).
 - **RUN** (onglet Exploitation) : les écarts rangés par qui s'en occupe (l'agent seul, l'agent puis un humain, les humains seuls), les réparations de l'agent et leurs faits, ses abandons avec leur dossier, les obligations du dépôt.
