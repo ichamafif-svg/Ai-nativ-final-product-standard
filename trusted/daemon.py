@@ -36,6 +36,7 @@ from .instruments import Instrument, git
 from .journal import Journal, PinStore
 from .operator import MAIN_OPS, Instruments, Prover
 from .release import code_digest
+from .isolation import Isolation
 from .policy import Policy
 from .slo import Store
 from .runtime import Pass, Production
@@ -100,6 +101,8 @@ class Installation:
             guard_signer=key(self.keys, "guard"), effect_port=EffectPort(ports),
             reconciliation=Readback(self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
                                     releases=self.releases))
+        from . import instruments as measure
+        measure.ISOLATION = Isolation(c.get("tests", {}).get("runner_user"))   # D33: never run their code as us
         self.instruments = Instruments(self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock),
                                        self.repo_path, self.proposals, data=self.data, world=self.world,
                                        anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,

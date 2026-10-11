@@ -51,6 +51,19 @@ ORGANISATIONAL = (
 )
 
 
+# D33: the facts that open a right are measurements of a pinned instrument. The kernel admits them only from the
+# scanner, with this method and coverage, fresh; anyone else (a reviewer, an engineer) cannot sign them, so a person
+# cannot replace a measure by an opinion. People sign their own facts: review, approved, requested, ack.
+# property -> (method, coverage, fresh)
+INSTRUMENTS = {
+    "tests": ("main-suite", "repo:inventory:all", DAY), "regressions": ("floor-probes", "repo:inventory:all", DAY),
+    "reproduced": ("recipe-replay", "repo:inventory:all", DAY),
+    "acceptance": ("acceptance-suite", "repo:inventory:all", DAY),
+    **{p: ("production", "run:sources:all", 15 * MINUTE) for p in (
+        "candidate", "deployable", "previous", "regressed", "restartable", "canary_ready", "promotable", "canary_bad")},
+}
+
+
 def _target(ident, resource, prop, expect, fresh, due, coverage, source, **extra):
     return {"id": ident, "kind": "property", "coverage": coverage, "resource": resource, "property": prop,
             "expect": expect, "min_level": "real", "fresh_ms": fresh * DAY, "due_ms": due * DAY, "owner": "@owner",
@@ -145,6 +158,8 @@ FLOORS = {
           for i, r, f in ORGANISATIONAL),
     ],
     "obligations": [],
+    "instruments": {p: {"method": m, "coverage": c, "sources": ["@scanner"], "min_level": "real", "fresh_ms": f}
+                    for p, (m, c, f) in INSTRUMENTS.items()},
 }
 
 RELEASE = Release(FLOORS, ROLES)

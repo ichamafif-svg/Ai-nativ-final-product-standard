@@ -84,7 +84,11 @@ EOF
   printf '\n[run]\nmetrics = ["http://127.0.0.1:9000/metrics"]\nslo = 99.9\nbase_url = "http://127.0.0.1:9000"\n' >> "$INSTALL/standard.toml"
   # D30: the guard switches the live release (deploy, rollback); the product's user only reads it.
   printf '\n[deploy]\nroot = "/srv/standard/deploy"\n' >> "$INSTALL/standard.toml"
-  printf '\n[tests]\ninstall = true\n\n[hosting]\nconfig = "%s"\ngate_user = "standard-gate"\n' \
+  # D33: contributors' code runs as an account without keys and without network, never as the guard.
+  id standard-runner >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin standard-runner
+  printf 'standard-guard ALL=(standard-runner) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/standard-runner
+  chmod 440 /etc/sudoers.d/standard-runner
+  printf '\n[tests]\ninstall = true\nrunner_user = "standard-runner"\n\n[hosting]\nconfig = "%s"\ngate_user = "standard-gate"\n' \
          "$HOSTING/hosting.toml" >> "$INSTALL/standard.toml"
 
   say "Claude API key (optional: Enter to skip; it is not shown and stays in a file only the agent can read)"

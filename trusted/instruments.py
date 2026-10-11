@@ -19,16 +19,21 @@ are information, never a fact: they open no right, and a secret's finding names 
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import os
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from .isolation import Isolation
 from .signing import Signer, envelope
 
 PIN = re.compile(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)")
@@ -251,28 +256,52 @@ def regressions(repo, base: str, head: str, targets: dict, ctx: dict, follow_ups
         return verdict("none", exc), [f"{type(exc).__name__}: {str(exc)[:300]}"]
 
 
-def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = False) -> Measure:
-    """Main's tests/ against the code of `code_commit`, in a fresh environment with an empty runner configuration.
-    The universe is the set of tests main's suite runs on main."""
+ISOLATION = Isolation()        # set by the operator from [tests] runner_user (D33)
+
+
+def _export(repo, commit: str, target: Path, paths=()) -> None:
+    """A plain copy of a commit's tree (no .git, nothing pointing back into the repository)."""
+    archive = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", commit, *paths], capture_output=True,
+                             timeout=300, check=True).stdout
+    target.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(target, filter="data")
+
+
+def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = False, tests_dir: str = "tests",
+              isolation: Isolation | None = None) -> Measure:
+    """`tests_dir` of `suite_commit` against the code of `code_commit`, as the isolated runner, without network.
+    The universe is the set of tests the suite runs."""
+    iso = isolation or ISOLATION
     work = Path(tempfile.mkdtemp())
     code, suite = work / "code", work / "suite"
-    for target, commit in ((code, code_commit), (suite, suite_commit)):
-        git(repo, "worktree", "add", "--detach", str(target), commit)
     try:
-        python = sys.executable
+        _export(repo, code_commit, code)
+        _export(repo, suite_commit, suite, [tests_dir])
+        out = iso.writable(work / "out")
+        iso.open_to_runner(code, suite)
+        work.chmod(0o755)
+        python, home = sys.executable, str(out)
         if install and (code / "requirements.txt").exists():
-            venv = work / "venv"
-            subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=300)
+            venv = out / "venv"
+            subprocess.run(iso.command([sys.executable, "-m", "venv", str(venv)], {"PATH": "/usr/bin:/bin",
+                                                                                      "HOME": home}, network=True),
+                           check=True, timeout=300, capture_output=True)
             python = str(venv / "bin" / "python")
-            subprocess.run([python, "-m", "pip", "install", "-q", "--only-binary=:all:",   # wheels: no build code
-                            "-r", str(code / "requirements.txt"), "pytest"],
-                           check=True, timeout=1800)
-        (work / "pytest.ini").write_text("[pytest]\n")
-        report = work / "report.xml"
-        env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(code), "HOME": str(work)}
-        subprocess.run([python, "-m", "pytest", "-c", str(work / "pytest.ini"), "--rootdir", str(code), "-p",
-                        "no:cacheprovider", "-q", f"--junitxml={report}", str(suite / "tests")],
-                       cwd=code, env=env, capture_output=True, timeout=1800)
+            subprocess.run(iso.command([python, "-m", "pip", "install", "-q", "--only-binary=:all:",   # wheels only
+                                        "-r", str(code / "requirements.txt"), "pytest"],
+                                       {"PATH": "/usr/bin:/bin", "HOME": home,
+                                        **{k: v for k, v in os.environ.items() if k.endswith(("_PROXY", "_proxy",
+                                                                                              "CA_BUNDLE", "CERT_FILE"))}},
+                                       network=True), check=True, timeout=1800, capture_output=True)
+        ini = out / "pytest.ini"
+        ini.write_text("[pytest]\n")
+        ini.chmod(0o644)
+        report = out / "report.xml"
+        env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(code), "HOME": home, "PYTHONDONTWRITEBYTECODE": "1"}
+        subprocess.run(iso.command([python, "-m", "pytest", "-c", str(ini), "--rootdir", str(code), "-p",
+                                    "no:cacheprovider", "-q", f"--junitxml={report}", str(suite / tests_dir)], env),
+                       cwd=code, capture_output=True, timeout=1800)
         if not report.exists():
             raise RuntimeError("no test report")
         names, failed, traces = set(), [], []
@@ -287,8 +316,10 @@ def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = Fals
                 traces.append(f"{name}\n{(bad[0].get('message') or '')[:300]}\n{(bad[0].text or '')[-1500:]}")
         return Measure(frozenset(), frozenset(names), tuple(failed), tuple(traces))
     finally:
-        for target in (code, suite):
-            git(repo, "worktree", "remove", "--force", str(target), check=False)
+        if iso.isolated:                                    # what the runner wrote, it removes
+            subprocess.run(iso.command(["rm", "-rf", str(work / "out")], {"PATH": "/usr/bin:/bin"}),
+                           capture_output=True, timeout=300)
+        subprocess.run(["rm", "-rf", str(work)], capture_output=True, timeout=300)
 
 
 def tests(repo, base: str, head: str, *, install: bool = False) -> str:
@@ -338,9 +369,21 @@ class Instrument:
         self.findings = {}                                  # "resource|property" -> details of the last measure
 
     def observation(self, domain: str, resource: str, prop: str, status: str, level: str = "real") -> dict:
-        body = {"id": f"obs-{uuid.uuid4().hex}", "at": self.clock(), "author": self.signer.identity,
+        """A signed fact. A property the floors pin to an instrument (D33) is signed as that instrument's
+        measurement: its method, its coverage, when it was measured and a digest of what was measured."""
+        from floors import INSTRUMENTS
+        at = self.clock()
+        body = {"id": f"obs-{uuid.uuid4().hex}", "at": at, "author": self.signer.identity,
                 "under": self.capability, "resource": resource, "property": prop, "status": status, "level": level}
-        return envelope(domain, "observation", body, [self.signer])
+        if prop not in INSTRUMENTS:
+            return envelope(domain, "observation", body, [self.signer])
+        method, coverage, _ = INSTRUMENTS[prop]
+        details = self.findings.get(f"{resource}|{prop}", {}).get("details", [])
+        artifact = "sha256:" + hashlib.sha256(json.dumps([resource, prop, status, details], sort_keys=True,
+                                                         default=str).encode()).hexdigest()
+        body.update({"id": f"mes-{uuid.uuid4().hex}", "method": method, "coverage": coverage, "measured_at": at,
+                     "artifact": artifact})
+        return envelope(domain, "measurement", body, [self.signer])
 
     def measure_targets(self, domain: str, repo, commit: str, targets: dict, ctx: dict):
         """Signed observations, one at a time, of every probed floor target at one snapshot of main.

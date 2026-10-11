@@ -56,6 +56,19 @@ def qualify(config_path) -> list:
                      f"assessor {assessment.get('assessor')}, independent={assessment.get('independent')}",
                      "the installation was assessed by an assessor other than the operator (D19)",
                      "that the assessor's statements are true"))
+    runner = c.get("tests", {}).get("runner_user")
+    try:
+        import pwd
+        entry = pwd.getpwnam(runner) if runner else None
+        guard = sep["guard_user"] if sep else None
+        groups = [g.gr_name for g in __import__("grp").getgrall() if runner in g.gr_mem] if runner else []
+        clean = entry is not None and runner != guard and guard not in groups
+    except KeyError:
+        entry, clean, groups = None, False, []
+    out.append(probe("T06 contributors' code runs isolated", bool(clean),
+                     f"runner {runner}, groups {groups}" if runner else "no [tests] runner_user: it runs as the guard",
+                     "the code a contribution brings runs as an account without the guard's keys, without network",
+                     "that the kernel's user namespaces and sudo are themselves sound"))
     out.append(probe("T01 code release", c.get("demo") is not True,
                      f"running code {code_digest()}",
                      "the source files on disk hash to this release",

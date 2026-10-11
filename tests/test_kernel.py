@@ -165,27 +165,29 @@ class Evidence(unittest.TestCase):
     def setUp(self):
         self.L = Ledger()
         self.agent = self.L.grant("agent", ["effect:remediate"], ["repo:*"], conditions=["remediate-autonomous"])
-        self.tester = self.L.grant("tester", ["observe", "certify:real"], ["repo:*"])
-        self.repro = self.L.grant("reproducer", ["observe", "certify:real"], ["repo:*"])
+        self.scanner = self.L.grant("scanner", ["observe", "certify:real"], ["repo:*"])   # the pinned source
         self.args = {"area": "deps", "item": "vulns", "base": "a" * 40, "head": "b" * 40}
         self.resource = "repo:deps:vulns/" + "a" * 40 + "/" + "b" * 40
 
     def test_tests_alone_never_make_a_repair_autonomous(self):
         L = self.L
-        L.submit("observation", "tester", under=self.tester, resource=self.resource, property="tests",
-                 status="green", level="real")
+        L.measure("scanner", self.scanner, self.resource, "tests", "green")
         self.assertEqual(L.refused("intent", "agent", under=self.agent, op="remediate", args=self.args),
                          "CAP.CONDITION")
-        L.submit("observation", "reproducer", under=self.repro, resource=self.resource, property="reproduced",
-                 status="yes", level="real")
+        L.measure("scanner", self.scanner, self.resource, "reproduced", "yes")
         L.submit("intent", "agent", under=self.agent, op="remediate", args=self.args)
 
     def test_f0_8_the_actor_cannot_attest_its_own_permission(self):
         L = self.L
         self_attest = L.grant("agent", ["observe", "certify:real"], ["repo:*"])
         for prop, status in (("tests", "green"), ("reproduced", "yes")):
-            L.submit("observation", "agent", under=self_attest, resource=self.resource, property=prop,
-                     status=status, level="real")
+            self.assertEqual(L.refused("observation", "agent", under=self_attest, resource=self.resource,
+                                       property=prop, status=status, level="real"), "PROV.INSTRUMENT")
+            at = L.state["last_at"] + 1                                       # nor measure as if it were the scanner
+            self.assertEqual(L.refused("measurement", "agent", at=at, under=self_attest, resource=self.resource,
+                                       property=prop, status=status, level="real", method="main-suite"
+                                       if prop == "tests" else "recipe-replay", coverage="repo:inventory:all",
+                                       measured_at=at, artifact="sha256:" + "0" * 64), "PROV.COVERAGE")
         self.assertEqual(L.refused("intent", "agent", under=self.agent, op="remediate", args=self.args),
                          "CAP.CONDITION")
 
@@ -193,9 +195,8 @@ class Evidence(unittest.TestCase):
         """V6-§3.1 / R05: a proof about another head proves nothing about this one."""
         L = self.L
         other = "repo:deps:vulns/" + "a" * 40 + "/" + "c" * 40
-        for author, under, prop, status in (("tester", self.tester, "tests", "green"),
-                                            ("reproducer", self.repro, "reproduced", "yes")):
-            L.submit("observation", author, under=under, resource=other, property=prop, status=status, level="real")
+        for prop, status in (("tests", "green"), ("reproduced", "yes")):
+            L.measure("scanner", self.scanner, other, prop, status)
         self.assertEqual(L.refused("intent", "agent", under=self.agent, op="remediate", args=self.args),
                          "CAP.CONDITION")
 

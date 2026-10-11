@@ -84,6 +84,15 @@ class Ledger:
         self.records.append(record)
         return body["id"]
 
+    def measure(self, author, under, resource, prop, status, level="real"):
+        """A pinned instrument's measurement (D33): method and coverage from the floors, measured now."""
+        from floors import INSTRUMENTS
+        method, coverage, _ = INSTRUMENTS[prop]
+        at = self.state["last_at"] + 1
+        return self.submit("measurement", author, at=at, under=under, resource=resource, property=prop,
+                           status=status, level=level, method=method, coverage=coverage, measured_at=at,
+                           artifact="sha256:" + "0" * 64)
+
     def refused(self, kind, author, signers=None, at=None, **fields) -> str:
         before = copy.deepcopy(self.state)
         try:

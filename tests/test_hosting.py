@@ -158,6 +158,20 @@ class Integration(unittest.TestCase):
             self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # no review: nothing moves
             approve("bob", red)
             approve("eve", leaky)
+            # D33: a reviewer cannot replace a measure by an opinion: `tests` is the scanner's instrument only.
+            from trusted.signing import envelope
+            for kind, extra in (("observation", {}), ("measurement", {"method": "main-suite",
+                                                                        "coverage": "repo:inventory:all",
+                                                                        "measured_at": clock.t + 1,
+                                                                        "artifact": "sha256:" + "0" * 64})):
+                s = operator.journal.snapshot()
+                forged = envelope(s["domain"], kind, {
+                    "id": f"forged-{kind}", "at": clock(), "author": "h3", "under": operator.config["grants"]["reviewer"],
+                    "resource": f"repo:contrib:bob/{main}/{red}", "property": "tests", "status": "green",
+                    "level": "real", **extra}, [load_signer("h3", root / "install" / "keys" / "h3.key")])
+                with self.assertRaises(Exception) as refused:
+                    operator.service.admit(forged)
+                self.assertTrue(str(getattr(refused.exception, "code", refused.exception)).startswith("PROV"))
             rounds()
             self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # reviewed but red: never
             state = operator.journal.snapshot()                                          # reviewed, green, but a
