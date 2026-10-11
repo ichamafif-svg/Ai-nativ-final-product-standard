@@ -26,6 +26,8 @@ import time
 import urllib.error
 import urllib.request
 
+from .slo import evaluate
+
 LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+([-+0-9.eE]+|NaN|\+Inf|-Inf)(?:\s+-?\d+)?$')
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
 FAILING, SLOW_P99_MS, LATE_PERIODS = 0.05, 1000.0, 2
@@ -168,6 +170,27 @@ def judge_job(last, period, ok, now, late_periods: int = LATE_PERIODS) -> tuple[
     return "healthy", None
 
 
+RELEASE_LINE = re.compile(r'^standard_release_(requests_total|duration_seconds_bucket)\{(.*)\}\s+([-+0-9.eE]+)$')
+
+
+def parse_releases(text: str) -> dict:
+    """{release: {"count", "errors", "buckets"}} from the runner's own measures (tools/run_release.py): what each
+    release answered, seen from in front of it."""
+    out = {}
+    for raw in text.splitlines():
+        m = RELEASE_LINE.match(raw.strip())
+        if not m:
+            continue
+        labels, value = dict(LABEL.findall(m[2])), float(m[3])
+        e = out.setdefault(labels.get("release", "?"), {"count": 0.0, "errors": 0.0, "buckets": {}})
+        if m[1] == "requests_total":
+            e["count"] += value
+            e["errors"] += value if labels.get("outcome") == "error" else 0.0
+        else:
+            e["buckets"][labels["le"]] = e["buckets"].get(labels["le"], 0.0) + value
+    return out
+
+
 BUCKETS = ("0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10", "+Inf")
 
 
@@ -186,8 +209,10 @@ class Production:
     """The operator's reading of production: the last scrapes of every declared source and the probes' answers,
     judged over a window with the engineers' settings."""
 
-    def __init__(self, sources, *, slo: float = 0.999, window: int = 300, fetch=None, policy=None, request=None):
+    def __init__(self, sources, *, slo: float = 0.999, window: int = 300, fetch=None, policy=None, request=None,
+                 store=None, release_source=None):
         self.sources, self.slo, self.window, self.policy = list(sources), slo, window, policy
+        self.store, self.release_source, self.last, self.releases = store, release_source, {}, []
         self.fetch = fetch or (lambda url: urllib.request.urlopen(url, timeout=5).read().decode())
         self.request = request or _request
         self.samples = {}                                  # source -> [(at, hist, gauges)]
@@ -225,13 +250,45 @@ class Production:
                 hist, gauges = parse(self.fetch(source), re.sub(r"^\w+://", "", source).split("/")[0])
                 kept = [s for s in self.samples.get(source, []) if s[0] >= now - self.window] + [(now, hist, gauges)]
                 self.samples[source], self.up[source] = kept, True
+                self._record(source, now, hist)
             except Exception:
                 self.up[source] = False
         probes = self._probe()
         if probes:
+            hist = {k: {**v, "buckets": dict(v["buckets"])} for k, v in probes.items()}
             kept = [s for s in self.samples.get("probes", []) if s[0] >= now - self.window]
-            self.samples["probes"] = kept + [(now, {k: {**v, "buckets": dict(v["buckets"])} for k, v in probes.items()},
-                                              {})]
+            self.samples["probes"] = kept + [(now, hist, {})]
+            self._record("probes", now, hist)
+        if self.release_source:
+            try:
+                per = parse_releases(self.fetch(self.release_source))
+                self.releases = [s for s in self.releases if s[0] >= now - 4 * 3600] + [(now, per)]
+            except Exception:
+                pass
+
+    def _record(self, source: str, now: int, hist: dict) -> None:
+        """Per-minute good and bad events of every component, for the SLOs (trusted/slo.py)."""
+        previous, self.last[source] = self.last.get(source), hist
+        if self.store is None or previous is None:
+            return
+        for (kind, op, name), e in hist.items():
+            p = previous.get((kind, op, name))
+            if p is None:
+                continue
+            (_, total, bad, buckets), = deltas([(0, p["count"], p["errors"], p["buckets"]),
+                                                (now, e["count"], e["errors"], e["buckets"])])
+            self.store.add(now // 60, self.limits(kind, op, name).get("id") or f"{kind}|{op}|{name}", kind,
+                           total, bad, buckets)
+
+    def release_stats(self, release: str, since: int) -> dict | None:
+        """Requests, error rate and p99 the runner saw for one release since a moment (canary analysis)."""
+        window = [(at, per.get(release)) for at, per in self.releases if at >= since and per.get(release)]
+        if len(window) < 2:
+            return None
+        (_, a), (_, b) = window[0], window[-1]
+        rows = deltas([(0, a["count"], a["errors"], a["buckets"]), (1, b["count"], b["errors"], b["buckets"])])
+        s = stats(rows, 1, 0.999)
+        return {"requests": s["requests"], "error_rate": s["error_rate"], "p99": s["p99"]}
 
     def served(self) -> dict:
         """The release that answers (build_info version) and when its process started, from the latest scrape."""
@@ -271,12 +328,20 @@ class Production:
                 limits = self.limits("job", "", job)
                 components.append({"kind": "job", "operation": "", "name": job, "state": state, "why": why,
                                    "id": limits.get("id"), "counted": limits["counted"]})
-        bad = [c for c in components if c["state"] in ("degraded", "failing") and c["counted"]]
+        slos = {}
+        if self.store is not None and self.policy is not None:
+            counted = lambda cid, kind: (self.policy.get("counted", cid) == "on" if self.policy.get("counted", cid)
+                                         else kind != "dependency")
+            slos = evaluate(self.store, self.policy.slos(), now // 60, counted=counted,
+                            burn_fast=self.policy.get("burn_fast"), burn_slow=self.policy.get("burn_slow"))
+        # Broken: a counted component failing outright, or an SLO burning its budget fast. Degraded or a slow burn is
+        # an alert for people, not a breach.
+        bad = [c for c in components if c["state"] == "failing" and c["counted"]] + [s for s in slos.values() if s["fast"]]
         if silent:
             return {"coverage": f"uncovered:{len(silent)}", "slo": f"uncovered:{len(silent)}", "components": components,
-                    "silent": silent}
+                    "silent": silent, "slos": slos}
         return {"coverage": "complete", "slo": f"breached:{len(bad)}" if bad else "met", "components": components,
-                "silent": []}
+                "silent": [], "slos": slos}
 
 
 MIGRATION = re.compile(r"migrations/(\d+)[^/]*\.sql")
@@ -305,11 +370,35 @@ def compatible(repo, live: str, prev: str, allow: bool) -> tuple[bool, str | Non
     return True, None
 
 
+def _canary(live: str, release: str, history: list, now_ms: int, get, canary_stats) -> tuple[list, str]:
+    """Compare the canary with the live release on the same traffic, since it started."""
+    started = next((h["at"] for h in reversed(history) if h.get("op") == "canary" and h.get("to") == release), now_ms)
+    c, s = canary_stats(release, started // 1000), canary_stats(live, started // 1000)
+    baked = (now_ms - started) // 60_000
+    need = get("canary_min_requests")
+    if c is None or c["requests"] < min(need, 20):
+        return [], f"canary on {get('canary_percent')} % of traffic: {0 if c is None else c['requests']} requests so far"
+    delta = (c["error_rate"] or 0) - ((s or {}).get("error_rate") or 0)
+    if delta * 100 > get("canary_max_error_delta"):
+        return [(f"run:canary:abort/{live}/{release}", "canary_bad", "yes")], \
+            f"canary fails {delta * 100:.2f} points more than the live release (limit {get('canary_max_error_delta')})"
+    limit = max(((s or {}).get("p99") or 0) * 1.5, get("p99_ms"))
+    if c["p99"] is not None and c["p99"] > limit:
+        return [(f"run:canary:abort/{live}/{release}", "canary_bad", "yes")], \
+            f"canary p99 {c['p99']:.0f} ms over {limit:.0f} ms"
+    if baked < get("canary_bake_min") or c["requests"] < need:
+        return [], f"canary baking: {baked}/{get('canary_bake_min')} min, {c['requests']}/{need} requests, no worse so far"
+    return [(f"run:release:all/{live}/{release}", "promotable", "yes")], \
+        f"canary held {baked} min on {c['requests']} requests, {delta * 100:+.2f} points of errors: promoted"
+
+
 START_GRACE_MS = 90_000      # a release that does not answer this long after its switch never started
 
 
 def release_facts(slo: str, live: str | None, main: str, history: list, good: set, now_ms: int, *,
-                  served: str | None = None, policy=None, compat=lambda live, prev: (True, None)) -> tuple[list, dict]:
+                  served: str | None = None, policy=None, compat=lambda live, prev: (True, None),
+                  canary: str | None = None, canary_stats=lambda release, since: None,
+                  budget: float | None = None) -> tuple[list, dict]:
     """The facts that open `deploy`, `rollback` and `restart`, as (resource, property, status), with their reasons.
 
     run:release:all lag                   none when production serves main's head, else behind (repaired by deploy)
@@ -321,12 +410,18 @@ def release_facts(slo: str, live: str | None, main: str, history: list, good: se
                                                             engineers let Standard step back alone
     run:process:all/{live}/{n}            restartable = yes the objective is broken, not by the switch, and the
                                                             engineers let Standard restart, within the hourly budget
-    A release rolled back is never a candidate again: the gap stays open and goes to people at its due time."""
-    get = (lambda k: policy.get(k)) if policy is not None else (lambda k: {"auto_deploy": "on", "auto_rollback": "on",
-                                                                          "rollback_horizon_min": 30, "auto_restart": "off",
-                                                                          "restarts_per_hour": 2}[k])
+    run:canary:all/{live}/{main}          canary_ready = yes  the release policy is a canary: start it on a share of
+                                                              traffic first
+    run:release:all/{live}/{canary}       promotable = yes    the canary baked, saw enough requests, and failed no more
+                                                              than the live release (error rate, p99)
+    run:canary:abort/{live}/{canary}      canary_bad = yes    it failed more, or main moved on: take it out
+    Automatic deployment waits for the deployment window, an unfrozen policy and enough error budget left.
+    A release rolled back or aborted is never a candidate again: the gap stays open and goes to people at its due time."""
+    from .policy import DEFAULTS
+    get = (lambda k: policy.get(k)) if policy is not None else DEFAULTS.get
     live_name = live or "none"
-    rolled_back = {h["from"] for h in history if h.get("op") == "rollback"}
+    rolled_back = {h["from"] for h in history if h.get("op") == "rollback"} | {
+        h["to"] for h in history if h.get("op") == "abort"}
     answering = served or live
     facts = [("run:release:all", "lag", "none" if answering == main and live == main else "behind")]
     why = {"live": live, "served": served, "main": main, "rolled_back": sorted(rolled_back)}
@@ -335,10 +430,23 @@ def release_facts(slo: str, live: str | None, main: str, history: list, good: se
             why["deploy"] = "main's head was rolled back: a new commit on main is needed"
         else:
             facts.append((f"run:release:all/{live_name}/{main}", "candidate", "yes"))
-            if get("auto_deploy") == "on":
-                facts.append((f"run:release:all/{live_name}/{main}", "deployable", "yes"))
-            else:
+            open_, closed_why = policy.deploy_open(now_ms) if policy is not None else (True, None)
+            if get("auto_deploy") != "on":
                 why["deploy"] = "automatic deployment is off: an engineer approves"
+            elif canary is None and not open_:
+                why["deploy"] = closed_why
+            elif canary is None and budget is not None and get("freeze_below") > 0 and budget * 100 < get("freeze_below"):
+                why["deploy"] = f"error budget left {budget * 100:.1f} % is under {get('freeze_below')} %: frozen"
+            elif get("strategy") != "canary" or live is None:  # a first release has nothing to be compared with
+                facts.append((f"run:release:all/{live_name}/{main}", "deployable", "yes"))
+            elif canary is None:
+                facts.append((f"run:canary:all/{live_name}/{main}", "canary_ready", "yes"))
+            elif canary == main:
+                facts_c, why["canary"] = _canary(live_name, main, history, now_ms, get, canary_stats)
+                facts += facts_c
+    if canary is not None and canary != main:
+        facts.append((f"run:canary:abort/{live_name}/{canary}", "canary_bad", "yes"))
+        why["canary"] = "main moved on: the canary is taken out"
     switch = next((h for h in reversed(history) if h.get("to") == live and h.get("op") != "restart"), None)
     prev = switch["from"] if switch else "none"
     if live and prev != "none" and prev not in rolled_back:   # never back to a release that was itself stepped back from
@@ -419,8 +527,10 @@ class Pass:
                     "run:probes": {"status": str(len(self.production.probed)), "details": [
                         {"id": pid, "last": e["last"], "count": e["count"], "errors": e["errors"]}
                         for pid, e in self.production.probed.items()]}}
+        findings["run:slos"] = {"status": a["slo"], "details": a.get("slos", {})}
         if self.policy is not None:
-            findings["run:policy"] = {"status": "published", "details": self.policy.published()}
+            findings["run:policy"] = {"status": "published", "details": {
+                **self.policy.published(), "silences": self.policy.silences(now)}}
         if self.releases is None:
             facts.append(("run:release:all", "lag", "uncovered:not-configured"))
         else:
@@ -429,9 +539,12 @@ class Pass:
                 if self.state is not None:
                     self.state.write_text(json.dumps(sorted(self.good)))
             allow = self.policy is None or self.policy.get("compatible_migrations") == "on"
+            budgets = [s["budget"] for s in a.get("slos", {}).values() if s["budget"] is not None]
             released, why = release_facts(
                 a["slo"], link, self._main(), self.releases.history(), self.good, now, served=served["version"],
-                policy=self.policy, compat=lambda live, prev: compatible(self.repo, live, prev, allow))
+                policy=self.policy, compat=lambda live, prev: compatible(self.repo, live, prev, allow),
+                canary=self.releases.canary(), canary_stats=self.production.release_stats,
+                budget=min(budgets) if budgets else None)
             facts += released
             findings["run:release:all|lag"] = {"status": released[0][2], "details": [
                 f"{k}: {', '.join(v) if isinstance(v, list) else v}" for k, v in why.items() if v is not None]}

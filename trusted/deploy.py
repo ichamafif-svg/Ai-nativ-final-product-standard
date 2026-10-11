@@ -26,15 +26,75 @@ import time
 from pathlib import Path
 
 SHA = re.compile(r"[0-9a-f]{40}")
-OPS = ("deploy", "rollback", "restart")
+OPS = ("deploy", "rollback", "restart", "canary", "abort")
 
 
 class Releases:
-    def __init__(self, repo, root, restart=None, branch: str = "main", clock=None, served=None):
+    def __init__(self, repo, root, restart=None, branch: str = "main", clock=None, served=None, canary_percent=None):
         self.repo, self.root, self.restart, self.branch = Path(repo), Path(root), restart, branch
+        self.canary_percent = canary_percent or (lambda: 10)
         self.clock = clock or (lambda: int(time.time() * 1000))
         self.served = served or (lambda: {"version": None, "started": None})   # what answers, from the metrics
         self.link, self.dir, self.log = self.root / "current", self.root / "releases", self.root / "history.jsonl"
+
+    def canary(self) -> str | None:
+        """The release on a share of traffic beside the live one, if any (D32)."""
+        try:
+            name = Path(os.readlink(self.root / "canary")).name
+        except OSError:
+            return None
+        return name if SHA.fullmatch(name) else None
+
+    def _log(self, op: str, frm: str, to: str, **extra) -> None:
+        with open(self.log, "a") as f:
+            f.write(json.dumps({"at": self.clock(), "op": op, "from": frm, "to": to, **extra}) + "\n")
+        self.log.chmod(0o644)
+
+    def _link(self, name: str, target: str | None, key: str) -> None:
+        if target is None:
+            (self.root / name).unlink(missing_ok=True)
+            return
+        tmp = self.root / f".{name}-{key}"
+        tmp.unlink(missing_ok=True)
+        os.symlink(f"releases/{target}", tmp)
+        os.replace(tmp, self.root / name)                    # atomic
+
+    def canary_switch(self, resource: str, args: dict, reservation_key: str) -> str:
+        """canary (run:canary:all/{from}/{to}): start `to`, a commit of main, on a share of traffic beside `from`.
+        abort (run:canary:abort/{from}/{to}): take the canary `to` out; it is never offered again."""
+        frm, to = args["from"], args["to"]
+        if not SHA.fullmatch(to) or not (frm == "none" or SHA.fullmatch(frm)):
+            return "failed"
+        abort = resource.startswith("run:canary:abort/")
+        if not abort and subprocess.run(
+                ["git", "-C", str(self.repo), "merge-base", "--is-ancestor", to, f"refs/heads/{self.branch}"],
+                capture_output=True, timeout=120).returncode != 0:
+            return "failed"
+        with open(self.root / ".lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self.current() != (None if frm == "none" else frm):
+                return "failed"                              # production moved
+            if abort:
+                if self.canary() != to:
+                    return "ok" if any(h.get("op") == "abort" and h.get("to") == to for h in self.history()) else "failed"
+                self._link("canary", None, reservation_key)
+                self._log("abort", frm, to)
+                return "ok"
+            if self.canary() == to:
+                return "ok"
+            if self.canary() is not None:
+                return "failed"                              # one canary at a time
+            try:
+                self._export(to)
+            except (OSError, subprocess.SubprocessError, tarfile.TarError):
+                return "failed"
+            weight = self.root / ".canary_weight.tmp"
+            weight.write_text(f"{int(self.canary_percent())}\n")
+            weight.chmod(0o644)
+            os.replace(weight, self.root / "canary_weight")
+            self._link("canary", to, reservation_key)
+            self._log("canary", frm, to, percent=int(self.canary_percent()))
+        return "ok"
 
     def current(self) -> str | None:
         try:
@@ -94,6 +154,8 @@ class Releases:
             tmp.unlink(missing_ok=True)
             os.symlink(f"releases/{to}", tmp)
             os.replace(tmp, self.link)                       # atomic: production is `from` or `to`, never between
+            if self.canary() is not None and (self.canary() == to or op == "rollback"):
+                self._link("canary", None, reservation_key)  # promoted, or stepping back ends any canary
             with open(self.log, "a") as f:
                 f.write(json.dumps({"at": self.clock(), "op": op, "from": frm, "to": to}) + "\n")
             self.log.chmod(0o644)
@@ -126,6 +188,10 @@ class Releases:
 
     def applied(self, it: dict) -> bool:
         served = self.served()
+        if it["op"] == "canary":
+            return self.canary() == it["args"]["to"] or self.current() == it["args"]["to"]
+        if it["op"] == "abort":
+            return self.canary() != it["args"]["to"]
         if it["op"] == "restart":
             asked = next((h["at"] for h in self.history() if h.get("op") == "restart" and h.get("n") == it["args"]["n"]
                           and h.get("to") == it["args"]["release"]), None)

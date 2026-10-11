@@ -84,7 +84,9 @@ class TrustedService:
                 transitions.setdefault(resource, {})[prop] = ob["status"]
         return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
                 "law": {"digest": law.digest, "effective": law.raw}, "health": self.health(required_at=now),
-                "assessment": self.assessment(), "transitions": transitions}
+                "assessment": self.assessment(), "transitions": transitions,
+                "facts": sorted(({k: o[k] for k in ("id", "resource", "property", "status", "author", "at")}
+                                 for o in state["observations"].values()), key=lambda o: -o["at"])[:500]}
 
     def assessment(self) -> str:
         """INDEPENDENT only when an independent, pinned assessor qualified this installation (D19)."""

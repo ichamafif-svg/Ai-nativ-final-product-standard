@@ -103,6 +103,10 @@ class Server(unittest.TestCase):
             self.assertEqual(settings["policy"]["defaults"]["objective"], 99.9)
             self.assertEqual(settings["signing"]["grant"]["holder"], "h1")
             self.assertIn("auto_rollback", settings["policy"]["defaults"])
+            self.assertIn("s-default", settings["policy"]["slos"])                         # D32: a default SLO
+            self.assertEqual(settings["policy"]["document"]["global"]["strategy"], "direct")
+            preview = json.loads(urllib.request.urlopen(f"{url}/api/preview?sli=availability&target=99.9").read())
+            self.assertIn("minutes", preview)
 
             # Prévenir: a silent source opens an alert; a person takes it by a signature the kernel admits.
             inst.telemetry.targets, inst.telemetry.fetch = ["http://product/metrics"], lambda u: (_ for _ in ()).throw(OSError("down"))
@@ -115,6 +119,7 @@ class Server(unittest.TestCase):
             before = alerts["untaken"]
             alert = source[0]
             self.assertEqual((alert["kind"], alert["why"]["rule"]), ("source", "source_down"))
+            self.assertEqual(alert["severity"], "page")                                   # D32: page or ticket
             from surface.human import load_signer
             from trusted.signing import envelope
             ack = envelope(alerts["signing"]["domain"], "observation", {

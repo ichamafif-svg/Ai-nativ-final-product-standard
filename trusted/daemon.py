@@ -37,6 +37,7 @@ from .journal import Journal, PinStore
 from .operator import MAIN_OPS, Instruments, Prover
 from .release import code_digest
 from .policy import Policy
+from .slo import Store
 from .runtime import Pass, Production
 from .service import TrustedService
 from .signing import Signer, entry
@@ -82,12 +83,16 @@ class Installation:
         run, deploy = c.get("run", {}), c.get("deploy")
         self.policy = Policy(MIN_DELAY_MS, self.path.parent / "policy.json", defaults={   # D31: engineers' settings
             "objective": float(run.get("slo", 99.9)), "base_url": run.get("base_url", "")})
-        production = Production(run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100, policy=self.policy)
+        production = Production(run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100, policy=self.policy,
+                                store=Store(self.path.parent / "slo.db"),
+                                release_source=(deploy or {}).get("runner_metrics"))
         self.releases = Releases(self.repo_path, resolve(deploy["root"]), deploy.get("restart"), clock=self.clock,
-                                 served=production.served) if deploy else None
+                                 served=production.served, canary_percent=lambda: self.policy.get("canary_percent")
+                                 ) if deploy else None
         ports = {op: self.repository.remediate for op in MAIN_OPS} | ({
             "deploy": self.releases.switch, "rollback": self.releases.switch,
-            "restart": self.releases.request_restart} if self.releases else {})
+            "restart": self.releases.request_restart, "canary": self.releases.canary_switch,
+            "abort": self.releases.canary_switch} if self.releases else {})
         data = c.get("data")
         self.data = TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY
         self.service = TrustedService(

@@ -30,7 +30,7 @@
       "trusted/release.py",
       "trusted/daemon.py"
     ],
-    "ceiling": 1181,
+    "ceiling": 1188,
     "breaks": "safety (T): a premise or a departure that must not happen"
   },
   "restrictive": {
@@ -70,16 +70,17 @@
     "files": [
       "trusted/runtime.py",
       "trusted/deploy.py",
-      "trusted/policy.py"
+      "trusted/policy.py",
+      "trusted/slo.py"
     ],
-    "ceiling": 738,
+    "ceiling": 1141,
     "breaks": "safety (T06/T07/T08, D30/D31): a production fact or setting that opens deploy, rollback or restart, or a switch of the live release"
   },
   "_raised": {
     "date": "2026-10-11",
-    "trusted": "960 -> 1150: operator process (daemon), release identity (T01); 1150 -> 1153: GitHub API choice in the config; strict umask of the guard (T07 by Unix users); 1153 -> 1154: integrate shares the effect port of remediate (D23); 1154 -> 1155: findings file path for the operator; 1155 -> 1160: the view publishes the facts on exact transitions, for the interface (D27); 1160 -> 1173: production pass and release adapter wired into the operator (D30); 1173 -> 1181: engineers' settings and the restart port wired into the operator (D31)",
+    "trusted": "960 -> 1150: operator process (daemon), release identity (T01); 1150 -> 1153: GitHub API choice in the config; strict umask of the guard (T07 by Unix users); 1153 -> 1154: integrate shares the effect port of remediate (D23); 1154 -> 1155: findings file path for the operator; 1155 -> 1160: the view publishes the facts on exact transitions, for the interface (D27); 1160 -> 1173: production pass and release adapter wired into the operator (D30); 1173 -> 1181: engineers' settings and the restart port wired into the operator (D31); 1181 -> 1188: SLO store, runner measures and canary port wired into the operator (D32)",
     "integrations": "450 -> 672: all floor probes, pinned data (D17), GitHub adapter (D05); 672 -> 690: the same CAS over git push --force-with-lease where GraphQL is unreachable; 690 -> 719: tests of clients' contributions from the inbox, integrate in readback and proof (D23); 719 -> 756: findings published beside the facts (locations, test traces), information only; 756 -> 757: test dependencies installed from wheels only; 757 -> 801: regressions instrument, a contribution may not open a new gap (D26); 801 -> 812: readback and proof of deploy and rollback (D30)",
     "visibility": "248 -> 250: an uncovered measure asks for observation, not repair",
-    "production": "new (D30): the production instrument and the release adapter; 391 -> 738 (D31): engineers' settings with delayed loosening, external probes, served version, migrations compatibility, restart"
+    "production": "new (D30): the production instrument and the release adapter; 391 -> 738 (D31): engineers' settings with delayed loosening, external probes, served version, migrations compatibility, restart; 738 -> 1141 (D32): SLOs with error budgets and burn-rate alerts, release windows and budget freeze, canary analysis, promote and abort"
   }
 }

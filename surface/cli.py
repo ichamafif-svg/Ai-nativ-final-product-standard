@@ -6,6 +6,10 @@
     python -m surface [--socket PATH] law SECTION/ID    one declaration of the effective law (floors or client)
     python -m surface review TARGET BASE HEAD --identity ID --key FILE --under GRANT [--changes-requested]
     python -m surface attest TARGET --identity ID --key FILE --under GRANT
+    python -m surface set SCOPE/KEY VALUE --identity ID --key FILE --under GRANT    a production setting (D31), e.g.
+                                                    set global/objective 99.95 ; set c-1a2b3c4d5e6f/p99_ms 250
+    python -m surface decide RESOURCE PROPERTY --identity ID --key FILE --under GRANT    an engineer's decision, e.g.
+                                                    decide run:release:all/FROM/TO approved
     python -m surface dossier HEAD --repo PATH          what a reviewer reads before signing: the agent's dossier
 
 `--findings FILE` adds the instruments' findings (where the gap is) to `context`; `--memory FILE` adds to `tasks` the
@@ -110,7 +114,8 @@ def declaration(view: dict, ref: str) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m surface")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
-    parser.add_argument("command", choices=("status", "tasks", "context", "law", "review", "attest", "dossier"))
+    parser.add_argument("command", choices=("status", "tasks", "context", "law", "review", "attest", "dossier", "set",
+                                                       "decide"))
     parser.add_argument("ref", nargs="?")
     parser.add_argument("base", nargs="?")
     parser.add_argument("head", nargs="?")
@@ -131,6 +136,17 @@ def main(argv=None) -> int:
     except Exception as exc:
         print(f"Standard is not reachable or not qualified here ({exc}). Nothing is attested or authorized.")
         return 2
+    if args.command in ("set", "decide"):                 # the same signed statements the interface makes (D31)
+        from .human import _observation, load_signer
+        signer = load_signer(args.identity, args.key)
+        resource, prop, status = ((f"run:policy/{args.ref}", "value", args.base) if args.command == "set"
+                                  else (args.ref, args.base, "yes"))
+        try:
+            print(json.dumps(client.admit(_observation(view, signer, args.under, resource, prop, status, None))))
+        except Exception as exc:
+            print(f"refused: {exc}")
+            return 1
+        return 0
     if args.command in ("review", "attest"):
         from .human import attest, load_signer, review
         signer = load_signer(args.identity, args.key)

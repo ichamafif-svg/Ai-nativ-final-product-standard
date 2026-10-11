@@ -1,19 +1,27 @@
-"""Run the live release of a product without downtime, and follow the guard's switches and restarts (D30, D31).
+"""Run the live release of a product without downtime, and follow the guard's switches, restarts and canaries
+(D30, D31, D32).
 
     python tools/run_release.py /srv/standard/deploy/current 9000 [--health /health] [--data /srv/standard/data]
 
-The runner listens on PORT and forwards every request to the release that currently serves. When the guard switches
-the `current` link, or asks for a restart (the `restart` file beside it), the runner starts the new process on a
-private port, with STANDARD_RELEASE set to its commit, and waits until its health path answers 200. Only then does
-traffic move to it and the old process stop: a release that never becomes healthy never receives a request, and the
-previous one keeps serving (the instrument sees which version answers and Standard steps back). The product's own
-process, without any privilege over the guard.
+The runner listens on PORT and forwards every request to the release that serves. When the guard switches the
+`current` link, or asks for a restart (the `restart` file beside it), the runner starts the new process on a private
+port, with STANDARD_RELEASE set to its commit, and waits until its health path answers 200. Only then does traffic
+move to it and the old process stop: a release that never becomes healthy never receives a request.
+
+When the guard sets a `canary` link (and `canary_weight`, a percentage), the runner starts that release beside the
+live one and sends it that share of requests (never `/metrics`, which stays the live release's). It measures what
+each release answers, from in front of them, at `/__standard/metrics` (standard_release_requests_total{release,
+outcome} and standard_release_duration_seconds_bucket{release,le}): the instrument compares them. When the link
+goes, the canary stops; when `current` becomes the canary, it simply becomes the live process.
+
+The product's own process, without any privilege over the guard.
 """
 from __future__ import annotations
 
 import argparse
 import http.client
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -23,67 +31,112 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding",
        "upgrade", "content-length"}
+BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+
+
+class Process:
+    def __init__(self, release: str, child, port: int):
+        self.release, self.child, self.port = release, child, port
+
+    def stop(self, drain: float = 2.0) -> None:
+        if self.child.poll() is None:
+            time.sleep(drain)                               # let in-flight requests finish
+            self.child.terminate()
+            try:
+                self.child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.child.kill()
 
 
 class Runner:
     def __init__(self, link: str, port: int, health: str, data: str | None, ready_s: float = 30.0):
         self.link, self.port, self.health, self.data, self.ready_s = link, port, health, data, ready_s
-        self.child, self.child_port, self.running, self.lock = None, None, (None, None), threading.Lock()
+        self.root = os.path.dirname(link)
+        self.live = self.canary = None
+        self.weight, self.restart_seen, self.ports = 0, None, iter(range(port + 1, port + 1000))
+        self.lock, self.counts = threading.Lock(), {}      # release -> {"ok", "error", "buckets"}
 
-    def wanted(self) -> tuple:
+    def _read(self, name: str):
         try:
-            target = os.readlink(self.link)
+            if name in ("current", "canary"):
+                return os.path.basename(os.readlink(os.path.join(self.root, name)))
+            with open(os.path.join(self.root, name)) as f:
+                return f.read().strip()
         except OSError:
-            target = None
-        try:
-            with open(os.path.join(os.path.dirname(self.link), "restart")) as f:
-                restart = f.read().strip()
-        except OSError:
-            restart = None
-        return target, restart
+            return None
 
-    def start(self, target: str):
-        release = os.path.join(os.path.dirname(self.link), target)
-        port = self.port + 1 if self.child_port != self.port + 1 else self.port + 2
-        env = {**os.environ, "STANDARD_RELEASE": os.path.basename(target)}
+    def start(self, release: str) -> Process | None:
+        port = next(self.ports)
+        env = {**os.environ, "STANDARD_RELEASE": release}
         if self.data:
             env["STANDARD_DATA"] = self.data
-        child = subprocess.Popen([sys.executable, os.path.join(release, "service.py"), str(port)], cwd=release, env=env)
+        path = os.path.join(self.root, "releases", release)
+        child = subprocess.Popen([sys.executable, os.path.join(path, "service.py"), str(port)], cwd=path, env=env)
         deadline = time.time() + self.ready_s
         while time.time() < deadline and child.poll() is None:
             try:
                 if urllib.request.urlopen(f"http://127.0.0.1:{port}{self.health}", timeout=2).status == 200:
-                    return child, port
+                    return Process(release, child, port)
             except Exception:
                 pass
             time.sleep(0.3)
         child.kill()
         child.wait()
-        return None, None
+        print(f"{release} did not become healthy: it receives no traffic", flush=True)
+        return None
 
     def follow(self) -> None:
         while True:
-            wanted = self.wanted()
-            dead = self.child is not None and self.child.poll() is not None
-            if wanted != self.running or dead:
-                target = wanted[0]
-                child, port = self.start(target) if target else (None, None)
-                if child is not None:
+            current, canary, restart = self._read("current"), self._read("canary"), self._read("restart")
+            weight = self._read("canary_weight")
+            self.weight = int(weight) if weight and weight.isdigit() else 0
+            live_dead = self.live is not None and self.live.child.poll() is not None
+            if current and (self.live is None or self.live.release != current or live_dead
+                            or (restart and restart != self.restart_seen and restart.startswith(current))):
+                if self.canary is not None and self.canary.release == current and self.canary.child.poll() is None:
+                    fresh, self.canary = self.canary, None  # promoted: the canary is already warm
+                else:
+                    fresh = self.start(current)
+                if fresh is not None:
                     with self.lock:
-                        old, self.child, self.child_port = self.child, child, port
-                    print(f"serving {os.path.basename(target)} on :{port}", flush=True)
-                    if old is not None and old.poll() is None:
-                        time.sleep(2)                       # let in-flight requests finish
-                        old.terminate()
-                        try:
-                            old.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            old.kill()
-                elif target:
-                    print(f"{os.path.basename(target)} did not become healthy: still serving the previous release",
-                          flush=True)
-                self.running = wanted
+                        old, self.live = self.live, fresh
+                    print(f"serving {current} on :{fresh.port}", flush=True)
+                    if old is not None:
+                        threading.Thread(target=old.stop, daemon=True).start()
+                self.restart_seen = restart
+            if canary != (self.canary.release if self.canary else None):
+                old = self.canary
+                with self.lock:
+                    self.canary = None
+                if old is not None:
+                    threading.Thread(target=old.stop, daemon=True).start()
+                if canary and canary != current:
+                    started = self.start(canary)
+                    with self.lock:
+                        self.canary = started
+                    if started:
+                        print(f"canary {canary} on :{started.port} for {self.weight} %", flush=True)
             time.sleep(1)
+
+    def record(self, release: str, failed: bool, seconds: float) -> None:
+        with self.lock:
+            c = self.counts.setdefault(release, {"ok": 0, "error": 0, "buckets": [0] * len(BUCKETS)})
+            c["error" if failed else "ok"] += 1
+            for i, bound in enumerate(BUCKETS):
+                if seconds <= bound:
+                    c["buckets"][i] += 1
+
+    def exposition(self) -> str:
+        lines = []
+        with self.lock:
+            for release, c in sorted(self.counts.items()):
+                for outcome in ("ok", "error"):
+                    lines.append(f'standard_release_requests_total{{release="{release}",outcome="{outcome}"}} {c[outcome]}')
+                for bound, n in zip(BUCKETS, c["buckets"]):
+                    lines.append(f'standard_release_duration_seconds_bucket{{release="{release}",le="{bound}"}} {n}')
+                lines.append(f'standard_release_duration_seconds_bucket{{release="{release}",le="+Inf"}} '
+                             f'{c["ok"] + c["error"]}')
+        return "\n".join(lines) + "\n"
 
     def handler(self):
         runner = self
@@ -92,29 +145,36 @@ class Runner:
             def log_message(self, *args):
                 pass
 
-            def _forward(self):
-                with runner.lock:
-                    port = runner.child_port
-                if port is None:
-                    self.send_error(503, "no release serves")
-                    return
-                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-                try:
-                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
-                    conn.request(self.command, self.path, body or None,
-                                 {k: v for k, v in self.headers.items() if k.lower() not in HOP})
-                    r = conn.getresponse()
-                    data = r.read()
-                except OSError:
-                    self.send_error(502, "the release did not answer")
-                    return
-                self.send_response(r.status)
-                for k, v in r.getheaders():
+            def _send(self, status, headers, data):
+                self.send_response(status)
+                for k, v in headers:
                     if k.lower() not in HOP:
                         self.send_header(k, v)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+
+            def _forward(self):
+                if self.path == "/__standard/metrics":
+                    return self._send(200, [("Content-Type", "text/plain; version=0.0.4")], runner.exposition().encode())
+                with runner.lock:
+                    live, canary, weight = runner.live, runner.canary, runner.weight
+                target = canary if (canary and self.path != "/metrics" and random.random() * 100 < weight) else live
+                if target is None:
+                    return self._send(503, [], b"no release serves\n")
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                start = time.perf_counter()
+                try:
+                    conn = http.client.HTTPConnection("127.0.0.1", target.port, timeout=30)
+                    conn.request(self.command, self.path, body or None,
+                                 {k: v for k, v in self.headers.items() if k.lower() not in HOP})
+                    r = conn.getresponse()
+                    data, status, headers = r.read(), r.status, r.getheaders()
+                except OSError:
+                    data, status, headers = b"the release did not answer\n", 502, []
+                if self.path != "/metrics":
+                    runner.record(target.release, status >= 500, time.perf_counter() - start)
+                self._send(status, headers, data)
 
             do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = _forward
 

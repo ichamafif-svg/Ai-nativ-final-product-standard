@@ -254,6 +254,7 @@ function reason(w) {
     job_failed: "dernière exécution échouée",
     job_never: "jamais réussie",
     job_late: `aucun succès depuis ${dur(w.value)}, limite ${dur(w.limit)}`,
+    burn: `budget consommé à ${nf(w.value, 1)}× son débit sur ${w.span}${w.budget != null ? `, ${w.budget < 0 ? "épuisé" : pct(w.budget, 0) + " restant"}` : ""}`,
   }[w.rule] || "";
 }
 const stateCell = (s, w) => `<td><span class="state ${ROUTE_STATE[s][0]}"><i></i>${ROUTE_STATE[s][1]}</span>${s !== "healthy" && w ? `<div class="sub">${esc(reason(w))}</div>` : ""}</td>`;
@@ -351,6 +352,10 @@ async function loadRun() {
       ${kpi("Budget d'erreur", f.budget == null ? "—" : f.budget < 0 ? "Épuisé" : pct(f.budget, 0),
         f.budget == null ? "pas de trafic" : f.budget < 0 ? `consommé à ${pct(1 - f.budget, 0)}` : "restant sur la période", budgetTone)}
     </div>
+    ${Object.keys(d.live.slos || {}).length ? `<section><h2>SLO <span class="quiet small">budget d'erreur sur la fenêtre de chaque SLO ; <a href="#/objectives">régler</a></span></h2><div class="slostrip">${Object.entries(d.live.slos).map(([id, e]) => `
+      <div class="panel"><div class="slohead"><b>${esc(e.name)}</b>${e.fast ? `<span class="sev page">Page</span>` : e.slow ? `<span class="sev ticket">Ticket</span>` : ""}</div>
+        <div class="small quiet">${pctx(e.target / 100)} sur ${e.window_d} j · conformité ${e.compliance == null ? "—" : pct(e.compliance, 3)}</div>${budgetBar(e.budget)}
+        <div class="burns small">${Object.entries(e.burn || {}).map(([span, v]) => `<span>${fmtBurn(v)} ${span}</span>`).join("")}</div></div>`).join("")}</div></section>` : ""}
     ${c.api.length ? `<section class="chart"><h2>Trafic des APIs</h2>${area(total.length ? total : [0, 0])}</section>` : ""}
     ${kinds.map((k) => `<section id="k-${k}"><h2>${KIND[k][0]} <span class="quiet small">${c[k].length}${k === "api" && d.openapi ? ", déclarées dans openapi.json" : ""}</span></h2>
       ${SECTIONS[k]([...c[k]].sort((a, b) => order[a.state] - order[b.state] || (b.rps || 0) - (a.rps || 0)), d)}</section>`).join("")}
@@ -364,6 +369,18 @@ async function loadRun() {
 }
 
 document.addEventListener("click", async (e) => {
+  const m = e.target.closest("[data-silence]");
+  if (m && alerting) {
+    m.disabled = true;
+    const id = "m-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8), g = alerting.signing.engineer;
+    try {
+      for (const [k, v] of [["target_of", m.dataset.silence], ["reason", "silencée depuis Alertes"], ["until", String(Date.now() + 3_600_000)]]) {
+        await signFact(alerting.signing.domain, Math.max(Date.now(), alerting.signing.as_of + 1), g, `run:policy/${id}/${k}`, "value", v);
+      }
+      m.textContent = "Silence signé : appliqué au prochain passage";
+    } catch (err) { m.textContent = `Refusé : ${err.message}`; }
+    return;
+  }
   const d = e.target.closest("[data-decide]");
   if (d && runData) {
     d.disabled = true;
@@ -378,7 +395,8 @@ document.addEventListener("click", async (e) => {
   if (w) { runWindow = Number(w.dataset.window); localSet("window", runWindow); render(); }
 });
 
-const SWITCH = { deploy: "Mise en production", rollback: "Retour à la version précédente", restart: "Redémarrage sans coupure" };
+const SWITCH = { deploy: "Mise en production", rollback: "Retour à la version précédente", restart: "Redémarrage sans coupure",
+  canary: "Canary démarré", abort: "Canary retiré" };
 const LAG = { none: ["held", "main est en production"], behind: ["gap", "main n'est pas en production"] };
 const DETAIL = {
   "main's head was rolled back: a new commit on main is needed": ["La version de main a été retirée par un retour arrière : il faut un nouveau commit sur main", "bad"],
@@ -389,6 +407,7 @@ function liveDetail(x) {
   if (k === "live") return fact(`en production : ${v.slice(0, 7) || "aucune"}`, "");
   if (k === "main") return fact(`main : ${v.slice(0, 7)}`, "");
   if (k === "rolled_back") return v ? fact(`versions retirées : ${v.split(", ").map((s) => s.slice(0, 7)).join(", ")}`, "") : "";
+  if (k === "canary") return "";
   if (k === "served") return v && v !== "None" ? fact(`version qui répond : ${v.slice(0, 7)}`, "") : fact("le produit ne dit pas quelle version répond", "wait");
   const RULES = [
     [/^migration not declared compatible: (.*)$/, (m) => [`Retour impossible : migration non déclarée compatible (${m[1]}). Une personne corrige en avant.`, "bad"]],
@@ -397,6 +416,9 @@ function liveDetail(x) {
     [/^automatic rollback is off/, () => ["Retour automatique désactivé : un ingénieur décide", "wait"]],
     [/^(\w{7})\w* never answered: (\w{7})\w* still serves$/, (m) => [`${m[1]} n'a jamais répondu : ${m[2]} sert toujours, retour automatique`, "bad"]],
     [/^automatic restart is off$/, () => ["Redémarrage automatique désactivé", ""]],
+    [/^deployments are frozen$/, () => ["Mises en production gelées par un ingénieur", "wait"]],
+    [/^outside the deployment window \((.*)\)$/, (m) => [`Hors de la fenêtre de mise en production (${m[1]})`, "wait"]],
+    [/^error budget left ([\d.]+) % is under ([\d.]+) %: frozen$/, (m) => [`Budget d'erreur restant ${m[1]} % sous ${m[2]} % : mises en production gelées`, "wait"]],
     [/^the breach follows a switch/, () => ["La rupture suit une mise en production : redémarrer le même code ne la corrigerait pas", "wait"]],
     [/^(\d+) restarts in the last hour/, (m) => [`${m[1]} redémarrages dans l'heure : budget épuisé, une personne décide`, "bad"]],
   ];
@@ -404,16 +426,27 @@ function liveDetail(x) {
   const known = DETAIL[v] || (/^live for (\d+) min/.test(v) ? [`En production depuis ${v.match(/\d+/)[0]} min avant la rupture : le retour de version ne lui est pas attribué, une personne décide`, "wait"] : [v, ""]);
   return fact(known[0], known[1]);
 }
+function canaryText(v) {
+  let m;
+  if ((m = v.match(/^canary on (\d+) % of traffic: (\d+) requests so far$/))) return `${m[2]} requêtes reçues, en attente du minimum`;
+  if ((m = v.match(/^canary baking: (\d+)\/(\d+) min, (\d+)\/(\d+) requests, no worse so far$/))) return `en essai : ${m[1]}/${m[2]} min, ${m[3]}/${m[4]} requêtes, pas pire jusqu'ici`;
+  if ((m = v.match(/^canary fails ([\d.]+) points more/))) return `${m[1]} points d'erreurs de plus que la version en place : retrait`;
+  if ((m = v.match(/^canary held (\d+) min on (\d+) requests/))) return `tenu ${m[1]} min sur ${m[2]} requêtes : promotion`;
+  if (v.startsWith("main moved on")) return "main a avancé : le canary est retiré";
+  return v;
+}
 function liveSection(live) {
   if (!live.configured) {
     return `<section><h2>Version en production</h2><div class="note warn">Aucune mise en production n'est confiée à Standard. Ajoutez dans standard.toml une section <span class="sha">[deploy] root = "run"</span> : Standard déploiera main et reviendra à la version précédente si l'objectif casse.</div></section>`;
   }
   const lag = LAG[live.lag] || ["pending", live.lag ? "non mesuré" : "pas encore mesuré"];
+  const canary = live.canary ? `<div class="rowi"><div class="main"><span class="state gap"><i></i>Canary en cours</span> <span class="sha">${short(live.canary.release)}</span> sur ${live.canary.percent ?? "?"} % du trafic
+      <div class="facts">${fact(`depuis ${ago(live.canary.since).replace("il y a ", "")}`, "")}${(live.details.find((x) => x.startsWith("canary: ")) || "").replace("canary: ", "") ? fact(canaryText((live.details.find((x) => x.startsWith("canary: ")) || "").slice(8)), "wait") : ""}</div></div></div>` : "";
   return `<section><h2>Version en production <span class="quiet small">faits signés par le scanner, bascules faites par le gardien</span></h2>
-    <div class="rows"><div class="rowi"><div class="main"><span class="state ${lag[0]}"><i></i>${lag[1]}</span>
+    <div class="rows">${canary}<div class="rowi"><div class="main"><span class="state ${lag[0]}"><i></i>${lag[1]}</span>
       <div class="facts">${live.slo ? fact(`objectif sur les 5 dernières minutes, signé : ${live.slo === "met" ? "tenu" : live.slo.startsWith("breached") ? "rompu" : "non mesuré"}`, live.slo === "met" ? "ok" : live.slo.startsWith("breached") ? "bad" : "wait") : ""}${live.details.map(liveDetail).filter(Boolean).join("")}</div></div></div>
     ${live.switches.map((s) => `<div class="rowi"><div class="main"><b>${SWITCH[s.op] || esc(s.op)}</b> ${s.op === "restart" ? `<span class="sha">${short(s.to)}</span>` : `<span class="sha">${short(s.from)}</span> → <span class="sha">${short(s.to)}</span>`}
-      <div class="facts">${fact(ago(s.at), "")}${fact({ rollback: "sur une rupture de l'objectif", restart: "sur une rupture, même version" }[s.op] || "main jugée", s.op === "deploy" ? "ok" : "wait")}</div></div></div>`).join("")
+      <div class="facts">${fact(ago(s.at), "")}${fact({ rollback: "sur une rupture de l'objectif", restart: "sur une rupture, même version", canary: `sur ${s.percent ?? "?"} % du trafic`, abort: "plus d'erreurs que la version en place" }[s.op] || "main jugée", ["deploy", "canary"].includes(s.op) ? "ok" : "wait")}</div></div></div>`).join("")
       || `<div class="rowi quiet">Aucune bascule pour l'instant</div>`}</div>
     ${liveActions(live)}</section>`;
 }
@@ -423,7 +456,8 @@ function liveActions(live) {
     ? `<button class="btn ${tone}" data-decide="${esc(resource)}" data-prop="${prop}" ${can ? "" : "disabled"}>${label}</button>` : "";
   const buttons = [btn("deploy", "Mettre main en production", a.deploy, "approved", "primary"),
     btn("rollback", "Revenir à la version précédente", a.rollback, "requested", ""),
-    btn("restart", "Redémarrer sans coupure", a.restart, "requested", "")].join("");
+    btn("restart", "Redémarrer sans coupure", a.restart, "requested", ""),
+    live.canary ? btn("abort", "Retirer le canary", a.abort, "requested", "danger") : ""].join("");
   return `<div class="decide">${buttons}<span class="small quiet">${can
     ? "Chaque décision est une signature de ce navigateur ; la loi l'exécute par la garde, seulement si le fait du scanner la permet."
     : `Décisions réservées à ${esc(live.grant?.holder || "l'ingénieur habilité")}, avec sa clé dans ce navigateur.`}</span></div>`;
@@ -441,16 +475,19 @@ function banner() {
 function alertsView() {
   if (!alerting) return `<h1>Alertes</h1><div class="note bad">Les alertes sont indisponibles.</div>`;
   const grant = alerting.signing.grant, can = Boolean(signer && grant && signer.identity === grant.holder);
-  const what = (a) => a.kind === "obligation" ? `Écart réglementaire : ${esc(name(a.name.replace(/^target:/, "")))}`
+  const engineer = Boolean(signer && alerting.signing.engineer && signer.identity === alerting.signing.engineer.holder);
+  const what = (a) => a.kind === "slo" ? `SLO <b>${esc(a.name)}</b>` : a.kind === "obligation" ? `Écart réglementaire : ${esc(name(a.name.replace(/^target:/, "")))}`
     : a.kind === "source" ? `Source de métriques ${esc(a.name)}` : `${esc(KIND[a.kind]?.[1] || a.kind)} <b>${esc([a.operation, a.name].filter(Boolean).join(" "))}</b>`;
   const why = (a) => a.why?.rule === "overdue" ? `échéance du ${due(a.why.due)} dépassée` : a.why?.rule === "source_down" ? "ne répond pas" : reason(a.why);
   const row = (a) => {
     const s = ALERT_STATE[a.closed_at ? "resolved" : a.state] || ["pending", a.state];
-    return `<div class="rowi"><div class="main"><span class="state ${s[0]}"><i></i>${s[1]}</span> ${what(a)}
+    return `<div class="rowi"><div class="main">${a.closed_at ? "" : `<span class="sev ${a.severity}">${a.severity === "page" ? "Page" : "Ticket"}</span>`}<span class="state ${s[0]}"><i></i>${s[1]}</span> ${what(a)}
       <div class="facts">${fact(`depuis ${ago(a.opened_ms)}`, "")}${a.why ? fact(why(a), "") : ""}
         ${a.closed_at ? fact(`résolu ${ago(a.closed_at * 1000)}`, "ok") : ""}
-        ${a.taken ? fact("Prise en charge signée", "ok") : a.closed_at ? "" : fact(a.unattended ? "Personne ne l'a prise" : "En attente d'une personne", a.unattended ? "bad" : "wait")}</div></div>
-      ${!a.closed_at && !a.taken ? `<button class="btn primary" data-ack="${esc(a.resource)}" ${can ? "" : "disabled"}>Prendre en charge</button>` : ""}</div>`;
+        ${a.silenced ? fact(`silencée jusqu'à ${new Date(a.silenced.until).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}${a.silenced.reason ? ` : ${a.silenced.reason}` : ""}`, "")
+          : a.taken ? fact("Prise en charge signée", "ok") : a.closed_at ? "" : fact(a.unattended ? "Personne ne l'a prise" : "En attente d'une personne", a.unattended ? "bad" : "wait")}</div></div>
+      ${!a.closed_at && !a.silenced && engineer && a.subject ? `<button class="btn" data-silence="${esc(a.subject)}">Silencer 1 h</button>` : ""}
+      ${!a.closed_at && !a.taken && !a.silenced ? `<button class="btn primary" data-ack="${esc(a.resource)}" ${can ? "" : "disabled"}>Prendre en charge</button>` : ""}</div>`;
   };
   const open = alerting.alerts.filter((a) => !a.closed_at), closed = alerting.alerts.filter((a) => a.closed_at);
   return `<h1>Alertes</h1><p class="lede">Ce qui se dégrade en production et les écarts dont l'échéance est passée. Prendre une alerte en charge
@@ -459,7 +496,9 @@ function alertsView() {
       : !can ? `<div class="note warn">Seul ${esc(grant?.holder || "le détenteur du droit de revue")} peut prendre une alerte en charge ici.</div>` : ""}
     <section><h2>Ouvertes <span class="quiet small">${open.length}</span></h2><div class="rows">${open.map(row).join("") || `<div class="rowi quiet">Aucune alerte ouverte</div>`}</div></section>
     ${closed.length ? `<section><h2>Résolues ces dernières 24 h</h2><div class="rows">${closed.map(row).join("")}</div></section>` : ""}
-    <p class="small quiet">Une alerte s'ouvre quand un composant passe dégradé ou en échec sur les 5 dernières minutes, ou quand une source se tait ;
+    ${alerting.silenced ? `<p class="small quiet">${plural(alerting.silenced, "alerte silencée", "alertes silencées")} (maintenance) : hors du badge, les faits signés ne changent pas.</p>` : ""}
+    <p class="small quiet">Page : à prendre maintenant (composant en échec, SLO qui brûle vite son budget, échéance dépassée). Ticket : à traiter dans la journée (dégradé, consommation lente).
+      Une alerte s'ouvre quand un composant passe dégradé ou en échec sur les 5 dernières minutes, ou quand une source se tait ;
       elle se ferme quand il revient. Pas encore d'e-mail ni de messagerie : seulement cette page, le badge et le titre de l'onglet.</p>`;
 }
 async function take(button) {
@@ -490,26 +529,47 @@ async function signFact(domain, at, grant, resource, property, status) {
   return out;
 }
 const SETTINGS = {
-  objective: ["Objectif de disponibilité", "%", "Part des requêtes qui doivent réussir sur la fenêtre."],
-  failing: ["Seuil « en échec »", "% d'erreurs", "Au-delà, un composant est en échec, pas seulement dégradé."],
+  objective: ["Objectif de santé immédiate", "%", "Disponibilité minimale d'un composant sur la fenêtre de jugement ; en dessous, il est dégradé."],
+  failing: ["Seuil « en échec »", "% d'erreurs", "Au-delà, un composant est en échec : c'est une rupture signée, qui peut déclencher un retour."],
   p99_ms: ["Latence p99 maximale", "ms", "Au-delà, le composant est dégradé."],
-  window_s: ["Fenêtre de jugement", "s", "Durée sur laquelle le scanner juge et signe."],
+  window_s: ["Fenêtre de jugement", "s", "Durée sur laquelle le scanner juge l'état immédiat et le signe."],
   late_periods: ["Retard toléré d'une tâche planifiée", "périodes", "Sans succès depuis ce nombre de périodes : dégradée."],
-  rollback_horizon_min: ["Horizon du retour automatique", "min", "Une rupture plus tardive après une mise en production n'est plus attribuée à celle-ci."],
+  burn_fast: ["Alerte rapide (page)", "× le débit du budget", "Sonne quand la consommation sur 1 h ET sur 5 min dépasse ce multiple. 14,4 = 2 % d'un budget de 30 j en 1 h. Rompt l'objectif signé."],
+  burn_slow: ["Alerte lente (ticket)", "× le débit du budget", "Sonne quand la consommation sur 6 h ET sur 30 min dépasse ce multiple. 6 = 5 % d'un budget de 30 j en 6 h."],
+  rollback_horizon_min: ["Horizon du retour automatique", "min", "Une rupture plus tardive après une mise en production ne lui est plus attribuée."],
   restarts_per_hour: ["Redémarrages automatiques par heure", "max", "Au-delà, une personne décide."],
+  freeze_below: ["Gel sur budget d'erreur", "% restant", "Sous ce reste de budget (sur le SLO le plus entamé), plus de mise en production automatique. 0 = jamais."],
+  deploy_hours: ["Heures de mise en production", "HH-HH", "Plage horaire où une mise en production automatique peut commencer."],
+  deploy_tz: ["Fuseau horaire", "", "Pour les jours et les heures ci-dessus."],
+  canary_percent: ["Part du trafic en canary", "%", "Requêtes envoyées à la nouvelle version pendant l'essai (jamais /metrics)."],
+  canary_bake_min: ["Durée d'essai minimale", "min", "Avant toute promotion, même si tout va bien."],
+  canary_max_error_delta: ["Écart d'erreurs toléré", "points de %", "Taux d'erreurs du canary moins celui de la version en place ; au-delà, retrait immédiat."],
+  canary_min_requests: ["Requêtes minimales", "requêtes", "Pas de promotion sur moins de requêtes que cela."],
   base_url: ["Adresse publique du produit", "", "Les sondes externes l'appellent de l'extérieur, comme un client."],
 };
 const TOGGLES = {
   auto_deploy: ["Mise en production automatique de main", "Sinon le scanner propose et un ingénieur approuve chaque mise en production."],
-  auto_rollback: ["Retour automatique à la version précédente", "Sur une rupture de l'objectif juste après une mise en production, ou une version qui ne démarre pas."],
-  auto_restart: ["Redémarrage automatique", "Sur une rupture qui ne vient pas d'une mise en production, dans la limite par heure."],
+  auto_rollback: ["Retour automatique à la version précédente", "Sur une rupture juste après une mise en production, ou une version qui ne démarre pas."],
+  auto_restart: ["Redémarrage automatique", "Sur une rupture qui ne suit pas une mise en production, dans la limite par heure."],
   compatible_migrations: ["Retour arrière à travers une migration compatible", "Seulement les migrations déclarées .compatible.sql (ajout seul) ; jamais à travers une autre."],
+  freeze: ["Gel des mises en production", "Plus aucune mise en production automatique ; les retours arrière restent possibles."],
 };
-let settingsData = null;
+const TABS = [["slos", "SLO et budgets"], ["alerting", "Alertes"], ["release", "Mise en production"], ["health", "Santé immédiate"],
+  ["components", "Composants"], ["probes", "Sondes"], ["silences", "Silences"], ["code", "Règles en code"], ["history", "Historique"]];
+const DAYNAMES = { mon: "lun", tue: "mar", wed: "mer", thu: "jeu", fri: "ven", sat: "sam", sun: "dim" };
+const ZONES = ["UTC", "Europe/Paris", "Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Asia/Tokyo", "Asia/Singapore"];
+let settingsData = null, objTab = localGet("objtab") || "slos";
 function objectivesView() {
-  return `<h1>Objectifs et règles</h1><p class="lede">Ce que la production doit tenir et ce que Standard a le droit d'y faire seul.
-    Chaque réglage est une signature de votre navigateur, gardée au journal. <b>Plus strict : appliqué tout de suite.
-    Plus souple : appliqué après le délai de la loi</b>, et affiché en attente d'ici là.</p><div id="obj"><p class="quiet">Chargement</p></div>`;
+  return `<h1>Objectifs et règles</h1><p class="lede">Ce que la production doit tenir, comment on est prévenu et ce que Standard a le droit d'y faire seul.
+    Chaque réglage est une signature de votre navigateur, gardée au journal. <b>Plus strict : appliqué tout de suite. Plus souple : appliqué après le délai de la loi.</b></p>
+    <div class="tabs" role="tablist">${TABS.map(([id, label]) => `<button role="tab" data-objtab="${id}" aria-selected="${id === objTab}">${label}</button>`).join("")}</div>
+    <div id="obj"><p class="quiet">Chargement</p></div>`;
+}
+const fmtBurn = (v) => v == null ? "—" : `${nf(v, v < 100 ? 1 : 0)}×`;
+function budgetBar(b) {
+  if (b == null) return `<div class="bbar"><i style="width:0"></i></div><span class="small quiet">pas encore de données</span>`;
+  const w = Math.max(0, Math.min(1, b)), tone = b < 0 ? "bad" : b < 0.25 ? "warn" : "ok";
+  return `<div class="bbar ${tone}"><i style="width:${(w * 100).toFixed(1)}%"></i></div><span class="small ${tone}">${b < 0 ? `épuisé, dépassé de ${pct(-b, 0)}` : `${pct(b, 1)} restant`}</span>`;
 }
 async function loadObjectives() {
   try {
@@ -523,90 +583,238 @@ async function loadObjectives() {
   const s = settingsData, p = s.policy;
   if (!p) { $("#obj").innerHTML = `<div class="note warn">L'opérateur n'a pas encore publié ses réglages : attendez un passage.</div>`; return; }
   const can = Boolean(signer && s.signing.grant && signer.identity === s.signing.grant.holder);
+  const dis = can ? "" : "disabled";
   const value = (name, fallback) => name in p.effective ? p.effective[name] : fallback;
+  const g = (k) => value(`global/${k}`, p.defaults[k]);
   const left = (at) => { const m = Math.ceil((at - Date.now()) / 60000); return m > 0 ? `dans ${m} min` : "au prochain passage du scanner"; };
-  const pend = (name) => p.pending[name] ? `<span class="fact wait"><i></i>${esc(label(name, p.pending[name].value))} : plus souple, appliqué ${left(p.pending[name].applies_at)}</span>` : "";
   const comps = Object.fromEntries(s.components.map((c) => [c.id, [c.operation, c.name].filter(Boolean).join(" ")]));
   const VAL = { on: "activé", off: "désactivé" };
-  function label(name, v) {
+  const label = (name, v) => {
     const [scope, key] = name.split("/"), val = VAL[v] || String(v);
-    if (scope === "global") return `${(SETTINGS[key] || TOGGLES[key] || [key])[0]} : ${val}${SETTINGS[key]?.[1] ? " " + SETTINGS[key][1] : ""}`;
+    if (scope === "global") return `${(SETTINGS[key] || TOGGLES[key] || [key === "strategy" ? "Stratégie" : key === "deploy_days" ? "Jours de mise en production" : key])[0]} : ${val}${SETTINGS[key]?.[1] && !SETTINGS[key][1].includes("HH") ? " " + SETTINGS[key][1] : ""}`;
     if (scope.startsWith("p-")) return v === "off" ? "Sonde retirée" : `Sonde ${val}`;
+    if (scope.startsWith("s-")) return `SLO ${p.slos?.[scope]?.name || scope}, ${key} : ${val}`;
+    if (scope.startsWith("m-")) return `Silence ${scope}, ${key} : ${key === "until" ? new Date(+v).toLocaleString("fr-FR") : val}`;
     const what = { objective: "objectif", p99_ms: "p99 max", counted: "compté dans l'objectif" }[key] || key;
-    return `${comps[scope] || "Composant"}, ${what} : ${val}${key === "objective" ? " %" : key === "p99_ms" ? " ms" : ""}`;
-  }
-  const delay = Math.round(p.delay_ms / 60000);
+    return `${comps[scope] || "Composant"}, ${what} : ${val}`;
+  };
+  const pend = (name) => p.pending[name] ? `<span class="fact wait"><i></i>${esc(label(name, p.pending[name].value))} : plus souple, appliqué ${left(p.pending[name].applies_at)}</span>` : "";
   const field = (key, scope = "global", fallback = p.defaults[key]) => {
-    const name = `${scope}/${key}`, v = value(name, fallback), [label, unit, help] = SETTINGS[key], b = p.bounds[key];
-    return `<div class="set"><div class="sl"><b>${label}</b><span class="small quiet">${help}</span></div>
-      <div class="sv"><input class="num" type="${key === "base_url" ? "text" : "number"}" data-set="${name}" value="${esc(v ?? "")}"
-        ${b ? `min="${b[0]}" max="${b[1]}" step="any"` : ""} ${can ? "" : "disabled"} placeholder="${esc(fallback ?? "")}"><span class="unit">${unit}</span>
-        <button class="btn" data-save="${name}" ${can ? "" : "disabled"}>Enregistrer</button></div><div class="sp">${pend(name)}</div></div>`;
+    const name = `${scope}/${key}`, v = value(name, fallback), [lab, unit, help] = SETTINGS[key], b = p.bounds[key];
+    const input = key === "deploy_tz"
+      ? `<select data-set="${name}" ${dis}>${ZONES.map((z) => `<option ${z === v ? "selected" : ""}>${z}</option>`).join("")}</select>`
+      : `<input class="num" type="${["base_url", "deploy_hours"].includes(key) ? "text" : "number"}" data-set="${name}" value="${esc(v ?? "")}" ${b && typeof b[0] === "number" ? `min="${b[0]}" max="${b[1]}" step="any"` : ""} ${dis}>`;
+    return `<div class="set"><div class="sl"><b>${lab}</b><span class="small quiet">${help}</span></div>
+      <div class="sv">${input}<span class="unit">${unit}</span><button class="btn" data-save="${name}" ${dis}>Enregistrer</button></div><div class="sp">${pend(name)}</div></div>`;
   };
   const toggle = (key) => {
-    const name = `global/${key}`, on = value(name, p.defaults[key]) === "on", [label, help] = TOGGLES[key];
-    return `<div class="set"><div class="sl"><b>${label}</b><span class="small quiet">${help}</span></div>
-      <div class="sv"><label class="switch"><input type="checkbox" data-toggle="${name}" ${on ? "checked" : ""} ${can ? "" : "disabled"}><span></span></label>
+    const name = `global/${key}`, on = g(key) === "on", [lab, help] = TOGGLES[key];
+    return `<div class="set"><div class="sl"><b>${lab}</b><span class="small quiet">${help}</span></div>
+      <div class="sv"><label class="switch"><input type="checkbox" data-toggle="${name}" ${on ? "checked" : ""} ${dis}><span></span></label>
       <span class="small">${on ? "Activé" : "Désactivé"}</span></div><div class="sp">${pend(name)}</div></div>`;
   };
-  const comp = (c) => {
-    const o = value(`${c.id}/objective`, null), l = value(`${c.id}/p99_ms`, null), counted = value(`${c.id}/counted`, null);
-    const isCounted = counted ? counted === "on" : c.counted;
-    return `<tr><td><b>${esc([c.operation, c.name].filter(Boolean).join(" "))}</b><div class="sub">${esc(KIND[c.kind]?.[1] || c.kind)}</div></td>
-      <td>${c.availability == null ? "—" : pct(c.availability, 2)}</td><td>${msf(c.p99)}</td>
-      <td><input class="num sm" type="number" step="any" data-set="${c.id}/objective" value="${o ?? ""}" placeholder="${value("global/objective", p.defaults.objective)}" ${can ? "" : "disabled"}> %</td>
-      <td><input class="num sm" type="number" step="any" data-set="${c.id}/p99_ms" value="${l ?? ""}" placeholder="${value("global/p99_ms", p.defaults.p99_ms)}" ${can ? "" : "disabled"}> ms</td>
-      <td><label class="switch"><input type="checkbox" data-toggle="${c.id}/counted" ${isCounted ? "checked" : ""} ${can ? "" : "disabled"}><span></span></label></td>
-      <td><button class="btn" data-savecomp="${c.id}" ${can ? "" : "disabled"}>Enregistrer</button>${pend(`${c.id}/objective`)}${pend(`${c.id}/p99_ms`)}${pend(`${c.id}/counted`)}</td></tr>`;
+  const selectorLabel = (sel) => sel === "counted" ? "composants comptés" : sel === "all" ? "tous les composants" : sel.startsWith("kind:") ? `type ${KIND[sel.slice(5)]?.[2] || sel.slice(5)}` : sel.split(",").map((c) => comps[c] || c).join(", ");
+  const selectorInput = (id, sel) => `<select data-slo-sel="${id}" ${dis}>${["counted", "all", ...Object.keys(KIND).map((k) => `kind:${k}`), ...s.components.map((c) => c.id)].map((o) =>
+    `<option value="${o}" ${o === sel ? "selected" : ""}>${esc(selectorLabel(o))}</option>`).join("")}</select>`;
+
+  const tabs = {
+    slos: () => {
+      const defs = p.slos || {};
+      const card = ([sid, d]) => {
+        const e = s.slos[sid] || {};
+        const alert = e.fast ? `<span class="state escalated"><i></i>Alerte rapide</span>` : e.slow ? `<span class="state gap"><i></i>Alerte lente</span>` : `<span class="state held"><i></i>Dans le budget</span>`;
+        return `<div class="slo panel"><div class="slohead"><div><b>${esc(d.name)}</b><div class="small quiet">${d.sli === "latency" ? `latence : requêtes sous ${msf(d.threshold_ms)}` : "disponibilité : requêtes sans échec"}, ${esc(selectorLabel(d.selector))}, ${pctx(d.target / 100)} sur ${d.window_d} j glissants</div></div>${alert}</div>
+          <div class="slogrid"><div><div class="k">Conformité</div><div class="v">${e.compliance == null ? "—" : pct(e.compliance, 3)}</div><div class="small quiet">${nf(e.events || 0)} évènements</div></div>
+            <div class="wide"><div class="k">Budget d'erreur</div>${budgetBar(e.budget)}</div>
+            <div class="wide"><div class="k">Consommation du budget</div><div class="burns">${Object.entries(e.burn || {}).map(([span, v]) => `<span><b>${fmtBurn(v)}</b> ${span}</span>`).join("")}</div>
+              <div class="small quiet">seuils : rapide ${fmtBurn(g("burn_fast"))} (1 h et 5 min), lente ${fmtBurn(g("burn_slow"))} (6 h et 30 min)</div></div></div>
+          <details><summary>Modifier</summary>${sloForm(sid, d)}</details></div>`;
+      };
+      return `${Object.entries(defs).map(card).join("")}
+        <div class="panel"><h3>Nouveau SLO</h3>${sloForm("s-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8), { name: "", sli: "latency", threshold_ms: 300, target: 99, window_d: 28, selector: "kind:api" }, true)}</div>
+        <p class="small quiet">Un SLO compte des bons et des mauvais évènements sur une fenêtre glissante. Le budget d'erreur est la part de mauvais évènements que la cible autorise.
+          Une alerte rapide rompt l'objectif signé (et peut déclencher un retour automatique) ; une alerte lente prévient sans rien déclencher.</p>`;
+    },
+    alerting: () => `<div class="panel sets">${field("burn_fast")}${field("burn_slow")}</div>
+      <p class="small quiet">Règle multi-fenêtres : une fenêtre longue pour la significativité, une courte pour que l'alerte s'arrête vite quand la cause cesse.
+        Un multiple de 1 consomme exactement le budget sur la fenêtre du SLO. Les alertes apparaissent dans Alertes (page = à prendre maintenant, ticket = à traiter dans la journée).</p>`,
+    release: () => {
+      const days = g("deploy_days").split(","), strategy = g("strategy");
+      return `${s.configured ? "" : `<div class="note warn">Aucune mise en production n'est confiée à Standard (section [deploy]) : ces règles ne s'appliquent pas encore.</div>`}
+      <h3>Stratégie</h3><div class="panel sets">
+        <div class="set"><div class="sl"><b>Comment une nouvelle version arrive</b><span class="small quiet">Directe : bascule de tout le trafic après le contrôle de santé. Canary : d'abord une part du trafic, comparée à la version en place, puis promotion ou retrait.</span></div>
+          <div class="sv"><div class="seg">${[["direct", "Directe"], ["canary", "Canary"]].map(([v, l]) => `<button data-strategy="${v}" aria-pressed="${v === strategy}" ${dis}>${l}</button>`).join("")}</div></div><div class="sp">${pend("global/strategy")}</div></div>
+        ${strategy === "canary" ? ["canary_percent", "canary_bake_min", "canary_max_error_delta", "canary_min_requests"].map((k) => field(k)).join("") : ""}</div>
+      <h3>Quand</h3><div class="panel sets">${toggle("freeze")}
+        <div class="set"><div class="sl"><b>Jours de mise en production</b><span class="small quiet">Retirer un jour s'applique tout de suite ; en ajouter attend le délai.</span></div>
+          <div class="sv"><div class="days">${Object.entries(DAYNAMES).map(([d, l]) => `<label><input type="checkbox" data-day="${d}" ${days.includes(d) ? "checked" : ""} ${dis}>${l}</label>`).join("")}</div>
+          <button class="btn" id="savedays" ${dis}>Enregistrer</button></div><div class="sp">${pend("global/deploy_days")}</div></div>
+        ${field("deploy_hours")}${field("deploy_tz")}${field("freeze_below")}</div>
+      <h3>Autonomie</h3><div class="panel sets">${toggle("auto_deploy")}${toggle("auto_rollback")}${field("rollback_horizon_min")}${toggle("auto_restart")}${field("restarts_per_hour")}${toggle("compatible_migrations")}</div>`;
+    },
+    health: () => `<div class="panel sets">${["objective", "failing", "p99_ms", "window_s", "late_periods"].map((k) => field(k)).join("")}</div>
+      <p class="small quiet">La santé immédiate juge chaque composant sur la fenêtre courte (Opérationnel, Dégradé, En échec). Un composant compté en échec rompt l'objectif signé ; dégradé, il prévient seulement.</p>`,
+    components: () => `<div class="tablewrap"><table class="table api comps"><thead><tr><th>Composant</th><th>Dispo. (1 h)</th><th>p99 (1 h)</th><th>Objectif</th><th>p99 max</th><th>Compté</th><th></th></tr></thead>
+      <tbody>${s.components.map((c) => {
+        const o = value(`${c.id}/objective`, null), l = value(`${c.id}/p99_ms`, null), counted = value(`${c.id}/counted`, null);
+        return `<tr><td><b>${esc(comps[c.id])}</b><div class="sub">${esc(KIND[c.kind]?.[1] || c.kind)} · <span class="sha">${c.id}</span></div></td>
+          <td>${c.availability == null ? "—" : pct(c.availability, 2)}</td><td>${msf(c.p99)}</td>
+          <td><input class="num sm" type="number" step="any" data-set="${c.id}/objective" value="${o ?? ""}" placeholder="${g("objective")}" ${dis}> %</td>
+          <td><input class="num sm" type="number" step="any" data-set="${c.id}/p99_ms" value="${l ?? ""}" placeholder="${g("p99_ms")}" ${dis}> ms</td>
+          <td><label class="switch"><input type="checkbox" data-toggle="${c.id}/counted" ${(counted ? counted === "on" : c.counted) ? "checked" : ""} ${dis}><span></span></label></td>
+          <td><button class="btn" data-savecomp="${c.id}" ${dis}>Enregistrer</button>${pend(`${c.id}/objective`)}${pend(`${c.id}/p99_ms`)}${pend(`${c.id}/counted`)}</td></tr>`; }).join("")
+        || `<tr><td colspan="7" class="quiet">Aucun composant mesuré</td></tr>`}</tbody></table></div>
+      <p class="small quiet">Vide = la valeur globale. Décocher « Compté » : le composant reste montré et alerté, mais ne rompt plus l'objectif signé (utile pour un service externe).</p>`,
+    probes: () => {
+      const answers = Object.fromEntries((s.probes || []).map((x) => [x.id, x]));
+      const probes = Object.entries(p.effective).filter(([k, v]) => k.endsWith("/spec") && v !== "off");
+      return `<div class="panel sets">${field("base_url")}
+        ${probes.map(([k, v]) => { const id = k.split("/")[0], a = answers[id];
+          return `<div class="set"><div class="sl"><b class="sha">${esc(v)}</b><span class="small quiet">${a ? `dernière réponse ${a.last || "aucune"}, ${nf(a.errors)} échec(s) sur ${nf(a.count)}` : "pas encore appelée"}</span></div>
+            <div class="sv"><button class="btn danger" data-probe-off="${id}" ${dis}>Retirer</button></div><div class="sp">${pend(k)}</div></div>`; }).join("")}
+        <div class="set"><div class="sl"><b>Ajouter une sonde</b><span class="small quiet">Méthode, chemin, statut attendu. Elle compte comme un composant de type sonde.</span></div>
+          <div class="sv"><select id="pm" ${dis}><option>GET</option><option>HEAD</option><option>POST</option></select>
+          <input class="num" id="pp" type="text" value="/health" ${dis}><input class="num sm" id="ps" type="number" value="200" ${dis}>
+          <button class="btn primary" id="padd" ${dis}>Ajouter</button></div><div class="sp"></div></div></div>`;
+    },
+    silences: () => {
+      const active = Object.entries(p.silences || {});
+      const targets = [["all", "Toutes les alertes"], ...Object.entries(p.slos || {}).map(([id, d]) => [id, `SLO ${d.name}`]), ...s.components.map((c) => [c.id, comps[c.id]])];
+      return `<div class="rows">${active.map(([id, m]) => `<div class="rowi"><div class="main"><b>${esc(targets.find((t) => t[0] === m.target_of)?.[1] || m.target_of)}</b>
+          <div class="facts">${fact(`jusqu'à ${new Date(m.until).toLocaleString("fr-FR")}`, "wait")}${m.reason ? fact(m.reason, "") : ""}</div></div>
+          <button class="btn" data-unsilence="${id}" ${dis}>Lever</button></div>`).join("") || `<div class="rowi quiet">Aucun silence actif</div>`}</div>
+        <div class="panel sets" style="margin-top:16px"><div class="set"><div class="sl"><b>Nouveau silence</b><span class="small quiet">Une maintenance prévue : les alertes de la cible ne comptent plus dans le badge. Les faits signés, eux, ne changent pas.</span></div>
+          <div class="sv"><select id="mt" ${dis}>${targets.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select>
+          <select id="md" ${dis}><option value="30">30 min</option><option value="60" selected>1 h</option><option value="240">4 h</option><option value="1440">24 h</option></select>
+          <input class="num" id="mr" type="text" placeholder="raison" ${dis}><button class="btn primary" id="madd" ${dis}>Silencer</button></div><div class="sp"></div></div></div>`;
+    },
+    code: () => `<p class="small quiet">Toutes les règles en vigueur, en un document. Modifiez-le, comparez, puis signez les changements un par un : chacun suit la même loi (plus strict tout de suite, plus souple après le délai).</p>
+      <textarea id="code" spellcheck="false" ${dis}>${esc(JSON.stringify(p.document, null, 2))}</textarea>
+      <div class="decide"><button class="btn" id="codediff" ${dis}>Comparer</button><a class="btn" id="codedl" download="standard-rules.json" href="data:application/json,${encodeURIComponent(JSON.stringify(p.document, null, 2))}">Télécharger</a></div><div id="diff"></div>`,
+    history: () => `<div class="rows">${p.history.map((h) => `<div class="rowi"><div class="main"><b>${esc(label(h.setting, h.value))}</b>
+      <div class="facts">${fact(`par ${h.author}`, "")}${fact(ago(h.at), "")}${fact(h.outcome === "applied" ? "appliqué" : h.outcome === "pending" ? `plus souple : en attente ${Math.round(p.delay_ms / 60000)} min` : h.outcome, h.outcome === "applied" ? "ok" : h.outcome === "pending" ? "wait" : "bad")}</div></div></div>`).join("")
+      || `<div class="rowi quiet">Aucun réglage signé : les valeurs par défaut s'appliquent.</div>`}</div>`,
   };
-  const probes = Object.entries(p.effective).filter(([k, v]) => k.endsWith("/spec") && v !== "off");
-  const answers = Object.fromEntries((s.probes || []).map((x) => [x.id, x]));
-  $("#obj").innerHTML = `
-    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour modifier ces règles.</div>`
+  function sloForm(sid, d, fresh = false) {
+    return `<div class="sloform" data-slo="${sid}">
+      <label>Nom</label><input type="text" data-slo-f="name" value="${esc(d.name)}" placeholder="ex. Commandes rapides" ${dis}>
+      <div class="row4"><div><label>Indicateur</label><select data-slo-f="sli" ${dis}><option value="availability" ${d.sli === "availability" ? "selected" : ""}>Disponibilité</option><option value="latency" ${d.sli === "latency" ? "selected" : ""}>Latence sous un seuil</option></select></div>
+        <div><label>Seuil (latence)</label><input class="num" type="number" data-slo-f="threshold_ms" value="${d.threshold_ms ?? ""}" ${dis}> ms</div>
+        <div><label>Cible</label><input class="num" type="number" step="any" data-slo-f="target" value="${d.target}" ${dis}> %</div>
+        <div><label>Fenêtre glissante</label><input class="num" type="number" data-slo-f="window_d" value="${d.window_d}" ${dis}> j</div></div>
+      <label>Composants</label>${selectorInput(sid, d.selector)}
+      <div class="decide"><button class="btn" data-preview="${sid}">Aperçu sur l'historique</button>
+        <button class="btn primary" data-saveslo="${sid}" ${dis}>${fresh ? "Créer le SLO" : "Signer les changements"}</button>
+        ${!fresh ? `<button class="btn danger" data-sloff="${sid}" ${dis}>Retirer</button>` : ""}</div><div class="preview" id="pv-${sid}"></div></div>`;
+  }
+
+  $("#obj").innerHTML = `${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour modifier ces règles.</div>`
       : !can ? `<div class="note warn">Seul ${esc(s.signing.grant?.holder || "l'ingénieur habilité")} peut modifier ces règles.</div>` : ""}
-    <section><h2>Objectif de service</h2><div class="panel sets">${["objective", "failing", "p99_ms", "window_s", "late_periods"].map((k) => field(k)).join("")}</div></section>
-    <section><h2>Ce que Standard fait seul en production</h2>${s.configured ? "" : `<div class="note warn">Aucune mise en production n'est confiée à Standard (section [deploy]) : ces règles ne s'appliquent pas encore.</div>`}
-      <div class="panel sets">${toggle("auto_deploy")}${toggle("auto_rollback")}${field("rollback_horizon_min")}${toggle("auto_restart")}${field("restarts_per_hour")}${toggle("compatible_migrations")}</div></section>
-    <section><h2>Par composant <span class="quiet small">vide = la valeur globale ; décocher = montré mais pas compté dans l'objectif signé</span></h2>
-      <div class="tablewrap"><table class="table api comps"><thead><tr><th>Composant</th><th>Dispo. (1 h)</th><th>p99 (1 h)</th><th>Objectif</th><th>p99 max</th><th>Compté</th><th></th></tr></thead>
-      <tbody>${s.components.map(comp).join("") || `<tr><td colspan="7" class="quiet">Aucun composant mesuré</td></tr>`}</tbody></table></div></section>
-    <section><h2>Sondes externes <span class="quiet small">des requêtes envoyées de l'extérieur : un produit qui se dit en bonne santé sans répondre est vu</span></h2>
-      <div class="panel sets">${field("base_url")}
-      ${probes.map(([k, v]) => { const id = k.split("/")[0], a = answers[id];
-        return `<div class="set"><div class="sl"><b class="sha">${esc(v)}</b><span class="small quiet">${a ? `dernière réponse ${a.last || "aucune"}, ${nf(a.errors)} échec(s) sur ${nf(a.count)}` : "pas encore appelée"}</span></div>
-          <div class="sv"><button class="btn danger" data-probe-off="${id}" ${can ? "" : "disabled"}>Retirer</button></div><div class="sp">${pend(k)}</div></div>`; }).join("")}
-      <div class="set"><div class="sl"><b>Ajouter une sonde</b><span class="small quiet">Méthode, chemin, statut attendu.</span></div>
-        <div class="sv"><select id="pm" ${can ? "" : "disabled"}><option>GET</option><option>HEAD</option><option>POST</option></select>
-        <input class="num" id="pp" type="text" value="/health" ${can ? "" : "disabled"}><input class="num sm" id="ps" type="number" value="200" ${can ? "" : "disabled"}>
-        <button class="btn primary" id="padd" ${can ? "" : "disabled"}>Ajouter</button></div><div class="sp"></div></div></div></section>
-    <section><h2>Historique des réglages</h2><div class="rows">${p.history.map((h) => `<div class="rowi"><div class="main"><b>${esc(label(h.setting, h.value))}</b>
-      <div class="facts">${fact(`par ${h.author}`, "")}${fact(ago(h.at), "")}${fact(h.outcome === "applied" ? "appliqué" : h.outcome === "pending" ? `plus souple : en attente ${delay} min` : h.outcome, h.outcome === "applied" ? "ok" : h.outcome === "pending" ? "wait" : "bad")}</div></div></div>`).join("")
-      || `<div class="rowi quiet">Aucun réglage signé : les valeurs par défaut s'appliquent.</div>`}</div></section>
-    <p id="objmsg" class="small quiet"></p>`;
+    ${tabs[objTab]()}<p id="objmsg" class="small quiet"></p>`;
+  document.querySelectorAll("[data-objtab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.objtab === objTab)));
+
+  const at = () => Math.max(Date.now(), s.signing.as_of + 1);
   const set = async (resource, status, el) => {
     $("#objmsg").textContent = "Signature dans ce navigateur";
     try {
-      await signFact(s.signing.domain, Math.max(Date.now(), s.signing.as_of + 1), s.signing.grant, `run:policy/${resource}`, "value", status);
+      await signFact(s.signing.domain, at(), s.signing.grant, `run:policy/${resource}`, "value", status);
       $("#objmsg").textContent = "Signé. Le scanner l'applique à son prochain passage.";
-      setTimeout(loadObjectives, 1200);
-    } catch (err) { $("#objmsg").textContent = `Refusé par le noyau : ${err.message}`; if (el) el.disabled = false; }
+      return true;
+    } catch (err) { $("#objmsg").textContent = `Refusé par le noyau : ${err.message}`; if (el) el.disabled = false; return false; }
   };
-  document.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => {
-    const input = document.querySelector(`[data-set="${b.dataset.save}"]`); b.disabled = true; set(b.dataset.save, input.value.trim(), b); });
-  document.querySelectorAll("[data-toggle]").forEach((c) => c.onchange = () => set(c.dataset.toggle, c.checked ? "on" : "off", c));
+  const reload = () => setTimeout(loadObjectives, 1500);
+  document.querySelectorAll("[data-save]").forEach((b) => b.onclick = async () => {
+    const input = document.querySelector(`[data-set="${b.dataset.save}"]`); b.disabled = true; if (await set(b.dataset.save, input.value.trim(), b)) reload(); });
+  document.querySelectorAll("[data-toggle]").forEach((c) => c.onchange = async () => { if (await set(c.dataset.toggle, c.checked ? "on" : "off", c)) reload(); });
+  document.querySelectorAll("[data-strategy]").forEach((b) => b.onclick = async () => { if (await set("global/strategy", b.dataset.strategy, b)) reload(); });
+  $("#savedays")?.addEventListener("click", async () => {
+    const days = [...document.querySelectorAll("[data-day]")].filter((c) => c.checked).map((c) => c.dataset.day).join(",");
+    if (days && await set("global/deploy_days", days)) reload();
+  });
   document.querySelectorAll("[data-savecomp]").forEach((b) => b.onclick = async () => {
     b.disabled = true;
     for (const key of ["objective", "p99_ms"]) {
       const input = document.querySelector(`[data-set="${b.dataset.savecomp}/${key}"]`);
       if (input.value.trim()) await set(`${b.dataset.savecomp}/${key}`, input.value.trim(), b);
     }
+    reload();
   });
-  document.querySelectorAll("[data-probe-off]").forEach((b) => b.onclick = () => { b.disabled = true; set(`${b.dataset.probeOff}/spec`, "off", b); });
-  $("#padd")?.addEventListener("click", () => {
+  document.querySelectorAll("[data-probe-off]").forEach((b) => b.onclick = async () => { b.disabled = true; if (await set(`${b.dataset.probeOff}/spec`, "off", b)) reload(); });
+  $("#padd")?.addEventListener("click", async () => {
     const id = "p-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8);
-    set(`${id}/spec`, `${$("#pm").value} ${$("#pp").value.trim()} ${$("#ps").value.trim()}`, $("#padd"));
+    if (await set(`${id}/spec`, `${$("#pm").value} ${$("#pp").value.trim()} ${$("#ps").value.trim()}`, $("#padd"))) reload();
+  });
+  const sloValues = (sid) => {
+    const box = document.querySelector(`[data-slo="${sid}"]`), out = {};
+    box.querySelectorAll("[data-slo-f]").forEach((i) => { out[i.dataset.sloF] = i.value.trim(); });
+    out.selector = box.querySelector(`[data-slo-sel]`).value;
+    return out;
+  };
+  document.querySelectorAll("[data-preview]").forEach((b) => b.onclick = async () => {
+    const v = sloValues(b.dataset.preview), box = $(`#pv-${b.dataset.preview}`);
+    box.innerHTML = `<span class="small quiet">Calcul sur l'historique enregistré</span>`;
+    const q = new URLSearchParams({ sli: v.sli, target: v.target, window_d: v.window_d, threshold_ms: v.threshold_ms || 1000, selector: v.selector });
+    const r = await (await fetch(`/api/preview?${q}`)).json();
+    box.innerHTML = !r.minutes ? `<span class="small quiet">Pas encore d'historique pour ces composants.</span>`
+      : `<div class="facts">${fact(`sur ${r.minutes < 1440 ? `${Math.round(r.minutes / 60)} h` : `${(r.minutes / 1440).toFixed(1)} j`} enregistrés, ${nf(r.events)} évènements`, "")}
+        ${fact(`conformité ${pct(r.compliance, 3)}`, r.compliance >= v.target / 100 ? "ok" : "bad")}
+        ${fact(r.budget < 0 ? `budget épuisé (${pct(-r.budget, 0)} au-delà)` : `budget restant ${pct(r.budget, 1)}`, r.budget < 0 ? "bad" : r.budget < 0.25 ? "wait" : "ok")}
+        ${fact(`${r.fast_alerts} alerte(s) rapide(s), ${r.slow_alerts} lente(s) auraient sonné`, r.fast_alerts ? "wait" : "ok")}</div>`;
+  });
+  document.querySelectorAll("[data-saveslo]").forEach((b) => b.onclick = async () => {
+    const sid = b.dataset.saveslo, v = sloValues(sid), old = (p.slos || {})[sid] || {};
+    b.disabled = true;
+    const keys = ["target", "sli", "threshold_ms", "window_d", "selector", "name"].filter((k) => v[k] !== "" && String(v[k]) !== String(old[k] ?? ""));
+    for (const k of keys) if (!await set(`${sid}/${k}`, v[k], b)) return;
+    reload();
+  });
+  document.querySelectorAll("[data-sloff]").forEach((b) => b.onclick = async () => { b.disabled = true; if (await set(`${b.dataset.sloff}/state`, "off", b)) reload(); });
+  $("#madd")?.addEventListener("click", async () => {
+    const id = "m-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8);
+    $("#madd").disabled = true;
+    if (!await set(`${id}/target_of`, $("#mt").value)) return;
+    if ($("#mr").value.trim()) await set(`${id}/reason`, $("#mr").value.trim().slice(0, 120));
+    if (await set(`${id}/until`, String(Date.now() + Number($("#md").value) * 60000))) reload();
+  });
+  document.querySelectorAll("[data-unsilence]").forEach((b) => b.onclick = async () => { b.disabled = true; if (await set(`${b.dataset.unsilence}/until`, "0", b)) reload(); });
+  const flatten = (doc) => {
+    const out = {};
+    for (const [k, v] of Object.entries(doc.global || {})) out[`global/${k}`] = v;
+    for (const part of ["components", "slos", "probes", "silences"]) for (const [scope, keys] of Object.entries(doc[part] || {})) for (const [k, v] of Object.entries(keys)) out[`${scope}/${k}`] = v;
+    return out;
+  };
+  const way = (key, old, nw) => {
+    const w = p.ways[key];
+    if (w === null || w === undefined) return "neutre";
+    if (old === undefined) return "plus strict";
+    if (w === "subset") return nw.split(",").every((d) => old.split(",").includes(d)) ? "plus strict" : "plus souple";
+    if (w === "within") { const [a, b] = old.split("-").map(Number), [c, d] = String(nw).split("-").map(Number); return a <= c && d <= b ? "plus strict" : "plus souple"; }
+    if (typeof w === "string") return nw === w || nw === old ? "plus strict" : "plus souple";
+    if (w === 0) return "plus souple";
+    return (Number(nw) - Number(old)) * w >= 0 ? "plus strict" : "plus souple";
+  };
+  $("#codediff")?.addEventListener("click", () => {
+    let doc;
+    try { doc = JSON.parse($("#code").value); } catch (err) { $("#diff").innerHTML = `<div class="note bad">JSON invalide : ${esc(err.message)}</div>`; return; }
+    const before = flatten(p.document), after = flatten(doc);
+    const changes = Object.entries(after).filter(([k, v]) => String(before[k] ?? "") !== String(v ?? ""));
+    $("#diff").innerHTML = !changes.length ? `<p class="small quiet">Aucun changement.</p>` : `<div class="rows">${changes.map(([k, v]) => {
+      const w = way(k.split("/")[1], before[k], v);
+      return `<div class="rowi"><div class="main"><span class="sha">${esc(k)}</span> <span class="del">${esc(String(before[k] ?? "—"))}</span> → <span class="add">${esc(String(v))}</span>
+        <div class="facts">${fact(w === "plus souple" ? `plus souple : appliqué dans ${Math.round(p.delay_ms / 60000)} min` : w === "neutre" ? "appliqué tout de suite" : "plus strict : appliqué tout de suite", w === "plus souple" ? "wait" : "ok")}</div></div></div>`; }).join("")}</div>
+      <div class="decide"><button class="btn primary" id="codesign">Signer ${changes.length} changement${changes.length > 1 ? "s" : ""}</button></div>`;
+    $("#codesign").onclick = async () => {
+      $("#codesign").disabled = true;
+      for (const [k, v] of changes) if (!await set(k, String(v))) return;
+      reload();
+    };
   });
 }
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-objtab]");
+  if (t) { objTab = t.dataset.objtab; localSet("objtab", objTab); if (settingsData) loadObjectives(); }
+});
+
 
 function activity() {
   const repairs = state.run.repairs;

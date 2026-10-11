@@ -91,6 +91,8 @@ class Telemetry:
         for target in report["targets"]:
             if not target["up"]:
                 bad[("source", "", target["url"])] = ("failing", {"rule": "source_down", "detail": target["error"]})
+        if self.extra is not None:                          # D32: the SLOs burning their budget, from the operator
+            bad.update(self.extra())
         with self.lock:
             open_ = {(k, o, n): (i, worst) for i, k, o, n, worst in self.db.execute(
                 "SELECT id, kind, operation, name, worst FROM incident WHERE closed_at IS NULL")}
@@ -139,6 +141,7 @@ class Telemetry:
         return {"slo": g["objective"], "failing_error_rate": g["failing"], "slow_p99_ms": g["p99_ms"],
                 "late_periods": self.late_periods}
 
+    extra = None           # more open conditions to track as incidents: {(kind, operation, name): (state, why)}
     limits = None          # the engineers' settings (trusted.policy.Policy.limits), when the operator published them
     late_periods = runtime.LATE_PERIODS
 

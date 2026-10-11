@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import time
 import tomllib
+import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,6 +81,8 @@ class Installation:
                                    run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100,
                                    interval=float(run.get("interval", 15)))
         self.rollback = bool(c.get("deploy")) and "agent_rollback" in c["grants"]     # D30: can act in production
+        self.slo_db = base / "slo.db"                                                   # D32: the operator's SLO data
+        self.telemetry.extra = self.burning
         self.deploy_root = resolve(c["deploy"]["root"]) if c.get("deploy") else None
         hosted = c.get("hosting", {}).get("config")
         self.products = sorted(_toml(hosted).get("repositories", {})) if hosted else [self.product]
@@ -242,8 +246,27 @@ class Installation:
         self.settle(findings)
         report = self.telemetry.report(declared_routes(openapi), window=window)
         self.frontier(report, findings)
+        report["burn"] = self.burn()
         return {**report, "product": self.product, "releases": self.history(8),
                 "live": self.live(findings, self.client.view()), "openapi": bool(openapi.strip())}
+
+    BURN = ((300, 14.4, "page"), (3600, 6.0, "ticket"))   # SRE workbook: budget spent 14.4x / 6x too fast
+
+    def burn(self) -> list:
+        """Error-budget burn rate over short and long windows: the rate the budget is spent at, 1 = exactly on budget."""
+        out = []
+        for seconds, threshold, action in self.BURN:
+            fleet = self.telemetry.report(window=seconds)["fleet"]
+            er = fleet["error_rate"]
+            rate = None if er is None else er / max(1 - self.telemetry.slo, 1e-9)
+            out.append({"window": seconds, "rate": rate, "threshold": threshold, "action": action,
+                        "firing": rate is not None and rate >= threshold, "requests": fleet["requests"]})
+        return out
+
+    def facts(self) -> dict:
+        """The latest signed facts of the journal, as an engineer greps them: resource, property, status, who, when."""
+        view = self.client.view()
+        return {"facts": view.get("facts", []), "prefix": view["prefix"], "law": view["law"]["digest"]}
 
     def settle(self, findings: dict):
         """The operator's effective settings (published beside the findings), so that the console judges as T does."""
@@ -257,6 +280,67 @@ class Installation:
         self.telemetry.slo = policy.get("objective") / 100
         return policy
 
+    def burning(self) -> dict:
+        """The SLOs burning their error budget, as open conditions for the alerts: fast is a page, slow a ticket."""
+        out = {}
+        for sid, s in (_json(self.findings).get("run:slos", {}).get("details") or {}).items():
+            if s.get("fast") or s.get("slow"):
+                span = "1h" if s["fast"] else "6h"
+                out[("slo", "page" if s["fast"] else "ticket", s["name"])] = (
+                    "failing" if s["fast"] else "degraded",
+                    {"rule": "burn", "slo": sid, "span": span, "value": s["burn"][span], "budget": s["budget"]})
+        return out
+
+    def preview(self, query: dict) -> dict:
+        """What an SLO would have said over the operator's recorded history: compliance, budget left, and how many
+        times its fast and slow burn alerts would have fired. Nothing is signed: it helps choose before signing."""
+        from trusted.slo import SPANS, Store, good_under, matches
+        policy = self.settle(_json(self.findings))
+        target, window_d = float(query.get("target", 99.9)), max(1, min(90, int(float(query.get("window_d", 30)))))
+        sli, threshold = query.get("sli", "availability"), float(query.get("threshold_ms") or 1000)
+        selector = query.get("selector", "counted")
+        fast, slow = (float(query.get("burn_fast") or (policy.get("burn_fast") if policy else 14.4)),
+                      float(query.get("burn_slow") or (policy.get("burn_slow") if policy else 6)))
+        if not self.slo_db.exists():
+            return {"minutes": 0}
+        now_minute = int(time.time()) // 60
+        counted = lambda cid, kind: (policy.get("counted", cid) == "on" if policy and policy.get("counted", cid)
+                                     else kind != "dependency")
+        total, bad = {}, {}
+        for minute, cid, kind, t, b, buckets in Store(self.slo_db, readonly=True).rows(now_minute - window_d * 1440):
+            if matches(selector, cid, kind, counted):
+                total[minute] = total.get(minute, 0.0) + t
+                bad[minute] = bad.get(minute, 0.0) + (b if sli == "availability"
+                                                       else t - good_under(json.loads(buckets), threshold))
+        if not total:
+            return {"minutes": 0}
+        first, allowed = min(total), 1 - target / 100
+        minutes = list(range(first, now_minute + 1))
+        cum_t, cum_b, acc_t, acc_b = [], [], 0.0, 0.0
+        for m in minutes:
+            acc_t, acc_b = acc_t + total.get(m, 0.0), acc_b + bad.get(m, 0.0)
+            cum_t.append(acc_t)
+            cum_b.append(acc_b)
+
+        def burn(i, span):
+            j = max(-1, i - span)
+            t = cum_t[i] - (cum_t[j] if j >= 0 else 0)
+            b = cum_b[i] - (cum_b[j] if j >= 0 else 0)
+            return None if t < 20 else (b / t) / allowed
+        episodes = {"fast": 0, "slow": 0}
+        firing = {"fast": False, "slow": False}
+        for i in range(len(minutes)):
+            for name, (long, short, limit) in {"fast": (SPANS["1h"], SPANS["5m"], fast),
+                                               "slow": (SPANS["6h"], SPANS["30m"], slow)}.items():
+                a, b = burn(i, long), burn(i, short)
+                on = a is not None and b is not None and a >= limit and b >= limit
+                episodes[name] += on and not firing[name]
+                firing[name] = on
+        events, failures = cum_t[-1], cum_b[-1]
+        return {"minutes": len(minutes), "events": int(events), "compliance": 1 - failures / events,
+                "budget": 1 - (failures / events) / allowed, "fast_alerts": episodes["fast"],
+                "slow_alerts": episodes["slow"], "window_d": window_d}
+
     def settings(self) -> dict:
         """Everything an engineer may set, its effective value, what is pending, and every component to tune (D31)."""
         findings, view = _json(self.findings), self.client.view()
@@ -265,7 +349,8 @@ class Installation:
         components = [{k: r.get(k) for k in ("id", "kind", "operation", "name", "state", "availability", "p99",
                                              "counted")} for rows in report["components"].values() for r in rows
                       if r.get("id")]
-        return {"policy": policy.published() if policy else None, "components": components,
+        return {"policy": findings.get("run:policy", {}).get("details") if policy else None, "components": components,
+                "slos": findings.get("run:slos", {}).get("details", {}),
                 "probes": findings.get("run:probes", {}).get("details", []), "configured": self.deploy_root is not None,
                 "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
                             "grant": self.grants.get("engineer")}}
@@ -276,14 +361,19 @@ class Installation:
         lag = findings.get("run:release:all|lag", {})
         history = []
         if self.deploy_root and (self.deploy_root / "history.jsonl").exists():
-            history = [json.loads(x) for x in (self.deploy_root / "history.jsonl").read_text().splitlines() if x][-10:]
+            history = [json.loads(x) for x in (self.deploy_root / "history.jsonl").read_text().splitlines() if x]
         offered = lambda prefix, prop: next((r for r, f in sorted((view or {}).get("transitions", {}).items())
                                              if r.startswith(prefix) and f.get(prop) == "yes"), None)
-        current = next((h["to"] for h in reversed(history) if h.get("op") != "restart"), None)
+        current = next((h["to"] for h in reversed(history) if h.get("op") in ("deploy", "rollback")), None)
         restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == current]
         return {"configured": self.deploy_root is not None, "lag": lag.get("status"), "details": lag.get("details", []),
-                "slo": findings.get("run:service:all|slo", {}).get("status"), "switches": history[::-1],
+                "slo": findings.get("run:service:all|slo", {}).get("status"), "switches": history[-12:][::-1],
+                "canary": self.canary_state(history),
+                "slos": findings.get("run:slos", {}).get("details", {}),
                 "actions": {"deploy": offered("run:release:all/", "candidate"),
+                            "abort": offered("run:canary:abort/", "canary_bad") or (
+                                f"run:canary:abort/{current}/{self.canary_state(history)['release']}"
+                                if self.canary_state(history) else None),
                             "rollback": offered("run:service:all/", "previous"),
                             "restart": f"run:process:all/{current}/{len(restarts) + 1}" if current else None},
                 "grant": self.grants.get("engineer")}
@@ -300,6 +390,17 @@ class Installation:
                  else "redémarrage décidé par un ingénieur"]
         return (" ; ".join(parts).capitalize() + ". Jamais à travers une migration non déclarée compatible. Au-delà, ou si "
                 "la cause est hors du code (service externe, machine), une personne.")
+
+    def canary_state(self, history: list) -> dict | None:
+        """The release on a share of traffic, if any: which, since when, on what share."""
+        if not self.deploy_root:
+            return None
+        try:
+            release = Path(os.readlink(self.deploy_root / "canary")).name
+        except OSError:
+            return None
+        start = next((h for h in reversed(history) if h.get("op") == "canary" and h.get("to") == release), {})
+        return {"release": release, "since": start.get("at"), "percent": start.get("percent")}
 
     FRONTIER = ("see", "alert", "act", "prove")
 
@@ -357,15 +458,27 @@ class Installation:
             out.append({"id": e["obligation"], "kind": "obligation", "operation": "", "name": e["obligation"],
                         "state": "escalated", "worst": "escalated", "why": {"rule": "overdue", "due": e["due"]},
                         "opened_ms": e["due"], "closed_at": None, "source": "law", "resource": resource})
+        from trusted.policy import component_id
+        silences = ((_json(self.findings).get("run:policy") or {}).get("details") or {}).get("silences", {})
         for a in out:
             facts = view["transitions"].get(a["resource"], {})
             a["taken"] = facts.get("ack") == "taken"
-            a["unattended"] = a["closed_at"] is None and not a["taken"] and now - a["opened_ms"] > self.ACK_MS
+            a["severity"] = ("page" if a["kind"] == "obligation" or a.get("operation") == "page"
+                             or a["state"] == "failing" else "ticket")
+            a["subject"] = ((a.get("why") or {}).get("slo") if a["kind"] == "slo" else
+                            component_id(a["kind"], a.get("operation") or "", a["name"])
+                            if a["kind"] not in ("obligation", "source") else a["name"])
+            a["silenced"] = next((dict(m, id=mid) for mid, m in silences.items()
+                                  if m.get("target_of") in ("all", a["subject"]) and m.get("until", 0) > now), None)
+            a["unattended"] = (a["closed_at"] is None and not a["taken"] and not a["silenced"]
+                               and now - a["opened_ms"] > self.ACK_MS)
         live = [a for a in out if a["closed_at"] is None]
-        return {"alerts": out, "open": len(live), "untaken": sum(1 for a in live if not a["taken"]),
-                "unattended": sum(1 for a in live if a["unattended"]), "ack_ms": self.ACK_MS,
-                "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
-                            "grant": self.grants.get("reviewer")}}
+        loud = [a for a in live if not a["silenced"]]
+        return {"alerts": out, "open": len(loud), "untaken": sum(1 for a in loud if not a["taken"]),
+                "unattended": sum(1 for a in loud if a["unattended"]), "silenced": len(live) - len(loud),
+                "ack_ms": self.ACK_MS, "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
+                                                   "grant": self.grants.get("reviewer"),
+                                                   "engineer": self.grants.get("engineer")}}
 
     def dossier(self, head: str) -> dict:
         if not SHA.fullmatch(head):
@@ -411,6 +524,11 @@ def handler(inst: Installation):
                     return self._ok(inst.alerts())
                 if route == "/api/settings":
                     return self._ok(inst.settings())
+                if route == "/api/preview":
+                    query = dict(q.split("=", 1) for q in self.path.partition("?")[2].split("&") if "=" in q)
+                    return self._ok(inst.preview({k: urllib.parse.unquote(v) for k, v in query.items()}))
+                if route == "/api/facts":
+                    return self._ok(inst.facts())
                 if route == "/api/run":
                     query = dict(q.split("=", 1) for q in self.path.partition("?")[2].split("&") if "=" in q)
                     window = int(query.get("window", 3600))

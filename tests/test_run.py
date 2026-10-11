@@ -22,6 +22,7 @@ import trusted.daemon as daemon  # noqa: E402
 from trusted import runtime  # noqa: E402
 from trusted.deploy import Releases  # noqa: E402
 from trusted.policy import Policy, component_id  # noqa: E402
+from trusted.slo import Store, evaluate  # noqa: E402
 from trusted.gateway import AdmissionGateway  # noqa: E402
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
@@ -214,6 +215,133 @@ class Migrations(unittest.TestCase):
         self.assertIn("0003_drop.sql", why)
 
 
+class Objectives(unittest.TestCase):
+    """SLOs with error budgets and multi-window burn rates (D32)."""
+
+    def store(self, minutes, bad_share, per_minute=100, start=0, latency_le="0.1"):
+        store = Store()
+        for m in range(start, start + minutes):
+            store.add(m, "c-000000000001", "api", per_minute, per_minute * bad_share,
+                      {"0.05": per_minute * 0.5, "0.1": per_minute * 0.9, "+Inf": per_minute})
+        return store
+
+    def slo(self, **kw):
+        return {"s-1": {"name": "x", "sli": "availability", "target": 99.9, "window_d": 1, "selector": "counted",
+                        "threshold_ms": None, **kw}}
+
+    def test_a_fast_burn_fires_only_on_both_windows(self):
+        counted = lambda cid, kind: True
+        hot = evaluate(self.store(60, 0.02), self.slo(), 59, counted=counted, burn_fast=14.4, burn_slow=6)["s-1"]
+        self.assertEqual(hot["burn"]["5m"], 20.0)                                     # 2 % bad for 0.1 % allowed
+        self.assertTrue(hot["fast"])
+        self.assertLess(hot["budget"], 0)
+        store = self.store(55, 0.0)
+        for m in range(55, 60):
+            store.add(m, "c-000000000001", "api", 100, 2, {"+Inf": 100})
+        blip = evaluate(store, self.slo(), 59, counted=counted, burn_fast=14.4, burn_slow=6)["s-1"]
+        self.assertGreater(blip["burn"]["5m"], 14.4)                                  # five bad minutes
+        self.assertFalse(blip["fast"])                                                # but not over the hour
+        quiet = evaluate(self.store(60, 0.0005), self.slo(), 59, counted=counted, burn_fast=14.4, burn_slow=6)["s-1"]
+        self.assertFalse(quiet["fast"] or quiet["slow"])
+        self.assertAlmostEqual(quiet["budget"], 0.5)
+
+    def test_a_latency_sli_counts_requests_under_the_threshold(self):
+        got = evaluate(self.store(10, 0.0), self.slo(sli="latency", threshold_ms=100, target=95.0), 9,
+                       counted=lambda c, k: True, burn_fast=14.4, burn_slow=6)["s-1"]
+        self.assertAlmostEqual(got["compliance"], 0.9)                                # 90 % under 100 ms
+        got = evaluate(self.store(10, 0.0), self.slo(sli="latency", threshold_ms=80, target=95.0), 9,
+                       counted=lambda c, k: True, burn_fast=14.4, burn_slow=6)["s-1"]
+        self.assertAlmostEqual(got["compliance"], 0.5)                                # never rounded up to 100 ms
+
+    def test_release_policy_windows_freeze_and_budget(self):
+        policy = Policy(60_000, defaults={"deploy_days": "mon,tue,wed,thu,fri", "deploy_hours": "09-18",
+                                          "deploy_tz": "Europe/Paris"})
+        saturday = 1_791_619_200_000                                                  # 2026-10-10 10:00 Paris
+        self.assertFalse(policy.deploy_open(saturday)[0])
+        self.assertTrue(policy.deploy_open(saturday + 2 * 86_400_000)[0])             # Monday 10:00
+        facts, why = runtime.release_facts("met", A, B, [], set(), saturday, policy=policy)
+        self.assertNotIn("deployable", str(facts))
+        self.assertIn("window", why["deploy"])
+        policy = Policy(60_000, defaults={"freeze_below": 25.0})
+        facts, why = runtime.release_facts("met", A, B, [], set(), 0, policy=policy, budget=0.1)
+        self.assertNotIn("deployable", str(facts))
+        self.assertIn("budget", why["deploy"])
+        self.assertIn((f"run:release:all/{A}/{B}", "candidate", "yes"), facts)       # an engineer may still decide
+        facts, _ = runtime.release_facts("met", A, B, [], set(), 0, policy=Policy(60_000), budget=-3.0)
+        self.assertIn("deployable", str(facts))                                       # 0 % means never frozen
+
+    def test_settings_that_narrow_apply_at_once(self):
+        policy = Policy(60_000)
+        s = Settings.statement
+        policy.update(s(self, "global/deploy_days", "mon,tue", 1_000), {"h1"}, 1_000)
+        self.assertEqual(policy.get("deploy_days"), "mon,tue")                       # fewer days: now
+        policy.update(s(self, "global/deploy_days", "mon,tue,wed", 2_000), {"h1"}, 2_000)
+        self.assertEqual(policy.get("deploy_days"), "mon,tue")                       # more days: waits
+        policy.update(s(self, "s-api/target", "99.5", 3_000), {"h1"}, 3_000)
+        self.assertIn("s-api", policy.slos())                                         # a new SLO: now
+        policy.update(s(self, "s-api/state", "off", 4_000), {"h1"}, 4_000)
+        self.assertIn("s-api", policy.slos())                                         # removing one waits
+        policy.update(s(self, "global/strategy", "canary", 5_000), {"h1"}, 5_000)
+        self.assertEqual(policy.get("strategy"), "canary")                           # canary is stricter
+        policy.update(s(self, "m-x/until", "99999999999999", 6_000), {"h1"}, 6_000)
+        self.assertIn("m-x", policy.silences(7_000))                                  # a silence holds no bar
+
+
+class Canary(unittest.TestCase):
+    def history(self):
+        return [{"at": 0, "op": "deploy", "from": "none", "to": A}, {"at": 60_000, "op": "canary", "from": A, "to": B}]
+
+    def facts(self, canary_err, live_err=0.0, requests=500, now=60_000 + 11 * 60_000, canary=B, main=B):
+        policy = Policy(60_000, defaults={"strategy": "canary"})
+        stats = {B: {"requests": requests, "error_rate": canary_err, "p99": 100.0},
+                 A: {"requests": 5000, "error_rate": live_err, "p99": 100.0}}
+        return runtime.release_facts("met", A, main, self.history(), {A}, now, policy=policy, canary=canary,
+                                     canary_stats=lambda release, since: stats.get(release))
+
+    def test_start_bake_promote(self):
+        policy = Policy(60_000, defaults={"strategy": "canary"})
+        facts, _ = runtime.release_facts("met", A, B, [], set(), 0, policy=policy)
+        self.assertIn((f"run:canary:all/{A}/{B}", "canary_ready", "yes"), facts)
+        self.assertNotIn("deployable", str(facts))
+        facts, why = self.facts(0.001, now=60_000 + 3 * 60_000)
+        self.assertEqual([f for f in facts if "/" in f[0] and f[1] != "candidate"], [])          # still baking
+        self.assertIn("baking", why["canary"])
+        facts, why = self.facts(0.001)
+        self.assertIn((f"run:release:all/{A}/{B}", "promotable", "yes"), facts)
+
+    def test_a_worse_canary_is_taken_out_and_never_offered_again(self):
+        facts, why = self.facts(0.05, now=60_000 + 2 * 60_000)                       # fails fast, before the bake
+        self.assertIn((f"run:canary:abort/{A}/{B}", "canary_bad", "yes"), facts)
+        self.assertIn("points more", why["canary"])
+        history = self.history() + [{"at": 200_000, "op": "abort", "from": A, "to": B}]
+        facts, why = runtime.release_facts("met", A, B, history, {A}, 300_000,
+                                           policy=Policy(60_000, defaults={"strategy": "canary"}))
+        self.assertNotIn("canary_ready", str(facts))
+        self.assertIn("new commit", why["deploy"])
+
+    def test_main_moving_on_takes_the_canary_out(self):
+        facts, _ = self.facts(0.0, main=C)
+        self.assertIn((f"run:canary:abort/{A}/{B}", "canary_bad", "yes"), facts)
+
+    def test_the_adapter_starts_promotes_and_aborts(self):
+        root = Path(tempfile.mkdtemp())
+        repo = demo_repository(root, FILES)
+        m0 = git("rev-parse", "main", cwd=repo)
+        (repo / "app.py").write_text("def add(a, b):\n    return a + b  # v2\n")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "v2", cwd=repo)
+        m1 = git("rev-parse", "main", cwd=repo)
+        r = Releases(repo, root / "run", canary_percent=lambda: 20)
+        r.switch(f"run:release:all/none/{m0}", {"from": "none", "to": m0}, "k0")
+        self.assertEqual(r.canary_switch(f"run:canary:all/{m0}/{m1}", {"from": m0, "to": m1}, "k1"), "ok")
+        self.assertEqual((r.canary(), r.current()), (m1, m0))
+        self.assertEqual((r.root / "canary_weight").read_text().strip(), "20")
+        self.assertEqual(r.canary_switch(f"run:canary:all/{m0}/{m1}", {"from": m0, "to": m1}, "k1"), "ok")  # retry
+        self.assertEqual(r.switch(f"run:release:all/{m0}/{m1}", {"from": m0, "to": m1}, "k2"), "ok")    # promote
+        self.assertEqual((r.canary(), r.current()), (None, m1))
+        self.assertEqual(r.canary_switch(f"run:canary:abort/{m0}/{m1}", {"from": m0, "to": m1}, "k3"), "failed")
+        self.assertEqual([h["op"] for h in r.history()], ["deploy", "canary", "deploy"])
+
+
 class Switch(unittest.TestCase):
     def setUp(self):
         root = Path(tempfile.mkdtemp())
@@ -351,6 +479,87 @@ class Production(unittest.TestCase):
             rounds(1)
             self.assertNotIn(f"proof:{restart}", operator.journal.snapshot()["obligations"])
             self.assertEqual(operator.policy.get("auto_deploy"), "off")
+        finally:
+            gateway.shutdown()
+            gateway.server_close()
+
+
+class CanaryEndToEnd(unittest.TestCase):
+    def test_a_canary_bakes_and_is_promoted_a_bad_one_is_taken_out(self):
+        root = Path(tempfile.mkdtemp())
+        repo = demo_repository(root, {**FILES, "sbom.json": "{}\n"})
+        clock = Clock(1_900_000_000_000)
+        ceremony.now = daemon.now_ms = clock
+        install = root / "install"
+        ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None,
+                                         pins=str(root / "elsewhere" / "pins.db")))
+        with open(install / "standard.toml", "a") as f:
+            f.write('\n[run]\nmetrics = ["http://product/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n'
+                    'runner_metrics = "http://runner/__standard/metrics"\n')
+        clock.t += 3_600_100
+        ceremony.activate(argparse.Namespace(dir=str(install)))
+        operator = daemon.Installation(install / "standard.toml")
+        metrics, bad = Metrics(link=str(install / "run" / "current")), {}
+        seen = {}
+
+        def fetch(url):
+            if "runner" not in url:
+                return metrics(url)
+            lines = []
+            for name in ("current", "canary"):
+                if os.path.islink(install / "run" / name):
+                    release = os.path.basename(os.readlink(install / "run" / name))
+                    ok, err = seen.get(release, (0, 0))
+                    seen[release] = (ok + 100 - bad.get(release, 0), err + bad.get(release, 0))
+            for release, (ok, err) in seen.items():
+                lines += [f'standard_release_requests_total{{release="{release}",outcome="ok"}} {ok}',
+                          f'standard_release_requests_total{{release="{release}",outcome="error"}} {err}',
+                          f'standard_release_duration_seconds_bucket{{release="{release}",le="0.1"}} {ok + err}',
+                          f'standard_release_duration_seconds_bucket{{release="{release}",le="+Inf"}} {ok + err}']
+            return "\n".join(lines)
+        operator.production.production.fetch = fetch
+        gateway = AdmissionGateway(operator.socket, operator.service)
+        threading.Thread(target=gateway.serve_forever, daemon=True).start()
+        try:
+            cycle, refresh = agent_process.build(install / "standard.toml")
+            cycle.clock = clock
+
+            def rounds(n):
+                for _ in range(n):
+                    clock.t += 30_000
+                    operator.tick()
+                    refresh()
+                    clock.t += 61_000
+                    cycle.run()
+                operator.tick()
+
+            from surface.human import load_signer
+            from trusted.signing import envelope
+            h1 = load_signer("h1", install / "keys" / "h1.key")
+            s = operator.journal.snapshot()
+            operator.service.admit(envelope(s["domain"], "observation", {
+                "id": "h1-strategy", "at": max(clock(), s["last_at"] + 1), "author": "h1",
+                "under": operator.config["grants"]["engineer"], "resource": "run:policy/global/strategy",
+                "property": "value", "status": "canary", "level": "real"}, [h1]))
+            m0 = git("rev-parse", "main", cwd=repo)
+            rounds(2)
+            self.assertEqual(operator.releases.current(), m0)                 # a first release: nothing to compare
+
+            def commit(text):
+                (repo / "app.py").write_text(text)
+                git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", text[:9], cwd=repo)
+                return git("rev-parse", "main", cwd=repo)
+            m1 = commit("def add(a, b):\n    return a + b  # v1\n")
+            rounds(2)
+            self.assertEqual((operator.releases.current(), operator.releases.canary()), (m0, m1))   # on a share
+            rounds(9)
+            self.assertEqual((operator.releases.current(), operator.releases.canary()), (m1, None))   # promoted
+            m2 = commit("def add(a, b):\n    return a + b  # v2\n")
+            bad[m2] = 30                                                      # 30 % of its requests fail
+            rounds(4)
+            self.assertEqual((operator.releases.current(), operator.releases.canary()), (m1, None))   # taken out
+            self.assertIn("abort", [h["op"] for h in operator.releases.history()])
+            self.assertEqual(operator.policy.get("strategy"), "canary")
         finally:
             gateway.shutdown()
             gateway.server_close()

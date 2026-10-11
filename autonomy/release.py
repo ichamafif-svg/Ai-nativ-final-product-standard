@@ -8,9 +8,13 @@ switches, the scanner's and the engineers', and submits the matching intent unde
     run:process:all/{release}/{n} restartable = yes                   ->  restart    (agent_restart)
                                   requested = yes                     ->  restart    (agent_restart_reviewed)
     run:release:all/{from}/{to}   deployable = yes                    ->  deploy     (agent_deploy)
+                                  promotable = yes                    ->  deploy     (agent_promote, D32)
                                   candidate = yes and approved = yes  ->  deploy     (agent_deploy_reviewed)
+    run:canary:all/{from}/{to}    canary_ready = yes                  ->  canary     (agent_canary)
+    run:canary:abort/{from}/{to}  canary_bad = yes, or requested      ->  abort      (agent_abort, _reviewed)
 
-Stepping back comes first, then restarting, then deploying; one switch per pass. The law refuses anything the facts do
+Stepping back comes first, then taking a canary out, restarting, promoting or deploying, and starting a canary;
+one switch per pass. The law refuses anything the facts do
 not support; the guard switches by compare-and-swap, so a stale fact moves nothing. Each is submitted once.
 """
 from __future__ import annotations
@@ -24,10 +28,13 @@ from trusted.signing import Signer, envelope
 ROUTES = (  # op, resource prefix, [(facts that must all be yes, grant name)], argument names
     ("rollback", "run:service:all/", [(("regressed",), "agent_rollback"),
                                       (("previous", "requested"), "agent_rollback_reviewed")], ("from", "to")),
+    ("abort", "run:canary:abort/", [(("canary_bad",), "agent_abort"),
+                                    (("requested",), "agent_abort_reviewed")], ("from", "to")),
     ("restart", "run:process:all/", [(("restartable",), "agent_restart"),
                                      (("requested",), "agent_restart_reviewed")], ("release", "n")),
-    ("deploy", "run:release:all/", [(("deployable",), "agent_deploy"),
+    ("deploy", "run:release:all/", [(("deployable",), "agent_deploy"), (("promotable",), "agent_promote"),
                                     (("candidate", "approved"), "agent_deploy_reviewed")], ("from", "to")),
+    ("canary", "run:canary:all/", [(("canary_ready",), "agent_canary")], ("from", "to")),
 )
 
 

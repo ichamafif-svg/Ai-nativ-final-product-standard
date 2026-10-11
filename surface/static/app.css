@@ -316,3 +316,34 @@ input.num[type=text] { width: 220px; } input.num.sm { width: 84px; }
 @media (max-width: 700px) { .set { grid-template-columns: 1fr; } .set .sv { justify-content: flex-start; } }
 .table.comps { table-layout: auto; } .table.comps td { white-space: nowrap; } .table.comps td:first-child { white-space: normal; }
 .tablewrap { overflow-x: auto; }
+/* D32: SLOs, tabs, release policy, rules as code */
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 24px; padding: 4px; background: var(--hair); border-radius: 12px; width: fit-content; max-width: 100%; }
+.tabs button { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 13.5px; padding: 7px 12px; border-radius: 9px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); font-weight: 500; }
+.slo { margin-bottom: 16px; }
+.slohead { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.slogrid { display: grid; grid-template-columns: 1fr 1.4fr 1.6fr; gap: 24px; margin: 18px 0 8px; }
+.slogrid .k { font-size: 12.5px; color: var(--ink-2); margin-bottom: 6px; } .slogrid .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bbar { height: 8px; border-radius: 4px; background: var(--hair); overflow: hidden; margin: 8px 0 6px; }
+.bbar i { display: block; height: 100%; background: var(--held); } .bbar.warn i { background: var(--gap); } .bbar.bad i { background: var(--esc); }
+.small.ok { color: var(--held); } .small.warn { color: var(--gap); } .small.bad { color: var(--esc); }
+.burns { display: flex; gap: 16px; flex-wrap: wrap; font-variant-numeric: tabular-nums; margin: 4px 0 6px; } .burns b { font-size: 16px; }
+details summary { cursor: pointer; font-size: 13.5px; color: var(--accent); margin-top: 6px; }
+.sloform label { margin-top: 12px; } .sloform input[type=text] { max-width: 420px; }
+.row4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.row4 input.num { width: 100px; }
+.preview { margin-top: 8px; }
+.seg { display: inline-flex; background: var(--hair); border-radius: 9px; padding: 3px; }
+.seg button { border: 0; background: transparent; font: inherit; font-size: 13.5px; padding: 6px 14px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.days { display: flex; gap: 6px; flex-wrap: wrap; } .days label { display: inline-flex; gap: 4px; align-items: center; margin: 0; font-weight: 400; font-size: 13px; }
+textarea#code { width: 100%; min-height: 420px; font: 12.5px/1.55 var(--mono); padding: 14px 16px; border-radius: var(--r-md); border: 1px solid var(--hair-2);
+  background: var(--surface); color: var(--ink); resize: vertical; }
+h3 { font-size: 15px; margin: 22px 0 10px; }
+.sev { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 5px; margin-right: 6px; }
+.sev.page { background: var(--esc-soft); color: var(--esc); } .sev.ticket { background: var(--gap-soft); color: var(--gap); }
+.slostrip { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.slostrip .panel { padding: 16px 18px; }
+@media (max-width: 800px) { .slogrid, .row4 { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi { border-left: 0 !important; } .slogrid { grid-template-columns: 1fr; } }
+.panel > h3:first-child { margin-top: 0; } .row4 select { width: 100%; max-width: 220px; }

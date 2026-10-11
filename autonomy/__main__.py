@@ -69,7 +69,8 @@ def build(config_path) -> tuple[Cycle, callable]:
         run = cycle.run
         cycle.run = lambda mode="RUN": {**run(mode), "integrate": integrator.run()}
     switches = {name: gid for name, gid in c["grants"].items()
-                if name.startswith(("agent_deploy", "agent_rollback", "agent_restart"))}
+                if name.startswith(("agent_deploy", "agent_rollback", "agent_restart", "agent_canary",
+                                    "agent_promote", "agent_abort"))}
     if switches:                                          # D30: production follows main, and steps back on a breach
         from .release import Releaser
         releaser = Releaser(cycle.service, signer, switches, clock=lambda: cycle.clock(),

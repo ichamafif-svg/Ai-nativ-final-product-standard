@@ -88,6 +88,12 @@ FLOORS = {
         # Start the live release again (D31): the n-th restart of this release, so each one is judged once.
         "restart": {"args": {"release": "segment", "n": "segment"}, "resource": "run:process:all/{release}/{n}",
                     "profile": "capability"},
+        # Start `to` on a share of traffic beside the live `from` (D32); promoting it is `deploy`.
+        "canary": {"args": {"from": "segment", "to": "segment"}, "resource": "run:canary:all/{from}/{to}",
+                   "profile": "capability"},
+        # Take the canary `to` out; it is never offered again.
+        "abort": {"args": {"from": "segment", "to": "segment"}, "resource": "run:canary:abort/{from}/{to}",
+                  "profile": "capability"},
     },
     "conditions": {
         "remediate-autonomous": {"all": [{"observed": ["tests", "green", "real"]},
@@ -111,6 +117,10 @@ FLOORS = {
                                       {"observed": ["requested", "yes", "real"]}]},
         "restart-autonomous": {"all": [{"observed": ["restartable", "yes", "real"]}]},
         "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
+        "canary-autonomous": {"all": [{"observed": ["canary_ready", "yes", "real"]}]},
+        "deploy-canary": {"all": [{"observed": ["promotable", "yes", "real"]}]},
+        "abort-autonomous": {"all": [{"observed": ["canary_bad", "yes", "real"]}]},
+        "abort-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
     },
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.
     "targets": [
