@@ -203,7 +203,8 @@ La suffisance des six primitives pour toute règle métier n'est pas démontrée
 
 Le langage est **fini, borné, positif** :
 
-- Prédicats : `eq`, `prefix`, `observed`, `closed_at_least`, `open`, `related`.
+- Prédicats : `eq`, `prefix`, `observed`, `compare`, `closed_at_least`, `open`, `related`.
+- `compare: [propriété, le|ge, borne, niveau]` (D35) compare un nombre mesuré à une borne de la loi, en arithmétique exacte (`Fraction`) sur des décimales `-?[0-9]{1,12}(\.[0-9]{1,6})?` ; aucun flottant. C'est ainsi que les floors bornent le jugement de l'instrument : le scanner mesure, la loi fixe le seuil.
 - `related: [relation, gauche, droite]` n'interroge que les relations constitutionnelles `role`, `holds`, `parent`, `owns`, `type`, `state`, avec les liaisons `$author`, `$resource`, `$under`. Chaque interrogation est directe et bornée, sans code ni recherche non bornée.
 - `where` n'accepte que des chaînes et des entiers [V6-3].
 - Une condition ne voit que les faits qu'elle nomme, pour la ressource qu'elle juge [V6-causes].
@@ -303,7 +304,19 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 - Un module ne sort du budget de sûreté que tant que la structure qui le justifie tient ; c'est vérifié automatiquement (graphe d'imports + test de jonction par ET).
 - Les plafonds « restrictif seul » et « visibilité » sont des **cliquets** : ils ne peuvent que baisser, sauf décision motivée et consignée.
 - Budget K pur visé : **1 800 à 3 200 lignes**, primitives réutilisées comprises.
-- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) : noyau K **2 100 / 3 200**, sûreté T **1 160 / 1 160** (dont processus opérateur et identité de release), intégrations T06/T07/T08 (instruments de toutes les cibles, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur) **801 / 801**, second juge (restrictif seul) **780 / 780**, redevabilité (visibilité) **250 / 250**, passerelle d'hébergement **71 / 71**. TCB locale : 4 952 lignes. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+- Budgets en vigueur (`tcb-budget.json`, vérifiés par `make budget`) :
+
+| Budget | Lignes / plafond | Contenu |
+|---|---|---|
+| Noyau K (sûreté) | **2 228 / 3 200** | jugement, langage, loi, obligations, FLOOR-0, floors |
+| Sûreté T | **1 196 / 1 196** | journal, garde, horloge, frontière, service, passerelle, livraison, release, processus opérateur |
+| Intégrations T06/T07/T08 (sûreté) | **1 099 / 1 099** | instruments de toutes les cibles, isolation, contrat des demandes, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur |
+| Production T06/T07/T08 (sûreté) | **1 205 / 1 205** | instrument de production (573), bascules de release (201), réglages des ingénieurs (320), SLO (111) |
+| Hébergement (sûreté) | **71 / 71** | passerelle SSH à commande forcée |
+| Second juge (restrictif seul) | **797 / 797** | |
+| Redevabilité (visibilité) | **250 / 250** | |
+
+  TCB locale : **6 846 lignes**, dont 3 821 hors noyau et second juge. Le budget production est le plus gros morceau de jugement **non relu** hors du noyau : il est borné par la loi (§12, `compare`), pas par une revue. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -632,6 +645,18 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 
 **Déclaration de déploiement.** Pour chaque T : fournisseur, trust domain, possession des clés, droits de restauration, chemins réseau, dépendances communes, protocole de panne, test réel. Des services distincts sous un même administrateur ne sont pas indépendants. La qualification est liée à une release, une genèse, une installation et une route.
 
+**Réalisation dans le prototype.**
+
+| T | Où | Ce qui est tenu |
+|---|---|---|
+| T04, T05 | `trusted/journal.py`, `trusted/checker.py` | Journal SQLite append-only, pins sur un autre volume ; second juge qui reformule chaque admission |
+| T06 | `trusted/instruments.py`, `trusted/operator.py` | Toutes les sondes des floors ; les propriétés **épinglées** (`instruments` des floors : tests, régressions, reproduction, acceptation, contrat, règles, faits de production) ne s'acceptent que comme `measurement` signée par `@scanner` avec méthode, couverture, date et artefact. Une `observation` d'une propriété épinglée est refusée (`PROV.INSTRUMENT`), une mesure d'une autre source aussi (`PROV.COVERAGE`) : un relecteur ne peut pas signer « tests au vert » (D33) |
+| T06 | `trusted/isolation.py` | Le code des contributeurs et de l'agent tourne sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire ; il ne lit pas les clés de la garde. Sonde `qualify` : « T06 contributors' code runs isolated » |
+| T06 | `trusted/build.py` | Le contrat d'une demande (fichier de tests d'acceptation stocké par digest) : `contract` = `red` sur main (la demande demande du nouveau), `acceptance` = `green` sur l'implémentation, `altered` si le fichier diffère (D34) |
+| T06 | `trusted/runtime.py`, `trusted/slo.py`, `trusted/policy.py` | Faits de production signés par le scanner : couverture des sources, SLO tenu ou rompu (taux de consommation), version servie, candidats, canary, migrations compatibles ; nombres pour les bornes de la loi (D30–D35) |
+| T07, T08 | `trusted/guard.py`, `trusted/adapters.py`, `trusted/deploy.py` | CAS de `main` (git local ou GitHub), bascules de release (`current`, `canary`, redémarrage sans coupure) ; readback `applied / not_applied / unknown` ; preuve par l'oracle |
+| T09 | `trusted/delivery.py` | Outbox et livraison ; **non branchée** sur e-mail ni messagerie (les alertes ne sont que dans l'interface) |
+
 **Évaluation signée.** Une frontière (`TrustBoundary`) qualifie seulement les rôles utilisés par l'opération. Une évaluation Ed25519 signée lie release, genèse, journal et registre ; les clés de l'évaluateur sont épinglées par l'installation, hors de portée de l'agent. Sans temps fiable, une restriction peut être contrôlée à la date d'émission signée de l'évaluation ; cette voie ne peut jamais élargir. Une déclaration `VERIFIED` signée ne démontre pas la réalité physique.
 
 ---
@@ -650,6 +675,16 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 | U06 | RUN | Monitoring actif, incidents, corrections, conformité continue | Clore une dette sur un scan vert |
 | U07 | Intégrations | Git, CI, cloud, IAM, SRE, exposés en modèles génériques | Autoriser une action, fabriquer un fait qualifié |
 | U08 | Surface | Couverture, objectifs, risques, dettes, décisions, escalades | Traiter un risque non couvert comme sain |
+
+**Agents du prototype** (`python -m autonomy run`, un processus, une clé) :
+
+| Agent | Fichier | Fait | Ne fait jamais |
+|---|---|---|---|
+| Cycle | `autonomy/cycle.py`, `agent.py` | Répare les écarts des floors (`remediate`) : recette reproductible ou proposition par LLM, précontrôle, dossier | Fusionner sans `reproduced` ou revue |
+| Integrator | `autonomy/contributions.py` | Soumet `integrate` pour chaque contribution de la boîte de dépôt | Signer un fait |
+| Builder | `autonomy/build.py` | Implémente une demande contractée (`implement`), commit avec `Standard-Request: <rid>` ; livre la demande (`deliver`) quand main passe le contrat | Écrire sous `tests/`, `.github/`, `standard/` |
+| Configurer | `autonomy/rules.py` | Commite exactement le `standard/rules.json` signé par un ingénieur, trailer `Standard-Rules: <digest>`, puis `configure` | Écrire autre chose que ce fichier |
+| Releaser | `autonomy/release.py` | `deploy`, `rollback`, `restart`, `canary`, `abort` quand les faits le permettent (variante autonome ou revue) | Choisir un seuil : il ne lit que les faits |
 
 ### 11.2 Routes
 
@@ -715,18 +750,19 @@ Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes
 
 ### 11.9 L'interface (D27)
 
-`python -m surface.web standard.toml` : une application web sous son propre utilisateur Unix (`standard-web`), à l'écoute de `localhost` seulement (tunnel SSH ou proxy TLS devant). **La première page s'appelle Run** : tous les composants du produit, pas seulement ses APIs, chacun avec ses signaux d'astreinte, reconnus selon les conventions OpenTelemetry dans des métriques Prometheus (`surface/telemetry.py`) : APIs (déclarées dans `openapi.json` et observées : req/s, 5xx, p50/p95/p99, disponibilité, budget d'erreur contre le SLO), workers et files (débit, échecs, latence, messages en attente), tâches planifiées (dernier succès, durée, période, retard, échec), bases de données (opérations/s, erreurs, latences), services externes appelés (appels/s, erreurs, latences), processus (CPU, mémoire, ancienneté). Un échec est un statut 5xx ou une étiquette `error_type`, comme le définissent les conventions. Plus le trafic, les mises en production et l'état des sources de métriques. Ces chiffres sont des informations pour l'équipe : ils n'ouvrent aucun droit. Ensuite, une console d'exploitation, sobre, qui décrit **la conformité** du produit et le décrit de façon générique, quel que soit le produit : un état (« Tout est tenu », « Sous contrôle », « Action requise »), la carte des exigences par domaine (sécurité du code, dépendances et chaîne logicielle, intégration continue, gouvernance du code, organisation), ce qui attend une personne, et les dernières mises en production. La construction (BUILD : contributions, demandes) est une section à côté. Les spécificités d'un produit (ses propres indicateurs) viendront ensuite, au-dessus de cette abstraction. Le détail :
+`python -m surface.web standard.toml` : une application web sous son propre utilisateur Unix (`standard-web`), à l'écoute de `localhost` seulement (tunnel SSH ou proxy TLS devant). **La première page s'appelle Run** : tous les composants du produit, pas seulement ses APIs, chacun avec ses signaux d'astreinte, reconnus selon les conventions OpenTelemetry dans des métriques Prometheus (`surface/telemetry.py`) : APIs (déclarées dans `openapi.json` et observées : req/s, 5xx, p50/p95/p99, disponibilité, budget d'erreur contre le SLO), workers et files (débit, échecs, latence, messages en attente), tâches planifiées (dernier succès, durée, période, retard, échec), bases de données (opérations/s, erreurs, latences), services externes appelés (appels/s, erreurs, latences), processus (CPU, mémoire, ancienneté). Un échec est un statut 5xx ou une étiquette `error_type`, comme le définissent les conventions. Plus le trafic, les mises en production et l'état des sources de métriques. Ces chiffres sont des informations pour l'équipe : ils n'ouvrent aucun droit. Le reste de l'interface, en deux groupes (Run, Construction) plus ce qui est commun :
 
-- **BUILD** (onglet Construction) : les demandes (étape suivante) et les contributions de la boîte de dépôt, avec leurs faits mesurés (tests, régressions, revue) et la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`).
-- **RUN** (onglet Exploitation) : les écarts rangés par qui s'en occupe (l'agent seul, l'agent puis un humain, les humains seuls), les réparations de l'agent et leurs faits, ses abandons avec leur dossier, les obligations du dépôt.
-- **Revues** : la file des transitions qui attendent une signature, le dossier, les différences, et deux boutons.
-- **Loi** : les exigences en vigueur et les conditions d'entrée dans `main`. **Identité** : la clé de la personne.
+| Page | Groupe | Contenu |
+|---|---|---|
+| **Run** | Run | Composants et signaux, version en production, SLO et budgets, frontière d'autonomie par composant (Voit, Prévient, Agit, Prouve, D29), écarts non couverts en tête, décisions qui restent aux ingénieurs (mettre main en production, revenir, redémarrer, promouvoir ou retirer un canary), chacune signée dans le navigateur |
+| **Alertes** (D30) | Run | Une alerte s'ouvre quand un composant passe dégradé ou en échec sur 5 minutes, quand un SLO brûle vite (page) ou lentement (ticket), quand une source se tait ou quand une obligation dépasse son échéance ; prise en charge par une signature (`ack = taken` sur `repo:alert/…`), silences signés (`run:policy/m-*`), fermeture au retour du composant. Bandeau sur toutes les pages, badge, titre de l'onglet. Ni e-mail ni messagerie |
+| **Objectifs et règles** (D31, D32, D35) | Run | Onglets : SLO et budgets, Alertes (fenêtres de consommation), Mise en production (stratégie directe ou canary, fenêtres, gel, gel sur budget), Santé immédiate, Composants (comptés ou non, objectif propre), Sondes, Silences, Règles en code (`standard/rules.json` sur main), Historique. Chaque champ dit sa borne ; resserrer s'applique tout de suite, relâcher après le délai de la loi. Une modification = une signature de l'ingénieur sur `repo:config:rules/<main>` |
+| **Autonomie, Conformité, Activité** | Run | Ce que l'agent fait seul, avec un humain, ou pas du tout ; la carte des exigences par domaine (sécurité du code, dépendances et chaîne logicielle, CI, gouvernance du code, organisation) ; les écarts rangés par qui s'en occupe, les réparations de l'agent, ses abandons et leur dossier |
+| **Demandes** (D34) | Construction | Écrire une demande et ses tests d'acceptation, voir le contrat mesuré (`red` = demande du nouveau ; `passes:N` = ne promet rien), signer le contrat, suivre l'implémentation, l'acceptation, la revue et la livraison |
+| **Contributions** | Construction | La boîte de dépôt et les faits mesurés (tests, régressions, revue), avec la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`) |
+| **Revues, Preuves, Réglages** | Commun | File des transitions à signer avec dossier et différences ; preuves et loi en vigueur ; import de la clé de la personne |
 
-**Alertes (D30)** : une page, un bandeau sur toutes les pages, un badge et le titre de l'onglet. Une alerte s'ouvre quand un composant passe dégradé ou en échec sur 5 minutes, quand une source se tait ou quand une obligation dépasse son échéance ; elle se prend en charge par une signature (`ack = taken` sur `repo:alert/…`) et se ferme quand le composant revient. Run montre aussi la version en production, l'objectif signé et chaque bascule (mise en production, retour), et la frontière d'autonomie est calculée sur l'installation réelle : Agit seulement si `[deploy]` est configuré, Prouve pour les composants comptés dans le fait signé.
-
-**Objectifs et règles (D31)** : champs et interrupteurs pour l'objectif, les seuils, la fenêtre, l'autonomie en production et les sondes externes, globalement et par composant, avec l'historique (qui, quand, appliqué ou en attente). Sur Run, les décisions qui restent aux ingénieurs : mettre main en production, revenir à la version précédente, redémarrer sans coupure, chacune signée dans le navigateur.
-
-Ce que l'interface ne fait pas : elle ne détient aucune clé et ne décide rien. Elle lit par la passerelle (la vue, qui publie aussi les faits sur les transitions exactes) et ce qui est publié pour les personnes (constats, notes de l'agent, dépôts en lecture), et transmet au noyau les enveloppes signées. **La signature se fait dans le navigateur** : la clé est importée dans WebCrypto, non exportable, gardée dans IndexedDB ; le navigateur construit lui-même l'énoncé canonique, le PAE et l'enveloppe à partir du corps qu'il affiche (`surface/static/sign.js`, identique octet pour octet à `trusted/signing.py`, vérifié par un test). Un serveur web compromis peut mentir sur ce qu'il affiche, pas faire signer autre chose que ce que le navigateur montre. En production, une passkey : le noyau vérifie déjà les assertions WebAuthn ES256, il reste à les enrôler par une rotation de racine.
+Ce que l'interface ne fait pas : elle ne détient aucune clé et ne décide rien. Elle lit par la passerelle (la vue, qui publie aussi les faits sur les transitions exactes) et ce qui est publié pour les personnes (constats, notes de l'agent, dépôts en lecture), et transmet au noyau les enveloppes signées. **La signature se fait dans le navigateur** : la clé est importée dans WebCrypto, non exportable, gardée dans IndexedDB ; le navigateur construit lui-même l'énoncé canonique, le PAE et l'enveloppe à partir du corps qu'il affiche (`surface/static/sign.js`, identique octet pour octet à `trusted/signing.py`, vérifié par un test). Un serveur web compromis peut mentir sur ce qu'il affiche, pas faire signer autre chose que ce que le navigateur montre. En production, une passkey : le noyau vérifie déjà les assertions WebAuthn ES256, il reste à les enrôler par une rotation de racine. **Limite :** la lecture n'est pas authentifiée ; l'interface écoute localhost et compte sur le tunnel ou le proxy devant elle.
 
 ## 12. Floors de la release
 
@@ -755,7 +791,38 @@ Les floors portent la direction (autonomie, sécurité, conformité) dans le **m
 
 **Mesures organisationnelles** (attestées `current` par `@compliance_officer`, sous la SoA) : ISMS, risques, revue d'accès (90 j), formation, RH, fournisseurs, procédure d'incident, continuité, sauvegarde/restauration (90 j), registre légal, audit indépendant, sites physiques, politique crypto, tests de résilience, registre des actifs, baseline infra (180 j), monitoring (180 j), threat intel (180 j). Leur écart va aux personnes.
 
-**Projection conformité** (hors TCB) : 93 contrôles ISO 27001, 12 exigences NIS2, 19 articles DORA. Le mapping peut surévaluer la portée d'une attestation générale ; il ne certifie ni la conformité juridique ni le contrôle effectif.
+**Entrée dans `main`** (`MAIN_OPS` : toutes partagent le même CAS de la garde) :
+
+| Opération | Ressource | Condition |
+|---|---|---|
+| `remediate` | `repo:{area}:{item}/{base}/{head}` | `tests = green` et (`reproduced = yes` **ou** `review = approved`) |
+| `integrate` | `repo:contrib:{contributeur}/{base}/{head}` | `tests = green`, `regressions = none`, `review = approved` |
+| `implement` (D34) | `repo:feature:{request}/{base}/{head}` | `acceptance = green`, `tests = green`, `regressions = none`, `review = approved` |
+| `configure` (D35) | `repo:config:rules/{base}/{head}` | `configured = yes` (le commit contient exactement les règles signées par un ingénieur), `tests = green`, `regressions = none` |
+
+**Demandes (D34).** Ressource typée `request` (`build:request/<rid>`, champs `title`, `spec`, `contract` en digests) : `proposed → contracted` exige `contract = red` (les tests d'acceptation échouent sur main : la demande demande du nouveau), `contracted → delivered` exige `accepted = yes` (main passe le contrat), `withdraw` depuis les deux premiers états. Enregistrer et contracter : le rôle produit (`register:request`, `transition:request:contract`).
+
+**Production (D30–D35)** — cibles observées par `@scanner`, fraîcheur 15 min :
+
+| Id | Ressource | Attendu | Échéance | Réparation |
+|---|---|---|---|---|
+| run-sources | `run:sources:all` | couverture complète | 1 h | humaine |
+| run-slo | `run:service:all` | `slo = met` | 30 min | `rollback` |
+| run-live | `run:release:all` | `lag = none` | 1 jour | `deploy` |
+
+| Opération | Ressource | Autonome | Revue |
+|---|---|---|---|
+| `deploy` | `run:release:all/{from}/{to}` | `deployable = yes` ; en canary : `promotable = yes`, `canary_error_delta ≤ 2`, `canary_requests ≥ 20`, `canary_baked_min ≥ 1` | `candidate` + `approved` |
+| `rollback` | `run:service:all/{from}/{to}` | `regressed = yes`, `breach_age_min ≤ 240` | `previous` + `requested` |
+| `restart` | `run:process:all/{release}/{n}` | `restartable = yes`, `restarts_last_hour ≤ 11` | `requested` |
+| `canary` | `run:canary:all/{from}/{to}` | `canary_ready = yes` | — |
+| `abort` | `run:canary:abort/{from}/{to}` | `canary_bad = yes` | `requested` |
+
+Les bornes numériques sont des valeurs **de la loi**, comparées par le noyau (`compare`) : un scanner fautif ne peut pas promouvoir un canary qui a 3 points d'erreurs de plus. Les seuils plus fins (objectif, canary à 0,5 point, horizon) sont des réglages des ingénieurs, lus et appliqués par l'instrument de production (`trusted/policy.py`) : la loi est le plafond ; un réglage plus lâche que la loi reste sans effet, le noyau refuse.
+
+**Instruments épinglés (D33).** Les floors réservent à `@scanner` : `tests`, `regressions`, `reproduced`, `acceptance`, `contract`, `configured`, `accepted` et tous les faits de production ci-dessus. Chacun déclare méthode, couverture et fraîcheur ; seule une `measurement` de cette source le porte.
+
+**Projection conformité** (hors TCB, **non implémentée** : aucun code dans le dépôt ; l'interface montre seulement la carte des exigences des floors par domaine) : 93 contrôles ISO 27001, 12 exigences NIS2, 19 articles DORA. Le mapping peut surévaluer la portée d'une attestation générale ; il ne certifie ni la conformité juridique ni le contrôle effectif.
 
 ---
 
@@ -1065,13 +1132,29 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 |---|---|---|---|
 | **Opérateur (K + T)** | `python -m trusted serve standard.toml` | Journal, pins, clés de la garde, des instruments, de l'oracle ; jeton fournisseur ; passerelle | Clé de l'agent, clé API du modèle |
 | **Agent (U)** | `python -m autonomy run standard.toml` | Sa propre clé, son dépôt de propositions, la clé API Claude | Journal, pins, clé de la garde, jeton d'écriture |
-| **Humains** | `python -m surface review / attest` | Leur propre clé | Tout le reste |
+| **Interface** | `python -m surface.web standard.toml` (utilisateur `standard-web`) | Rien : lit la vue, relaie des enveloppes signées dans le navigateur | Toute clé |
+| **Exécutant** | `standard-runner`, appelé par la garde via `sudo -n -u standard-runner -- /usr/bin/env -i …` | Rien : exécute le code des contributions, sans réseau | Clés, journal, réseau |
+| **Produit** | `tools/run_release.py` (utilisateur `standard-demo`) | Ses données (`/srv/standard/data`) ; sert `deploy/current` et `deploy/canary` | Le droit de basculer la release (la garde écrit `deploy/`) |
+| **Humains** | `python -m surface review / attest`, ou l'interface | Leur propre clé | Tout le reste |
 
-À chaque passe, l'opérateur fait témoigner le temps (démo seulement), mesure `main` et les propositions, fait partir les effets admis, réconcilie et prouve. L'agent projette les dettes, fabrique ses propositions et soumet ses intentions.
+À chaque passe, l'opérateur fait témoigner le temps (démo seulement), mesure `main`, les propositions, les contributions et les demandes, mesure la production (sources, SLO, canary, version servie), fait partir les effets admis, réconcilie et prouve. L'agent projette les dettes, fabrique ses propositions et soumet ses intentions.
+
+**Configuration** (`standard.toml`, sections ajoutées après la cérémonie) :
+
+| Section | Clés | Effet |
+|---|---|---|
+| `[run]` | `metrics` (URLs Prometheus), `slo`, `base_url`, `interval`, `store` | Sources de la production ; objectif par défaut ; stockage de télémétrie de l'interface |
+| `[deploy]` | `root`, `runner_metrics`, `restart` | Répertoire des releases que seule la garde bascule ; métriques du lanceur pour l'analyse canary ; commande de redémarrage. Sans `[deploy]`, Standard n'agit pas en production |
+| `[tests]` | `install`, `runner_user` | Installer les dépendances de test (wheels seulement) ; utilisateur isolé qui exécute le code des contributions |
+| `[build]` | `store` | Magasin des demandes et contrats, par digest (défaut `requests/`) |
+| `[hosting]` | `config`, `gate_user` | Hébergement des dépôts clients, vérifié par `qualify.py` |
+| `[llm.small]`, `[llm.frontier]` | `kind`, `model`, `key_file` | Porte LLM de l'agent |
+
+Les réglages des ingénieurs ne sont pas dans `standard.toml` : ils vivent dans `standard/rules.json` sur `main` (D35), édités par l'interface et entrés par l'opération `configure` ; les silences restent des énoncés signés.
 
 ### 19.2 Installer une démo
 
-**Sur un serveur Ubuntu 24.04** : copier le projet, puis en root `bash tools/install_server.sh` (paquets, environnement Python, trois utilisateurs garde/agent/passerelle, profil AppArmor du bac à sable, pare-feu, dépôt de démo hébergé, instantané de données, cérémonie phase 1, clé Claude facultative saisie sans écho, SSH par clé seulement), et une heure plus tard `bash /opt/standard/tools/install_server.sh activate` (activation, séparation, deux services systemd, qualification). Les étapes ci-dessous détaillent ce que fait le script.
+**Sur un serveur Ubuntu 24.04** : copier le projet, puis en root `bash tools/install_server.sh` (paquets, environnement Python, utilisateurs garde, agent, passerelle, web, exécutant (`standard-runner`, sudoers limité à `/usr/bin/env`), profil AppArmor du bac à sable, pare-feu, dépôt de démo hébergé, instantané de données, cérémonie phase 1, clé Claude facultative saisie sans écho, SSH par clé seulement), et une heure plus tard `bash /opt/standard/tools/install_server.sh activate` (activation, séparation, services systemd opérateur, agent, web, produit de démo et trafic, qualification). Les étapes ci-dessous détaillent ce que fait le script.
 
 1. Créer le dépôt de démo à partir de `demo/` : il démarre hors de ses floors (dépendance vulnérable, SBOM absent, action non épinglée, secret en dur).
 2. `python tools/refresh_data.py requirements.txt --actions actions/checkout@v4 actions/setup-python@v5 > data.json`, puis relire l'instantané.
@@ -1095,22 +1178,28 @@ Ce que la démo montre : la loi refuse, attend les faits indépendants, autorise
 Une couche = un dossier. Rien en dehors.
 
 ```
-kernel/      K — jugement unique, six mécanismes, FLOOR-0, langage de loi.
-             Aucune dépendance hors stdlib + cryptographie épinglée.
-trusted/     T — journal, pins, garde, adaptateurs d'effet, readback, horloge,
-             livraison, second juge (budget restrictif), passerelle d'admission,
-             instruments T06 et recettes (ils attestent des faits qui ouvrent des droits).
-floors/      Floors de la release, déclaratifs, couverts par le digest.
-autonomy/    U — découverte, projection, Work Engine, agent, cycle, bac à sable, précontrôle,
-             mémoire, carte du dépôt, porte LLM, contributions.
-surface/     Interface : CLI (`python -m surface`) et web (`python -m surface.web`, static/ : page,
-             application, signature dans le navigateur).
-compliance/  Projection clauses ISO/NIS2/DORA (hors TCB, lecture seule).
-tests/       Un test par règle du registre §17, un par garantie G01–G16,
-             les dix scénarios de §21.1, le différentiel des deux juges.
-tools/       Contrôle des couches et budgets, cérémonie, qualification, données,
-             hébergement (host.py : dépôt canonique + boîte de dépôt + clés clients).
-demo/        Le dépôt de démonstration, hors de ses floors au départ.
+kernel/      K — jugement unique, six mécanismes, FLOOR-0, langage de loi (dont compare),
+             redevabilité. Aucune dépendance hors stdlib + cryptographie épinglée.
+floors/      Floors de la release, déclaratifs, couverts par le digest : cibles, opérations,
+             conditions, instruments épinglés, ressource request.
+trusted/     T — journal, pins, garde, horloge, livraison, passerelle, service, processus
+             opérateur (daemon), second juge (checker), release ;
+             intégrations : instruments, operator (passes), recipes, adapters, github, data,
+             isolation (exécutant), build (contrat des demandes) ;
+             production : runtime (instrument), slo, policy (réglages), deploy (bascules) ;
+             hosting (passerelle SSH).
+autonomy/    U — projection, Work Engine, agent, cycle, bac à sable, précontrôle, mémoire,
+             carte du dépôt, porte LLM ; Integrator (contributions), Builder (demandes),
+             Configurer (règles), Releaser (production).
+surface/     Interface : CLI (`python -m surface`), web (`python -m surface.web`), telemetry
+             (lecture Prometheus), static/ (page, application, signature dans le navigateur).
+tests/       Un test par règle du registre §17, un par garantie G01–G16, les dix scénarios
+             de §21.1, le différentiel des deux juges, production, construction, isolation.
+tools/       Budgets et couches (check_tcb), cérémonie, qualification, données, hébergement
+             (host.py), installation serveur, lanceur de release sans coupure (run_release.py),
+             trafic de démo.
+demo/        Le dépôt de démonstration, hors de ses floors au départ ; service HTTP avec
+             build_info, base de données et migrations.
 ```
 
 **Règles d'import, vérifiées automatiquement à chaque commit :**
@@ -1118,7 +1207,7 @@ demo/        Le dépôt de démonstration, hors de ses floors au départ.
 - `kernel` n'importe rien de Standard.
 - `trusted` n'importe que `kernel`.
 - Le second juge n'importe ni le noyau ni son évaluateur.
-- `autonomy`, `surface`, `compliance` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable. Ils peuvent seulement utiliser comme bibliothèques `trusted.instruments` (lecture), `trusted.recipes`, `trusted.signing` (signer avec leur propre clé) et `trusted.gateway`.
+- `autonomy` et `surface` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable. Ils peuvent seulement utiliser comme bibliothèques (`U_MAY_USE` dans `tools/check_tcb.py`) `trusted.instruments`, `trusted.build`, `trusted.runtime`, `trusted.policy`, `trusted.slo` (lecture et calcul, sans clé), `trusted.recipes`, `trusted.data`, `trusted.signing` (signer avec leur propre clé) et `trusted.gateway`.
 - Le budget de chaque fichier de `kernel/` et `trusted/` est déclaré ; tout dépassement bloque.
 
 ---
@@ -1171,17 +1260,19 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Travail unifié (U) | Fait : projection, Work Engine, agent, cycle, surface, revue et attestation humaines |
 | Installation | Fait : processus opérateur et agent sous deux utilisateurs Unix, cérémonie en deux phases, séparation, qualification, adaptateur GitHub |
 | Hébergement (D23, chantier 1) | Fait : passerelle SSH à commande forcée, canonique à la garde, boîte de dépôt par client, opération `integrate` (D24) ; démontré avec sshd réel : contribution poussée, tests mesurés, refus sans revue, revue signée, intégration par la garde, lignée intacte ; qualify : PASS |
-| Interface (D23, chantier 2) | Faite (v1, D27) : BUILD, RUN, revues signées dans le navigateur, loi, identité ; démontrée en direct (revue signée dans Chromium, admise par le noyau, contribution intégrée). Restent : les demandes de fonctionnalités, les passkeys, l'export des preuves |
+| Interface (D23, chantier 2) | Faite (v1, D27) : BUILD, RUN, revues signées dans le navigateur, loi, identité ; démontrée en direct (revue signée dans Chromium, admise par le noyau, contribution intégrée). Depuis : Run, Alertes, Objectifs et règles, Demandes (D30–D35). Restent : les passkeys, l'export des preuves, l'authentification en lecture |
 | Porte LLM (D23, chantier 3) | Fait : multi-fournisseurs (Anthropic, compatible OpenAI), niveaux, masquage, journal d'egress (§11.8) |
 | Outillage de l'agent (D25) | Fait et testé : constats, bac à sable, précontrôle, mémoire et budget, carte, dossier ; démontré en direct sous utilisateurs séparés. Non démontré : la boucle avec un vrai modèle (pas de clé dans la session) |
 | Jalon investisseur (D15) | Démontré en git local avec T07 physique (qualify : PASS) ; sur GitHub réel, une réparation SBOM a atteint `main` de bout en bout, mais par les accès de la session et non par un jeton de garde distinct |
 | Garanties physiques (§15.2) | T07 **démontré** en git local. Les autres **non démontrées** : exigent des humains, des témoins, un volume de pins et un évaluateur réellement distincts |
-| Production (D30) | Fait et démontré en direct sous utilisateurs séparés : main mise en production par l'agent, contribution fautive intégrée après revue puis déployée, objectif rompu, **retour automatique en 33 s**, version fautive jamais reproposée, alerte prise en charge par une signature dans Chromium. Restent : e-mail et messagerie, redémarrage et capacité, objectif par composant déclaré par le client |
+| Production (D30) | Fait et démontré en direct sous utilisateurs séparés : main mise en production par l'agent, contribution fautive intégrée après revue puis déployée, objectif rompu, **retour automatique en 33 s**, version fautive jamais reproposée, alerte prise en charge par une signature dans Chromium. Le redémarrage et l'objectif par composant sont venus avec D31. Restent : e-mail et messagerie, capacité |
 | Réglages et vérification de la production (D31) | Fait et démontré en direct : réglages signés dans Chromium par h1 (objectif resserré appliqué tout de suite, redémarrage automatique en attente du délai, sonde ajoutée), version servie lue par le scanner et prouvée, bascule sans coupure (60 sur 60 requêtes en 200 pendant un redémarrage), version qui ne démarre pas jamais servie, retour arrière bloqué par une migration non compatible avec la raison affichée |
 | Paramétrage d'ingénieur (D32) | Fait et démontré en direct : stratégie canary choisie dans Chromium par h1, changement d'Alice sur 20 % du trafic pendant 3 min puis promu sans redémarrage, changement fautif retiré en 50 s (4,08 points d'erreurs de plus, limite 0,5) ; 119 tests. Limite : les erreurs du canary ne sont vues que par le lanceur, pas par les SLO du produit |
 | Isolation et instruments (D33) | Fait et vérifié : une contribution hostile ne lit pas la clé et n'atteint pas le réseau (test), qualification T06 PASS en direct ; un relecteur qui signe « tests au vert » est refusé par le noyau |
 | Construction (D34) | Fait et démontré en direct : demande écrite et signée dans Chromium par h1, contrat rouge sur main vérifié par le scanner, contrat signé, implémentation par Alice (contrat recopié, trailer), acceptation au vert mesurée en isolation, revue de h3, intégration, livraison enregistrée par l'agent, mise en production. L'implémentation par l'agent est testée avec un modèle simulé, jamais avec un vrai modèle |
 | Règles dans le dépôt (D35) | Fait et démontré en direct : passage en canary signé une fois par h1, fichier commité par l'agent, intégré par la loi, puis le changement lui-même passé en canary |
+| Tests | 125 tests (`make check` : couches, budgets, tests) |
+| Pas encore là | Agent avec un vrai modèle (jamais exécuté) ; adaptateurs Kubernetes et Prometheus managé ; livraison des alertes hors interface ; projection conformité ISO/NIS2/DORA ; métriques du canary vues par le seul lanceur (auto-déclarées par le produit) ; budget production (1 205 lignes) non relu, borné seulement par la loi |
 | Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |
 
 ---

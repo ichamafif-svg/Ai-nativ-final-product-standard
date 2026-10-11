@@ -9,4 +9,9 @@ decides. A repair that a recipe reproduces can land without a human; any other r
 signed review (`python -m surface review`). If Standard is unreachable or unqualified, nothing is attested
 or authorized.
 
+What you may change: code. Never `tests/` (a request's acceptance tests are its contract, measured byte for byte),
+`.github/` or `standard/` (the engineers' rules, committed only as signed). Facts such as `tests`, `regressions`,
+`acceptance` or production numbers are measured by the scanner; nobody else can sign them. Name what a commit is
+for with a trailer: `Standard-Target:` for a repair, `Standard-Request: <id>` for a request.
+
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
