@@ -228,8 +228,39 @@ class Installation:
         openapi = git(self.repo, "show", "main:openapi.json", check=False)
         from .telemetry import declared_routes
         report = self.telemetry.report(declared_routes(openapi), window=window)
+        self.frontier(report)
         return {**report, "product": self.product, "releases": self.history(8),
                 "openapi": bool(openapi.strip())}
+
+    FRONTIER = ("see", "alert", "act", "prove")
+
+    def frontier(self, report: dict) -> None:
+        """For every component, what Standard does about it without a person, capability by capability, and why not.
+
+        see: its metrics are collected and judged against published rules; alert: someone is told when it degrades;
+        act: an operation of the law can repair it in production; prove: its state is a signed fact an auditor can
+        check. A component that degrades where Standard does not act is an uncovered gap: a person must take it."""
+        sources_up = all(t["up"] for t in report["targets"]) and bool(report["targets"])
+        interval = int(self.telemetry.interval)
+        reasons = {
+            "see": (f"Mesuré toutes les {interval} s depuis ses métriques et jugé selon les seuils publiés.",
+                    "Source muette ou absente : Standard ne voit pas ce composant en ce moment."),
+            "alert": (None, "Personne n'est prévenu automatiquement : Standard n'envoie encore aucune alerte depuis la production."),
+            "act": (None, "Aucune action en production n'existe dans la loi : Standard ne redémarre pas, ne revient pas à la version "
+                          "précédente et n'ajoute pas de capacité."),
+            "prove": (None, "Ces mesures ne sont pas des faits signés du journal : elles ne prouvent rien à un auditeur."),
+        }
+        report["frontier_reasons"] = {k: {"yes": v[0], "no": v[1]} for k, v in reasons.items()}
+        report["uncovered"] = []
+        for kind, rows in report["components"].items():
+            for row in rows:
+                seen = sources_up and (row.get("observed", True) or row["state"] == "idle")
+                row["frontier"] = {"see": seen, "alert": False, "act": False, "prove": False}
+                if row["state"] in ("degraded", "failing") or not seen:
+                    report["uncovered"].append({"kind": kind, "name": row["name"], "operation": row.get("operation"),
+                                                "state": row["state"], "why": row.get("why"), "seen": seen})
+        rows = [r for rs in report["components"].values() for r in rs]
+        report["frontier_total"] = {k: sum(1 for r in rows if r["frontier"][k]) for k in self.FRONTIER} | {"of": len(rows)}
 
     def dossier(self, head: str) -> dict:
         if not SHA.fullmatch(head):

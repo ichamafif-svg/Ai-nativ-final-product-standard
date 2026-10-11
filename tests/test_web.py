@@ -91,6 +91,10 @@ class Server(unittest.TestCase):
             self.assertEqual((levels["sbom"], levels["secrets"], levels["isms"]), ("autonomous", "supervised", "human"))
             self.assertEqual(state["autonomy"]["runtime"]["level"], "observed")    # no runtime operation in the law
             self.assertTrue(all(r["why"] for r in state["autonomy"]["requirements"]))
+            run = json.loads(urllib.request.urlopen(f"{url}/api/run?window=900").read())
+            self.assertEqual(set(run["frontier_reasons"]), {"see", "alert", "act", "prove"})
+            self.assertTrue(all(r["no"] for r in run["frontier_reasons"].values()))   # every "no" says why
+            self.assertEqual(run["frontier_total"]["act"], 0)                        # nothing acts in production
             for asset in ("/app.css", "/sign.js", "/app.js"):
                 self.assertEqual(urllib.request.urlopen(f"{url}{asset}").status, 200)
             main = state["main"]

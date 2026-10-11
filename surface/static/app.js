@@ -250,36 +250,42 @@ function reason(w) {
 }
 const stateCell = (s, w) => `<td><span class="state ${ROUTE_STATE[s][0]}"><i></i>${ROUTE_STATE[s][1]}</span>${s !== "healthy" && w ? `<div class="sub">${esc(reason(w))}</div>` : ""}</td>`;
 
+const CAP = { see: "Voit", alert: "Prévient", act: "Agit", prove: "Prouve" };
+function frontierCell(r) {
+  const why = runData.frontier_reasons;
+  return `<td><div class="fr">${Object.keys(CAP).map((k) => `<span class="f ${r.frontier[k] ? "on" : ""}" title="${esc(r.frontier[k] ? why[k].yes : why[k].no)}">${CAP[k]}</span>`).join("")}</div></td>`;
+}
+
 function table(cols, rows) {
   return `<table class="table api"><colgroup>${cols.map(([, w]) => `<col${w ? ` style="width:${w}px"` : ""}>`).join("")}</colgroup>
     <thead><tr>${cols.map(([h, , num]) => `<th class="${num ? "num" : ""}">${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
 const SECTIONS = {
-  api: (rs, d) => table([["État", 150], ["Méthode", 76], ["Route"], ["Trafic", 136], ["Req/s", 80, 1], ["Erreurs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["p99", 78, 1], ["Dispo.", 92, 1]],
-    rs.map((r) => `<tr class="${r.state === "idle" ? "idle" : ""}">${stateCell(r.state, r.why)}<td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
-      <td><span class="path">${esc(r.name)}</span>${r.observed && !r.declared && d.openapi ? `<div class="sub">absente d'openapi.json</div>` : ""}</td>
-      <td>${r.observed ? spark(r.spark) : ""}</td><td class="num">${r.observed ? nf(r.rps, 2) : "—"}</td>
+  api: (rs, d) => table([["État", 132], ["Autonomie", 238], ["Route"], ["Trafic", 92], ["Req/s", 62, 1], ["Erreurs", 70, 1], ["p50", 64, 1], ["p95", 64, 1], ["p99", 64, 1], ["Dispo.", 78, 1]],
+    rs.map((r) => `<tr class="${r.state === "idle" ? "idle" : ""}">${stateCell(r.state, r.why)}${frontierCell(r)}
+      <td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span> <span class="path">${esc(r.name)}</span>${r.observed && !r.declared && d.openapi ? `<div class="sub">absente d'openapi.json</div>` : ""}</td>
+      <td>${r.observed ? spark(r.spark, 84) : ""}</td><td class="num">${r.observed ? nf(r.rps, 2) : "—"}</td>
       <td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td><td class="num">${msf(r.p50)}</td>
       <td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td><td class="num">${pct(r.availability, 2)}</td></tr>`)),
-  worker: (rs) => table([["État", 150], ["File"], ["Débit", 136], ["Messages/s", 96, 1], ["Échecs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["En attente", 100, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span><div class="sub">${esc(r.operation)}</div></td>
-      <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
+  worker: (rs) => table([["État", 132], ["Autonomie", 238], ["File"], ["Messages/s", 92, 1], ["Échecs", 76, 1], ["p50", 70, 1], ["p95", 70, 1], ["En attente", 92, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}${frontierCell(r)}<td><span class="path">${esc(r.name)}</span><div class="sub">${esc(r.operation)}</div></td>
+      <td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
       <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num ${r.backlog > 100 ? "bad" : ""}">${nf(r.backlog)}</td></tr>`)),
-  job: (rs) => table([["État", 150], ["Tâche"], ["Dernier succès", 150, 1], ["Durée", 100, 1], ["Période", 100, 1], ["Dernière exécution", 160, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span>${r.state === "degraded" ? `<div class="sub">en retard sur sa période</div>` : ""}</td>
+  job: (rs) => table([["État", 132], ["Autonomie", 238], ["Tâche"], ["Dernier succès", 120, 1], ["Durée", 80, 1], ["Période", 80, 1], ["Dernière exécution", 140, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}${frontierCell(r)}<td><span class="path">${esc(r.name)}</span></td>
       <td class="num">${r.last_success ? ago(r.last_success * 1000) : "jamais"}</td><td class="num">${r.duration == null ? "—" : msf(r.duration * 1000)}</td>
       <td class="num">${dur(r.period)}</td><td class="num ${r.ok === 0 ? "bad" : ""}">${r.ok === 0 ? "en échec" : r.ok === 1 ? "réussie" : "—"}</td></tr>`)),
-  database: (rs) => table([["État", 150], ["Base"], ["Opération", 110], ["Trafic", 136], ["Op/s", 80, 1], ["Erreurs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["p99", 78, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb">${esc(r.operation)}</span></td>
-      <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
+  database: (rs) => table([["État", 132], ["Autonomie", 238], ["Base et opération"], ["Op/s", 70, 1], ["Erreurs", 76, 1], ["p50", 70, 1], ["p95", 70, 1], ["p99", 70, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}${frontierCell(r)}<td><span class="verb">${esc(r.operation)}</span> <span class="path">${esc(r.name)}</span></td>
+      <td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
       <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td></tr>`)),
-  dependency: (rs) => table([["État", 150], ["Service"], ["Méthode", 76], ["Trafic", 136], ["Appels/s", 86, 1], ["Erreurs", 84, 1], ["p95", 78, 1], ["p99", 78, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
-      <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
+  dependency: (rs) => table([["État", 132], ["Autonomie", 238], ["Service"], ["Appels/s", 80, 1], ["Erreurs", 76, 1], ["p95", 70, 1], ["p99", 70, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}${frontierCell(r)}<td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span> <span class="path">${esc(r.name)}</span></td>
+      <td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
       <td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td></tr>`)),
-  process: (rs) => table([["État", 150], ["Processus"], ["CPU", 110, 1], ["Mémoire", 120, 1], ["Démarré depuis", 150, 1]],
-    rs.map((r) => `<tr>${stateCell(r.state, r.why)}<td><span class="path">${esc(r.name)}</span></td><td class="num">${r.cpu == null ? "—" : pct(r.cpu, 1)}</td>
+  process: (rs) => table([["État", 132], ["Autonomie", 238], ["Processus"], ["CPU", 90, 1], ["Mémoire", 100, 1], ["Démarré depuis", 130, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state, r.why)}${frontierCell(r)}<td><span class="path">${esc(r.name)}</span></td><td class="num">${r.cpu == null ? "—" : pct(r.cpu, 1)}</td>
       <td class="num">${bytes(r.memory)}</td><td class="num">${dur(r.uptime)}</td></tr>`)),
 };
 
@@ -303,7 +309,9 @@ async function loadRun() {
     const rs = c[k], bad = rs.filter((r) => r.state === "failing").length, warn = rs.filter((r) => r.state === "degraded").length;
     const tone = bad ? "escalated" : warn ? "gap" : "held";
     const word = bad ? `${bad} en échec` : warn ? `${warn} ${warn > 1 ? "dégradés" : "dégradé"}` : rs.length > 1 ? "opérationnels" : "opérationnel";
-    return `<a class="tile" href="#k-${k}"><span class="state ${tone}"><i></i></span><b>${rs.length}</b><span>${rs.length > 1 ? KIND[k][2] : KIND[k][1]}</span><em class="${tone}">${word}</em></a>`;
+    const acts = rs.some((r) => r.frontier.act);
+    return `<a class="tile" href="#k-${k}"><span class="state ${tone}"><i></i></span><b>${rs.length}</b><span>${rs.length > 1 ? KIND[k][2] : KIND[k][1]}</span><em class="${tone}">${word}</em>
+      <small>${acts ? "voit et agit" : "voit, n'agit pas"}</small></a>`;
   };
   $("#run").innerHTML = `
     ${!d.targets.length ? `<div class="note warn">Aucune source de métriques n'est configurée. Ajoutez dans standard.toml : <span class="sha">[run] metrics = ["http://127.0.0.1:9000/metrics"]</span>.</div>` : ""}
@@ -315,8 +323,17 @@ async function loadRun() {
       <p><span class="state escalated"><i></i>En échec</span> ${pct(d.rules.failing_error_rate, 0)} d'erreurs ou plus. Pour une tâche planifiée : sa dernière exécution a échoué.</p>
       <p><span class="state pending"><i></i>Aucun trafic</span> aucune requête sur la période choisie.</p>
     </div>
-    <div class="auto"><div>${levelTag("observed")}<b>Autonomie en exploitation</b></div><p>${esc(state.autonomy.runtime.why)}</p>
-      <a class="btn" href="#/autonomy">Détail de l'autonomie</a></div>
+    <section class="frontier"><h2>Frontière d'autonomie <span class="quiet small">ce que Standard fait seul pour ces ${d.frontier_total.of} composants</span></h2>
+      <div class="caps">${Object.keys(CAP).map((k) => { const n = d.frontier_total[k], all = d.frontier_total.of, on = n === all && all > 0;
+        return `<div class="cap ${on ? "on" : n ? "part" : "off"}"><div class="ck"><i></i>${CAP[k]}</div><div class="cv">${n} sur ${all}</div>
+          <p>${esc(on ? d.frontier_reasons[k].yes : d.frontier_reasons[k].no)}</p></div>`; }).join("")}</div>
+      ${d.uncovered.length ? `<div class="uncov"><h3>${plural(d.uncovered.length, "écart n'est couvert", "écarts ne sont couverts")} par aucune autonomie : une personne doit les prendre</h3>
+        ${d.uncovered.map((u) => `<div class="ucrow"><span class="state ${ROUTE_STATE[u.state]?.[0] || "pending"}"><i></i>${ROUTE_STATE[u.state]?.[1] || u.state}</span>
+          <b>${esc([u.operation && u.kind !== "worker" ? u.operation : "", u.name].filter(Boolean).join(" "))}</b><span class="quiet">${esc(KIND[u.kind][1])}</span>
+          <span class="why">${esc(u.seen ? reason(u.why) : "Standard ne le voit plus")}. ${u.seen ? "Standard l'a vu ; il ne prévient personne et n'agit pas." : "Rien ne garantit son état."}</span></div>`).join("")}</div>`
+        : `<p class="small quiet">Aucun composant dégradé en ce moment. Si l'un se dégrade, Standard le verra mais ne préviendra personne et n'agira pas : la frontière ci-dessus s'applique.</p>`}
+      <a class="small" href="#/autonomy">Toute l'autonomie, code compris</a>
+    </section>
     <div class="kpis">
       ${kpi("Requêtes", `${nf(f.rps, 1)}<small>/s</small>`, `${nf(f.requests)} sur la période`)}
       ${kpi("Erreurs", pct(f.error_rate), "réponses 5xx", f.error_rate > 0.01 ? "bad" : "")}
