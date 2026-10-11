@@ -23,7 +23,7 @@ ALLOWED = {
     "surface": {"kernel", "trusted", "autonomy", "surface"},
 }
 # U may use trusted code only as a library: what reads, signs with its own key, or talks to the gateway.
-U_MAY_USE = {"trusted.instruments", "trusted.runtime", "trusted.policy", "trusted.slo", "trusted.recipes", "trusted.signing", "trusted.gateway", "trusted.data"}
+U_MAY_USE = {"trusted.instruments", "trusted.build", "trusted.runtime", "trusted.policy", "trusted.slo", "trusted.recipes", "trusted.signing", "trusted.gateway", "trusted.data"}
 TCB = ("kernel", "floors", "trusted")
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
 

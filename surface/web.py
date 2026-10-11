@@ -34,7 +34,7 @@ SHA = re.compile(r"[0-9a-f]{40}")
 BRANCH = re.compile(r"([0-9a-f]{40})\trefs/heads/([a-z0-9][a-z0-9_-]{0,63})/(\S+)")
 ROUTES = {"RUN": [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
                   Route("scanner", "RUN", "*", frozenset({"observe", "cover", "prove"}))]}
-HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1"}           # the demo ceremony's grants to people (tools/ceremony.py)
+HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1", "product": "h1"}           # the demo ceremony's grants to people (tools/ceremony.py)
 MAX_BODY = 1 << 20
 
 
@@ -81,7 +81,9 @@ class Installation:
                                    run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100,
                                    interval=float(run.get("interval", 15)))
         self.rollback = bool(c.get("deploy")) and "agent_rollback" in c["grants"]     # D30: can act in production
-        self.slo_db = base / "slo.db"                                                   # D32: the operator's SLO data
+        self.slo_db = base / "slo.db"
+        self.requests = resolve(c.get("build", {}).get("store", "requests"))          # D34: specs and contracts
+        self.request_notes = agent / "requests.json"                                                   # D32: the operator's SLO data
         self.telemetry.extra = self.burning
         self.deploy_root = resolve(c["deploy"]["root"]) if c.get("deploy") else None
         hosted = c.get("hosting", {}).get("config")
@@ -171,7 +173,59 @@ class Installation:
                             for d in findings.get(f"{resource}|{p}", {}).get("details", [])[:5]],
                     "awaiting_review": not landed and not blocked and facts.get("tests") == "green"
                     and facts.get("regressions") == "none" and facts.get("review") != "approved"})
-        return {"contributions": contributions, "requests": []}
+        for item in contributions:                              # D34: a contribution may answer a request
+            from trusted.build import claimed
+            item["request"] = claimed(self.repo, item["head"]) if not item["landed"] else None
+            item["facts"].setdefault("acceptance", None)
+        return {"contributions": contributions, "requests": self.requests_of(view, findings, main)}
+
+    def requests_of(self, view: dict, findings: dict, main: str) -> list:
+        """Every request: its state, what the scanner says of its contract, its candidate implementations."""
+        from trusted.build import contract_path, load
+        notes = _json(self.request_notes)
+        out = []
+        for resource, e in sorted(view.get("entities", {}).items(), key=lambda kv: -kv[1].get("created", 0)):
+            if e.get("type") != "request":
+                continue
+            rid = resource.split("/", 1)[1]
+            spec, contract = (load(self.requests, e["fields"][k]) for k in ("spec", "contract"))
+            facts = view["transitions"].get(resource, {})
+            features = []
+            for r, f in view["transitions"].items():
+                if r.startswith(f"repo:feature:{rid}/"):
+                    base, head = r.split("/")[1:3]
+                    landed = subprocess.run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", head, "main"],
+                                            capture_output=True, timeout=60).returncode == 0
+                    features.append({"resource": r, "base": base, "head": head, "facts": f, "kind": "feature",
+                                     "request": rid, "title": e["fields"]["title"], "landed": landed,
+                                     "stale": base != main and not landed,
+                                     "why": [d.splitlines()[0][:200] for p in ("acceptance", "tests", "regressions")
+                                             for d in findings.get(f"{r}|{p}", {}).get("details", [])[:3]],
+                                     "awaiting_review": not landed and base == main and f.get("acceptance") == "green"
+                                     and f.get("tests") == "green" and f.get("regressions") == "none"
+                                     and f.get("review") != "approved"})
+            out.append({"id": rid, "resource": resource, "title": e["fields"]["title"], "state": e["state"],
+                        "owner": e.get("owner"), "created": e.get("created"), "expected": e["expected"],
+                        "facts": facts, "path": contract_path(rid),
+                        "contract_details": findings.get(f"{resource}|contract", {}).get("details", []),
+                        "spec": spec.decode(errors="replace") if spec else None,
+                        "contract": contract.decode(errors="replace") if contract else None,
+                        "agent": notes.get(rid, {}).get("state"), "features": features})
+        return out
+
+    def store_request(self, body: dict) -> dict:
+        """Keep a request's specification and contract by digest; the person then signs the digests."""
+        import hashlib
+        out = {}
+        for key in ("spec", "contract"):
+            data = str(body.get(key, "")).encode()
+            if not data or len(data) > 200_000:
+                raise ValueError(f"{key} is between 1 byte and 200 kB")
+            digest = hashlib.sha256(data).hexdigest()
+            self.requests.mkdir(parents=True, exist_ok=True)
+            (self.requests / digest).write_bytes(data)
+            out[key] = f"sha256:{digest}"
+        return out
 
     def history(self, limit: int = 20) -> list:
         out = git(self.repo, "log", f"-{limit}", "--format=%H%x09%an%x09%at%x09%s", "main", check=False)
@@ -544,13 +598,18 @@ def handler(inst: Installation):
                 return self._ok({"error": f"{type(exc).__name__}: {exc}"[:400]}, HTTPStatus.SERVICE_UNAVAILABLE)
 
         def do_POST(self):
-            if self.path != "/api/admit":
+            if self.path not in ("/api/admit", "/api/requests"):
                 return self._ok({"error": "not found"}, HTTPStatus.NOT_FOUND)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self._ok({"error": "application/json only"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
             size = int(self.headers.get("Content-Length") or 0)
             if not 0 < size <= MAX_BODY:
                 return self._ok({"error": "bad length"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            if self.path == "/api/requests":                   # D34: store, nothing signed or admitted here
+                try:
+                    return self._ok(inst.store_request(json.loads(self.rfile.read(size))))
+                except (ValueError, OSError) as exc:
+                    return self._ok({"error": str(exc)[:300]}, HTTPStatus.BAD_REQUEST)
             try:
                 envelope = json.loads(self.rfile.read(size))
                 return self._ok({"admitted": inst.client.admit(envelope)})

@@ -71,6 +71,15 @@ def build(config_path) -> tuple[Cycle, callable]:
     switches = {name: gid for name, gid in c["grants"].items()
                 if name.startswith(("agent_deploy", "agent_rollback", "agent_restart", "agent_canary",
                                     "agent_promote", "agent_abort"))}
+    if "agent_implement" in c["grants"]:                  # D34: build what contracted requests ask for
+        from .build import Builder
+        builder = Builder(cycle.service, signer, {k: c["grants"][k] for k in ("agent_implement", "agent_deliver")
+                                                  if k in c["grants"]}, store,
+                          resolve(c.get("build", {}).get("store", "requests")), main=main,
+                          clock=lambda: cycle.clock(), notes=store.parent / "requests.json", llm=llm,
+                          data=agent.data)
+        run_build = cycle.run
+        cycle.run = lambda mode="RUN": {**run_build(mode), "build": builder.run()}
     if switches:                                          # D30: production follows main, and steps back on a breach
         from .release import Releaser
         releaser = Releaser(cycle.service, signer, switches, clock=lambda: cycle.clock(),

@@ -347,3 +347,9 @@ h3 { font-size: 15px; margin: 22px 0 10px; }
 @media (max-width: 800px) { .slogrid, .row4 { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi { border-left: 0 !important; } .slogrid { grid-template-columns: 1fr; } }
 .panel > h3:first-child { margin-top: 0; } .row4 select { width: 100%; max-width: 220px; }
+
+/* D34: requests */
+.req { margin-bottom: 16px; } .req .facts { margin-top: 10px; }
+textarea.code { width: 100%; min-height: 220px; font: 12.5px/1.55 var(--mono); padding: 12px 14px; border-radius: var(--r-md);
+  border: 1px solid var(--hair-2); background: var(--surface); color: var(--ink); resize: vertical; }
+textarea.code.sm { min-height: 90px; font-family: var(--font); font-size: 14px; }

@@ -42,7 +42,7 @@ IDENTITIES = {"h1": "human", "h2": "human", "h3": "human", "h4": "human", "w1": 
               "guard": "guard", "agent": "agent", "scanner": "service", "oracle": "oracle", "sentinel": "sentinel"}
 YEAR = 365 * 86_400_000
 GRANTS = {
-    "scanner": ("scanner", ["observe", "certify:real"], ["repo:*", "run:*"], []),
+    "scanner": ("scanner", ["observe", "certify:real"], ["repo:*", "run:*", "build:*"], []),
     "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*", "run:*"], []),
     "agent_deploy": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-autonomous"]),
     "agent_rollback": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-autonomous"]),
@@ -51,6 +51,12 @@ GRANTS = {
     "agent_restart": ("agent", ["effect:restart"], ["run:process:*"], ["restart-autonomous"]),
     "agent_restart_reviewed": ("agent", ["effect:restart"], ["run:process:*"], ["restart-reviewed"]),
     "agent_canary": ("agent", ["effect:canary"], ["run:canary:*"], ["canary-autonomous"]),
+    # D34: the agent implements contracted requests (always reviewed) and records their delivery.
+    "agent_implement": ("agent", ["effect:implement"], ["repo:feature:*"], ["implement-reviewed"]),
+    "agent_deliver": ("agent", ["transition:request:deliver"], ["build:request/*"], []),
+    # The product owner writes requests and signs their contracts; the reviewer (h3) reviews the code.
+    "product": ("h1", ["register:request", "transition:request:contract", "transition:request:withdraw"],
+                ["build:request/*"], []),
     "agent_promote": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-canary"]),
     "agent_abort": ("agent", ["effect:abort"], ["run:canary:*"], ["abort-autonomous"]),
     "agent_abort_reviewed": ("agent", ["effect:abort"], ["run:canary:*"], ["abort-reviewed"]),

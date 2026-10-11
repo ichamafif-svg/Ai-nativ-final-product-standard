@@ -78,8 +78,10 @@ let state = null, signer = null, alerting = null;
 const route = () => (location.hash.slice(2) in ROUTES ? location.hash.slice(2) : "run");
 window.addEventListener("hashchange", () => render());
 
+const features = () => state.build.requests.flatMap((r) => r.features);
 function pending() {
-  return [...state.build.contributions.filter((c) => c.awaiting_review), ...state.run.repairs.filter((r) => r.awaiting_review)];
+  return [...state.build.contributions.filter((c) => c.awaiting_review), ...state.run.repairs.filter((r) => r.awaiting_review),
+    ...features().filter((f) => f.awaiting_review)];
 }
 
 function frame() {
@@ -868,11 +870,113 @@ function contributions() {
       : `<div class="empty"><b>Aucune contribution</b>Poussez une branche à votre nom, par exemple <span class="sha">git push origin HEAD:refs/heads/vous/ma-branche</span>.</div>`}</section>`;
 }
 
-function requests() {
-  return `<h1>Demandes</h1>
-    <p class="lede">Décrivez une fonctionnalité et ses critères d'acceptation. Les critères deviennent des tests que vous validez avant que l'agent n'écrive le code ; il ne peut ensuite ni les modifier ni les contourner.</p>
-    <section><div class="empty"><b>Bientôt disponible</b>Les demandes arrivent dans la prochaine version de Standard.</div></section>`;
+const RSTATE = { proposed: ["pending", "Proposée"], contracted: ["gap", "Contrat signé"], delivered: ["held", "Livrée"], withdrawn: ["idle", "Retirée"] };
+const TEMPLATE = `from app import ma_fonction
+
+
+def test_cas_nominal():
+    assert ma_fonction(2, 3) == 6
+
+
+def test_cas_limite():
+    assert ma_fonction(7, 0) == 0
+`;
+function contractFact(r) {
+  const c = r.facts.contract, a = r.facts.accepted;
+  if (r.state === "delivered") return fact("main passe le contrat", "ok");
+  if (r.state === "contracted") return fact(a === "yes" ? "main passe le contrat : livraison au prochain passage" : "main ne passe pas encore le contrat", a === "yes" ? "ok" : "wait");
+  if (!c) return fact("Le scanner n'a pas encore mesuré le contrat", "");
+  if (c === "red") return fact("Chaque test échoue sur main : le contrat demande quelque chose de nouveau", "ok");
+  if (c.startsWith("passes:")) return fact(`${c.slice(7)} test(s) passent déjà sur main : le contrat ne promet rien`, "bad");
+  if (c === "empty") return fact("Le contrat ne contient aucun test", "bad");
+  return fact(`Contrat : ${c}`, "bad");
 }
+function requests() {
+  const rs = state.build.requests, grant = state.signing.grants.product;
+  const can = Boolean(signer && grant && signer.identity === grant.holder);
+  const feature = (f) => `<div class="rowi"><div class="main"><b>Implémentation</b> <span class="sha">${short(f.head)}</span>
+      <div class="facts">${f.landed ? fact("Sur main", "ok") : f.stale ? fact("main a avancé : l'agent réimplémente", "wait") : ""}
+        ${fact(f.facts.acceptance === "green" ? "Contrat tenu" : f.facts.acceptance ? `Contrat : ${f.facts.acceptance}` : "Contrat en mesure", f.facts.acceptance === "green" ? "ok" : f.facts.acceptance ? "bad" : "")}
+        ${fact(f.facts.tests === "green" ? "Tests de main au vert" : f.facts.tests ? "Tests de main en échec" : "Tests en mesure", f.facts.tests === "green" ? "ok" : f.facts.tests ? "bad" : "")}
+        ${fact(f.facts.regressions === "none" ? "Aucun nouvel écart" : f.facts.regressions ? "Ouvre un écart" : "Écarts en mesure", f.facts.regressions === "none" ? "ok" : f.facts.regressions ? "bad" : "")}
+        ${f.facts.review === "approved" ? fact("Revue approuvée", "ok") : ""}</div>
+      ${f.why.length ? `<ul class="where">${f.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}</div>
+      ${f.landed ? "" : `<button class="btn ${f.awaiting_review ? "primary" : ""}" data-review="${esc(f.resource)}">${f.awaiting_review ? "Relire" : "Détails"}</button>`}</div>`;
+  const card = (r) => {
+    const st = RSTATE[r.state] || ["pending", r.state];
+    const contributions = state.build.contributions.filter((c) => c.request === r.id);
+    return `<div class="panel req"><div class="slohead"><div><b>${esc(r.title)}</b>
+        <div class="small quiet"><span class="sha">${esc(r.id)}</span> · par ${esc(r.owner || "?")}${r.created ? ` · ${ago(r.created)}` : ""} · contrat <span class="sha">${esc(r.path)}</span></div></div>
+        <span class="state ${st[0]}"><i></i>${st[1]}</span></div>
+      <div class="facts">${contractFact(r)}${r.state === "contracted" && r.agent ? fact(`Agent : ${agentText(r.agent)}`, "") : ""}</div>
+      ${r.contract_details.length && r.state === "proposed" ? `<ul class="where">${r.contract_details.slice(0, 4).map((w) => `<li>${esc(w.split("\n")[0])}</li>`).join("")}</ul>` : ""}
+      <details><summary>Spécification et contrat</summary>${r.spec ? `<h3>Spécification</h3><pre>${esc(r.spec)}</pre>` : ""}
+        ${r.contract ? `<h3>Tests d'acceptation (signés, immuables)</h3><pre>${esc(r.contract)}</pre>` : `<div class="note bad">Le contrat n'est pas dans le magasin des demandes.</div>`}</details>
+      ${r.features.length || contributions.length ? `<div class="rows" style="margin-top:12px">${r.features.map(feature).join("")}
+        ${contributions.map((c) => `<div class="rowi"><div class="main"><b>Contribution de ${esc(c.author)}</b> <span class="sha">${short(c.head)}</span>
+          <div class="facts">${fact(c.facts.acceptance === "green" ? "Contrat tenu" : c.facts.acceptance ? `Contrat : ${c.facts.acceptance}` : "Contrat en mesure", c.facts.acceptance === "green" ? "ok" : c.facts.acceptance ? "bad" : "")}</div></div>
+          <button class="btn" data-review="${esc(c.resource)}">Détails</button></div>`).join("")}</div>` : ""}
+      ${r.state === "proposed" || r.state === "contracted" ? `<div class="decide">
+        ${r.state === "proposed" ? `<button class="btn primary" data-contract="${esc(r.resource)}" ${can && r.facts.contract === "red" ? "" : "disabled"}>Signer le contrat</button>` : ""}
+        <button class="btn danger" data-withdraw="${esc(r.resource)}" ${can ? "" : "disabled"}>Retirer</button>
+        <span class="small quiet">${r.state === "proposed" ? "Signer le contrat autorise l'agent à l'implémenter ; les tests ne pourront plus changer." : "L'agent implémente, un relecteur signe, la loi intègre seulement si le contrat passe."}</span></div>` : ""}
+    </div>`;
+  };
+  return `<h1>Demandes</h1>
+    <p class="lede">Une demande est une spécification et un contrat : des tests d'acceptation que vous écrivez et signez avant tout code.
+      Le scanner vérifie qu'ils échouent sur main (sinon ils ne promettent rien). Ensuite l'agent, ou un contributeur, implémente sans pouvoir toucher aux tests ;
+      la loi n'intègre qu'avec le contrat tenu, les tests de main au vert, aucun nouvel écart et une revue signée.</p>
+    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour écrire et signer une demande.</div>` : !can ? `<div class="note warn">Seul ${esc(grant?.holder || "le responsable produit")} écrit et signe les demandes ici.</div>` : ""}
+    <section><h2>Nouvelle demande</h2><div class="panel sloform">
+      <label for="rq-title">Titre</label><input type="text" id="rq-title" placeholder="ex. Multiplier deux nombres" ${can ? "" : "disabled"}>
+      <label for="rq-spec">Spécification</label><textarea id="rq-spec" class="code sm" placeholder="Ce que la fonctionnalité doit faire, pour qui, et ses limites." ${can ? "" : "disabled"}></textarea>
+      <label for="rq-contract">Tests d'acceptation (pytest)</label><textarea id="rq-contract" class="code" spellcheck="false" ${can ? "" : "disabled"}>${esc(TEMPLATE)}</textarea>
+      <div class="decide"><button class="btn primary" id="rq-create" ${can ? "" : "disabled"}>Enregistrer et signer la demande</button><span id="rq-msg" class="small quiet"></span></div></div></section>
+    <section><h2>Demandes <span class="quiet small">${rs.length}</span></h2>${rs.map(card).join("") || `<div class="empty"><b>Aucune demande</b>Écrivez la première ci-dessus.</div>`}</section>`;
+}
+function agentText(s) {
+  if (s === "landing") return "implémentation acceptée par la loi, intégration en cours";
+  if (s === "delivered") return "livraison enregistrée";
+  if (s.startsWith("proposed")) return s.includes("CAP.CONDITION") ? "implémentation proposée, en attente des mesures et d'une revue" : "implémentation proposée";
+  if (s.startsWith("waiting: no model")) return "aucun modèle configuré : un contributeur peut l'implémenter (Standard-Request: dans le commit)";
+  if (s.startsWith("waiting")) return "pas encore d'implémentation qui passe ses propres vérifications";
+  return s;
+}
+async function signRequest(kind, body) {
+  const grant = state.signing.grants.product;
+  const statement = { id: `${kind}-${crypto.randomUUID().replaceAll("-", "")}`, at: Math.max(Date.now(), state.signing.as_of + 1),
+    author: signer.identity, under: grant.id, ...body };
+  const env = await envelope(state.signing.domain, kind, statement, signer);
+  const r = await fetch("/api/admit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(env) });
+  const out = await r.json();
+  if (!r.ok) throw new Error(out.refused || out.error);
+}
+document.addEventListener("click", async (e) => {
+  const c = e.target.closest("[data-contract]"), w = e.target.closest("[data-withdraw]");
+  if (!c && !w && e.target.id !== "rq-create") return;
+  if (e.target.id === "rq-create") {
+    const title = $("#rq-title").value.trim(), spec = $("#rq-spec").value.trim(), contract = $("#rq-contract").value;
+    if (!title || !spec || !contract.trim()) { $("#rq-msg").textContent = "Titre, spécification et tests sont nécessaires."; return; }
+    e.target.disabled = true;
+    try {
+      const r = await fetch("/api/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ spec, contract }) });
+      const digests = await r.json();
+      if (!r.ok) throw new Error(digests.error);
+      const id = title.toLowerCase().normalize("NFD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) + "-" + crypto.randomUUID().slice(0, 4);
+      await signRequest("resource", { resource: `build:request/${id}`, type: "request", fields: { title: title.slice(0, 120), spec: digests.spec, contract: digests.contract } });
+      $("#rq-msg").textContent = "Demande signée. Le scanner mesure le contrat sur main au prochain passage.";
+      setTimeout(refresh, 1200);
+    } catch (err) { $("#rq-msg").textContent = `Refusé : ${err.message}`; e.target.disabled = false; }
+    return;
+  }
+  const el = c || w, r = state.build.requests.find((x) => x.resource === el.dataset.contract || x.resource === el.dataset.withdraw);
+  el.disabled = true;
+  try {
+    await signRequest("transition", { resource: r.resource, operation: c ? "contract" : "withdraw", expected: r.expected, changes: {} });
+    el.textContent = c ? "Contrat signé" : "Retirée";
+    setTimeout(refresh, 1000);
+  } catch (err) { el.textContent = `Refusé : ${err.message}`; }
+});
 
 // ---- governance -----------------------------------------------------------------------------------------------------
 function reviews() {
@@ -945,7 +1049,7 @@ document.addEventListener("click", (e) => {
 
 // ---- reviewing and signing -----------------------------------------------------------------------------------------
 async function openReview(resource) {
-  const item = [...state.build.contributions, ...state.run.repairs].find((i) => i.resource === resource);
+  const item = [...state.build.contributions, ...state.run.repairs, ...features()].find((i) => i.resource === resource);
   const head = resource.split("/").pop(), dlg = $("#dlg"), body = $("#dlgbody");
   body.innerHTML = `<p class="quiet">Chargement du dossier</p>`;
   dlg.showModal();
@@ -962,10 +1066,11 @@ async function openReview(resource) {
   const diff = esc(d.diff).split("\n").map((l) => /^\+(?!\+\+)/.test(l) ? `<span class="add">${l}</span>` : /^-(?!--)/.test(l) ? `<span class="del">${l}</span>` : l).join("\n");
   const grant = state.signing.grants.reviewer, can = Boolean(signer && item?.awaiting_review && grant);
   body.innerHTML = `
-    <h2>${item?.kind === "contribution" ? esc(item.branch) : `Réparation : ${esc(name(item?.target))}`}</h2>
-    <div class="quiet small">${item?.kind === "contribution" ? `par ${esc(item.author)}` : "par l'agent"}, commit <span class="sha">${short(head)}</span> sur <span class="sha">${short(resource.split("/").slice(-2)[0])}</span></div>
+    <h2>${item?.kind === "contribution" ? esc(item.branch) : item?.kind === "feature" ? `Demande : ${esc(item.title)}` : `Réparation : ${esc(name(item?.target))}`}</h2>
+    <div class="quiet small">${item?.kind === "contribution" ? `par ${esc(item.author)}` : item?.kind === "feature" ? "implémentée par l'agent" : "par l'agent"}, commit <span class="sha">${short(head)}</span> sur <span class="sha">${short(resource.split("/").slice(-2)[0])}</span></div>
     <div class="facts">${fact(item?.facts.tests === "green" ? "Tests au vert" : "Tests non verts", item?.facts.tests === "green" ? "ok" : "bad")}
-      ${item?.kind === "contribution" ? fact(item.facts.regressions === "none" ? "Aucun nouvel écart" : "Ouvre un nouvel écart", item.facts.regressions === "none" ? "ok" : "bad") : ""}</div>
+      ${["contribution", "feature"].includes(item?.kind) ? fact(item.facts.regressions === "none" ? "Aucun nouvel écart" : "Ouvre un nouvel écart", item.facts.regressions === "none" ? "ok" : "bad") : ""}
+      ${item?.facts?.acceptance ? fact(item.facts.acceptance === "green" ? "Contrat d'acceptation tenu" : `Contrat : ${item.facts.acceptance}`, item.facts.acceptance === "green" ? "ok" : "bad") : ""}</div>
     <h3>Description</h3><pre>${esc(d.message)}</pre>
     <h3>Changements</h3><pre>${diff}</pre>
     ${!signer ? `<div class="note warn" style="margin-top:18px">Ajoutez votre clé dans Réglages pour signer.</div>` : ""}

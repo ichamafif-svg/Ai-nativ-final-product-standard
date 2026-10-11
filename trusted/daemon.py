@@ -107,7 +107,8 @@ class Installation:
                                        self.repo_path, self.proposals, data=self.data, world=self.world,
                                        anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
                                        inbox=resolve(repo["inbox"]) if repo.get("inbox") else None,
-                                       findings=self.path.parent / "findings.json")
+                                       findings=self.path.parent / "findings.json",
+                                       requests=resolve(c.get("build", {}).get("store", "requests")))
         self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
                              releases=self.releases)
         engineer = grants.get("engineer")

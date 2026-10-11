@@ -85,6 +85,8 @@ class TrustedService:
         return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
                 "law": {"digest": law.digest, "effective": law.raw}, "health": self.health(required_at=now),
                 "assessment": self.assessment(), "transitions": transitions,
+                # D34: typed resources (requests) with the digest a transition must name as `expected`
+                "entities": {r: {**e, "expected": digest(e)} for r, e in state["entities"].items()},
                 "facts": sorted(({k: o[k] for k in ("id", "resource", "property", "status", "author", "at")}
                                  for o in state["observations"].values()), key=lambda o: -o["at"])[:500]}
 

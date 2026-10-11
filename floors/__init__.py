@@ -59,6 +59,7 @@ INSTRUMENTS = {
     "tests": ("main-suite", "repo:inventory:all", DAY), "regressions": ("floor-probes", "repo:inventory:all", DAY),
     "reproduced": ("recipe-replay", "repo:inventory:all", DAY),
     "acceptance": ("acceptance-suite", "repo:inventory:all", DAY),
+    "contract": ("acceptance-suite", "repo:inventory:all", DAY), "accepted": ("acceptance-suite", "repo:inventory:all", DAY),
     **{p: ("production", "run:sources:all", 15 * MINUTE) for p in (
         "candidate", "deployable", "previous", "regressed", "restartable", "canary_ready", "promotable", "canary_bad")},
 }
@@ -101,6 +102,9 @@ FLOORS = {
         # Start the live release again (D31): the n-th restart of this release, so each one is judged once.
         "restart": {"args": {"release": "segment", "n": "segment"}, "resource": "run:process:all/{release}/{n}",
                     "profile": "capability"},
+        # Fast-forward main from `base` to `head`, the agent's implementation of a contracted request (D34).
+        "implement": {"args": {"request": "segment", "base": "segment", "head": "segment"},
+                      "resource": "repo:feature:{request}/{base}/{head}", "profile": "capability"},
         # Start `to` on a share of traffic beside the live `from` (D32); promoting it is `deploy`.
         "canary": {"args": {"from": "segment", "to": "segment"}, "resource": "run:canary:all/{from}/{to}",
                    "profile": "capability"},
@@ -131,6 +135,12 @@ FLOORS = {
         "restart-autonomous": {"all": [{"observed": ["restartable", "yes", "real"]}]},
         "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
         "canary-autonomous": {"all": [{"observed": ["canary_ready", "yes", "real"]}]},
+        # D34: a feature lands only if its signed contract's acceptance tests pass on this exact transition, main's
+        # own tests still pass, no floor target got worse, and a person reviewed the code.
+        "implement-reviewed": {"all": [{"observed": ["acceptance", "green", "real"]},
+                                       {"observed": ["tests", "green", "real"]},
+                                       {"observed": ["regressions", "none", "real"]},
+                                       {"observed": ["review", "approved", "real"]}]},
         "deploy-canary": {"all": [{"observed": ["promotable", "yes", "real"]}]},
         "abort-autonomous": {"all": [{"observed": ["canary_bad", "yes", "real"]}]},
         "abort-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
@@ -158,6 +168,19 @@ FLOORS = {
           for i, r, f in ORGANISATIONAL),
     ],
     "obligations": [],
+    # D34: what the product must do, as a request whose contract is a file of acceptance tests a person signs.
+    # The contract is signed only once the scanner saw every one of its tests fail on main (a test already passing
+    # promises nothing); the request is delivered only once main passes them, with the contract unchanged.
+    "resources": {"request": {
+        "fields": {"title": "str", "spec": "digest", "contract": "digest"},
+        "states": ["proposed", "contracted", "delivered", "withdrawn"], "initial": "proposed",
+        "transitions": {
+            "contract": {"from": ["proposed"], "to": "contracted", "writes": [],
+                         "requires": {"all": [{"observed": ["contract", "red", "real"]}]}},
+            "deliver": {"from": ["contracted"], "to": "delivered", "writes": [],
+                        "requires": {"all": [{"observed": ["accepted", "yes", "real"]}]}},
+            "withdraw": {"from": ["proposed", "contracted"], "to": "withdrawn", "writes": [],
+                         "requires": {"all": [{"prefix": ["resource", "build:request/"]}]}}}}},
     "instruments": {p: {"method": m, "coverage": c, "sources": ["@scanner"], "min_level": "real", "fresh_ms": f}
                     for p, (m, c, f) in INSTRUMENTS.items()},
 }

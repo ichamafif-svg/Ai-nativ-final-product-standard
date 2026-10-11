@@ -268,16 +268,21 @@ def _export(repo, commit: str, target: Path, paths=()) -> None:
         tar.extractall(target, filter="data")
 
 
-def run_suite(repo, suite_commit: str, code_commit: str, *, install: bool = False, tests_dir: str = "tests",
-              isolation: Isolation | None = None) -> Measure:
-    """`tests_dir` of `suite_commit` against the code of `code_commit`, as the isolated runner, without network.
-    The universe is the set of tests the suite runs."""
+def run_suite(repo, suite_commit: str | None, code_commit: str, *, install: bool = False, tests_dir: str = "tests",
+              isolation: Isolation | None = None, suite_files: dict | None = None) -> Measure:
+    """`tests_dir` of `suite_commit` (or exactly `suite_files`, {path: bytes}) against the code of `code_commit`, as
+    the isolated runner, without network. The universe is the set of tests the suite runs."""
     iso = isolation or ISOLATION
     work = Path(tempfile.mkdtemp())
     code, suite = work / "code", work / "suite"
     try:
         _export(repo, code_commit, code)
-        _export(repo, suite_commit, suite, [tests_dir])
+        if suite_files is None:
+            _export(repo, suite_commit, suite, [tests_dir])
+        else:
+            for path, data in suite_files.items():
+                (suite / path).parent.mkdir(parents=True, exist_ok=True)
+                (suite / path).write_bytes(data)
         out = iso.writable(work / "out")
         iso.open_to_runner(code, suite)
         work.chmod(0o755)
