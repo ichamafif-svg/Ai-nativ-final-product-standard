@@ -12,8 +12,10 @@ independent instrument; otherwise a signed review of this exact transition. Orga
 the compliance officer and have no automatic repair: their gap goes to people.
 
 Production (D30) is measured by the same scanner from the product's own metrics: every declared source answers, the
-service meets its objective, and production runs main's head. `deploy` and `rollback` switch the live release by a
-compare-and-swap; each is autonomous only on a fact the independent instrument signed on that exact switch.
+service meets its objective, and production runs main's head. The switches (deploy, rollback, restart, canary, abort)
+move the live release by a compare-and-swap. D36: the scanner signs what is (this switch exists, this release was
+proven good) and numbers (burn rate, failing share, minutes since the switch, canary deltas); the bounds below decide
+when the agent may act alone. The engineers' finer settings are the agent's own restraint inside these bounds.
 """
 from kernel import FORMAT, Release, floor0_digest
 from kernel.floor0 import MIN_DELAY_MS
@@ -62,9 +64,9 @@ INSTRUMENTS = {
     "contract": ("acceptance-suite", "repo:inventory:all", DAY),
     "configured": ("rules-diff", "repo:inventory:all", DAY), "accepted": ("acceptance-suite", "repo:inventory:all", DAY),
     **{p: ("production", "run:sources:all", 15 * MINUTE) for p in (
-        "candidate", "deployable", "previous", "regressed", "restartable", "canary_ready", "promotable", "canary_bad",
-        # D35: numbers, so that the law itself bounds what the scanner's judgment may open
-        "canary_error_delta", "canary_requests", "canary_baked_min", "breach_age_min", "restarts_last_hour")},
+        "candidate", "previous", "proven", "live", "running",            # D36: what is, on an exact switch
+        "burn_fast", "failing_pct", "switched_min", "unanswered_s", "restarts_last_hour", "migrations_crossed",
+        "budget_pct", "canary_error_delta", "canary_requests", "canary_baked_min", "canary_p99_ms", "live_p99_ms")},
 }
 
 
@@ -128,24 +130,34 @@ FLOORS = {
         "integrate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
                                        {"observed": ["regressions", "none", "real"]},
                                        {"observed": ["review", "approved", "real"]}]},
+        # D36: the agent acts alone in production only on what the scanner measured, against these bounds. The
+        # engineers' settings may ask for more (a higher burn, a shorter horizon, a canary that bakes longer); never
+        # for less: the kernel refuses.
         # Main's head, never rolled back, replaces exactly the live release.
-        "deploy-autonomous": {"all": [{"observed": ["deployable", "yes", "real"]}]},
-        # The objective broke right after this release went live, and the one it replaced met it.
-        # D35: the scanner judges with the engineers' settings; the law bounds that judgment from outside, so a fault
-        # in the scanner's code still cannot step back hours after a switch, promote a canary that fails much more
-        # than the live release, or restart in a loop.
-        "rollback-autonomous": {"all": [{"observed": ["regressed", "yes", "real"]},
-                                        {"compare": ["breach_age_min", "le", 240, "real"]}]},
+        "deploy-autonomous": {"all": [{"observed": ["candidate", "yes", "real"]}]},
+        # The live release breaks soon after its switch, and the one it replaced was proven good: step back.
+        "rollback-autonomous": {"all": [{"observed": ["previous", "yes", "real"]}, {"observed": ["proven", "yes", "real"]},
+                                        {"compare": ["switched_min", "le", 240, "real"]},
+                                        {"compare": ["burn_fast", "ge", "14.4", "real"]}]},
+        "rollback-failing": {"all": [{"observed": ["previous", "yes", "real"]}, {"observed": ["proven", "yes", "real"]},
+                                     {"compare": ["switched_min", "le", 240, "real"]},
+                                     {"compare": ["failing_pct", "ge", 5, "real"]}]},
+        "rollback-unanswered": {"all": [{"observed": ["previous", "yes", "real"]}, {"observed": ["proven", "yes", "real"]},
+                                        {"compare": ["unanswered_s", "ge", 90, "real"]}]},
         # The same switches when the engineers keep them for themselves (D31): the scanner's fact that the switch is
         # possible, and an engineer's signed decision on that exact switch.
         "deploy-reviewed": {"all": [{"observed": ["candidate", "yes", "real"]},
                                     {"observed": ["approved", "yes", "real"]}]},
         "rollback-reviewed": {"all": [{"observed": ["previous", "yes", "real"]},
                                       {"observed": ["requested", "yes", "real"]}]},
-        "restart-autonomous": {"all": [{"observed": ["restartable", "yes", "real"]},
-                                       {"compare": ["restarts_last_hour", "le", 11, "real"]}]},
+        "restart-autonomous": {"all": [{"observed": ["live", "yes", "real"]},
+                                       {"compare": ["restarts_last_hour", "le", 11, "real"]},
+                                       {"compare": ["failing_pct", "ge", 5, "real"]}]},
+        "restart-burn": {"all": [{"observed": ["live", "yes", "real"]},
+                                 {"compare": ["restarts_last_hour", "le", 11, "real"]},
+                                 {"compare": ["burn_fast", "ge", "14.4", "real"]}]},
         "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
-        "canary-autonomous": {"all": [{"observed": ["canary_ready", "yes", "real"]}]},
+        "canary-autonomous": {"all": [{"observed": ["candidate", "yes", "real"]}]},
         # D35: the rules file changes from the interface with one signature: the scanner checks the commit changes
         # only that file, to exactly what an engineer signed, and that main's tests and the floors hold.
         "configure-signed": {"all": [{"observed": ["configured", "yes", "real"]},
@@ -157,11 +169,11 @@ FLOORS = {
                                        {"observed": ["tests", "green", "real"]},
                                        {"observed": ["regressions", "none", "real"]},
                                        {"observed": ["review", "approved", "real"]}]},
-        "deploy-canary": {"all": [{"observed": ["promotable", "yes", "real"]},
+        "deploy-canary": {"all": [{"observed": ["candidate", "yes", "real"]},
                                   {"compare": ["canary_error_delta", "le", "2", "real"]},
                                   {"compare": ["canary_requests", "ge", 20, "real"]},
                                   {"compare": ["canary_baked_min", "ge", 1, "real"]}]},
-        "abort-autonomous": {"all": [{"observed": ["canary_bad", "yes", "real"]}]},
+        "abort-autonomous": {"all": [{"observed": ["running", "yes", "real"]}]},   # taking a canary out is always safe
         "abort-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
     },
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.

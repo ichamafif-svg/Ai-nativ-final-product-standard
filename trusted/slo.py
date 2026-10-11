@@ -8,13 +8,14 @@ buckets (slo.db, 90 days). An SLO selects components (`counted`, `all`, `kind:ap
 
 over a rolling window of days, against a target. Its error budget is the share of bad events the target allows;
 `budget` is what is left of it over the window. The burn rate over a span is the bad share divided by the allowed
-share: 1 spends the budget exactly over the window. Alerts follow the multi-window rule (Google SRE workbook):
+share: 1 spends the budget exactly over the window. Multi-window rule (Google SRE workbook), as numbers:
 
-    fast   burn over 1 h and over 5 min both at or above burn_fast (14.4: 2 % of a 30-day budget in one hour)
-    slow   burn over 6 h and over 30 min both at or above burn_slow (6: 5 % in six hours)
+    fast_burn   the lower of the burns over 1 h and over 5 min (both must be high: significant, and still going on)
+    slow_burn   the lower of the burns over 6 h and over 30 min
 
-A fast burn breaks `run:service:all slo` (the signed fact that opens rollback); a slow burn is an alert for people.
-Fewer than `MIN_EVENTS` requests in a span never fire: no alert on noise.
+D36: the scanner signs the fast burn as a number; the law compares it (14.4: 2 % of a 30-day budget in one hour), the
+engineers' alert thresholds are read by the interface and the agent. A span with fewer than `MIN_EVENTS` requests
+has no burn: no alert on noise.
 """
 from __future__ import annotations
 
@@ -80,9 +81,9 @@ def good_under(buckets: dict, threshold_ms: float) -> float:
     return max((n for bound, n in bounds if bound * 1000 <= threshold_ms), default=0.0)
 
 
-def evaluate(store: Store, slos: dict, now_minute: int, *, counted, burn_fast: float, burn_slow: float) -> dict:
+def evaluate(store: Store, slos: dict, now_minute: int, *, counted) -> dict:
     """{slo id: {"name", "sli", "target", "window_d", "compliance", "budget", "events", "burn": {span: rate},
-    "fast", "slow"}} at this minute."""
+    "fast_burn", "slow_burn"}} at this minute."""
     longest = max([s["window_d"] for s in slos.values()] or [1]) * 1440
     rows = store.rows(now_minute - longest)
     out = {}
@@ -103,9 +104,9 @@ def evaluate(store: Store, slos: dict, now_minute: int, *, counted, burn_fast: f
         for span, minutes in SPANS.items():
             t, b = share(minutes)
             burn[span] = None if t < MIN_EVENTS else round((b / t) / allowed, 2)
-        fires = lambda a, b, limit: burn[a] is not None and burn[b] is not None and burn[a] >= limit and burn[b] >= limit
+        both = lambda a, b: None if burn[a] is None or burn[b] is None else min(burn[a], burn[b])
         out[sid] = {**{k: s.get(k) for k in ("name", "sli", "target", "window_d", "selector", "threshold_ms")},
                     "events": int(total), "compliance": None if not total else 1 - bad / total,
                     "budget": None if not total else 1 - (bad / total) / allowed, "burn": burn,
-                    "fast": fires("1h", "5m", burn_fast), "slow": fires("6h", "30m", burn_slow)}
+                    "fast_burn": both("1h", "5m"), "slow_burn": both("6h", "30m")}
     return out

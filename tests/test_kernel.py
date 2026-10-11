@@ -353,16 +353,35 @@ class Bounds(unittest.TestCase):
             with self.assertRaises(LanguageError):
                 compile_program({"all": [{"compare": bad}]})
 
-    def test_a_canary_the_scanner_calls_promotable_is_still_bounded_by_the_law(self):
+    def test_a_canary_promotion_is_bounded_by_the_law(self):
         L = Ledger()
         agent = L.grant("agent", ["effect:deploy"], ["run:release:*"], conditions=["deploy-canary"])
         scanner = L.grant("scanner", ["observe", "certify:real"], ["run:*"])
         A, B = "a" * 40, "b" * 40
         resource = f"run:release:all/{A}/{B}"
-        for prop, status in (("promotable", "yes"), ("canary_error_delta", "4.08"), ("canary_requests", "500"),
+        for prop, status in (("candidate", "yes"), ("canary_error_delta", "4.08"), ("canary_requests", "500"),
                              ("canary_baked_min", "10")):
             L.measure("scanner", scanner, resource, prop, status)
         self.assertEqual(L.refused("intent", "agent", under=agent, op="deploy", args={"from": A, "to": B}),
                          "CAP.CONDITION")                                  # 4.08 points worse: over the bound
         L.measure("scanner", scanner, resource, "canary_error_delta", "0.120")
         L.submit("intent", "agent", under=agent, op="deploy", args={"from": A, "to": B})
+
+    def test_the_agent_steps_back_alone_only_on_the_evidence_the_law_asks_for(self):
+        """D36: whatever the agent's settings say, a rollback needs a proven previous release, a recent switch and a
+        fast burn of at least 14.4, measured by the scanner on that exact switch."""
+        L = Ledger()
+        agent = L.grant("agent", ["effect:rollback"], ["run:service:*"], conditions=["rollback-autonomous"])
+        scanner = L.grant("scanner", ["observe", "certify:real"], ["run:*"])
+        A, B = "a" * 40, "b" * 40
+        resource = f"run:service:all/{B}/{A}"
+        for prop, status in (("previous", "yes"), ("proven", "yes"), ("switched_min", "3"), ("burn_fast", "9.500")):
+            L.measure("scanner", scanner, resource, prop, status)
+        self.assertEqual(L.refused("intent", "agent", under=agent, op="rollback", args={"from": B, "to": A}),
+                         "CAP.CONDITION")                                  # burning, not enough to act alone
+        L.measure("scanner", scanner, resource, "burn_fast", "20.000")
+        L.measure("scanner", scanner, resource, "switched_min", "300")
+        self.assertEqual(L.refused("intent", "agent", under=agent, op="rollback", args={"from": B, "to": A}),
+                         "CAP.CONDITION")                                  # five hours after the switch: people
+        L.measure("scanner", scanner, resource, "switched_min", "3")
+        L.submit("intent", "agent", under=agent, op="rollback", args={"from": B, "to": A})

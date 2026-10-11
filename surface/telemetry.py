@@ -36,6 +36,32 @@ from pathlib import Path
 from trusted.runtime import GAUGES, HISTOGRAMS, KINDS, parse, quantile  # noqa: F401  (one reading, shared with T06)
 import trusted.runtime as runtime
 
+FAILING, SLOW_P99_MS, LATE_PERIODS = 0.05, 1000.0, 2      # published defaults; the engineers' settings replace them
+
+
+def judge(s: dict, limits: dict) -> tuple[str, dict | None]:
+    """(state, why): the rule that decided it, with the measured value and the limit it crossed. Information for
+    people (D28); since D36 nothing signed depends on it: the scanner signs numbers, the law and the agent compare."""
+    if s["requests"] == 0:
+        return "idle", {"rule": "no_traffic"}
+    if s["error_rate"] >= limits["failing"]:
+        return "failing", {"rule": "error_rate", "value": s["error_rate"], "limit": limits["failing"]}
+    if s["availability"] < limits["objective"]:
+        return "degraded", {"rule": "availability", "value": s["availability"], "limit": limits["objective"]}
+    if (s["p99"] or 0) > limits["p99_ms"]:
+        return "degraded", {"rule": "p99", "value": s["p99"], "limit": limits["p99_ms"]}
+    return "healthy", None
+
+
+def judge_job(last, period, ok, now, late_periods: int = LATE_PERIODS) -> tuple[str, dict | None]:
+    if ok == 0:
+        return "failing", {"rule": "job_failed"}
+    if not last:
+        return "degraded", {"rule": "job_never"}
+    if period and now - last > late_periods * period:
+        return "degraded", {"rule": "job_late", "value": now - last, "limit": late_periods * period}
+    return "healthy", None
+
 
 class Telemetry:
     def __init__(self, store, targets, *, slo: float = 0.999, interval: float = 15.0, fetch=None):
@@ -130,7 +156,7 @@ class Telemetry:
 
     # ---- reading ---------------------------------------------------------------------------------------------
     _deltas = staticmethod(runtime.deltas)
-    FAILING, SLOW_P99_MS = runtime.FAILING, runtime.SLOW_P99_MS
+    FAILING, SLOW_P99_MS = FAILING, SLOW_P99_MS
 
     def _stats(self, deltas: list, seconds: float) -> dict:
         return runtime.stats(deltas, seconds, self.slo)
@@ -142,8 +168,8 @@ class Telemetry:
                 "late_periods": self.late_periods}
 
     extra = None           # more open conditions to track as incidents: {(kind, operation, name): (state, why)}
-    limits = None          # the engineers' settings (trusted.policy.Policy.limits), when the operator published them
-    late_periods = runtime.LATE_PERIODS
+    limits = None          # the engineers' settings (autonomy.policy.Policy.limits)
+    late_periods = LATE_PERIODS
 
     def _limits(self, kind: str, op: str, name: str) -> dict:
         if self.limits is None:
@@ -152,7 +178,7 @@ class Telemetry:
         return self.limits(kind, op, name)
 
     def _state(self, s: dict, kind: str = "api", op: str = "", name: str = "") -> tuple[str, dict | None]:
-        return runtime.judge(s, self._limits(kind, op, name))
+        return judge(s, self._limits(kind, op, name))
 
     def report(self, declared=(), window: int = 3600, now: float | None = None) -> dict:
         now = int(now if now is not None else time.time())
@@ -201,7 +227,7 @@ class Telemetry:
         for name in sorted({n for (k, n, _) in latest if k == "job"}):
             get = lambda f: latest.get(("job", name, f))
             last, period, ok = get("last_success"), get("period"), get("ok")
-            state, why = runtime.judge_job(last, period, ok, now, self.late_periods)
+            state, why = judge_job(last, period, ok, now, self.late_periods)
             lim = self._limits("job", "", name)
             components["job"].append({"kind": "job", "name": name, "last_success": last, "duration": get("duration"),
                                       "period": period, "ok": ok, "why": why, "state": state, "id": lim["id"],

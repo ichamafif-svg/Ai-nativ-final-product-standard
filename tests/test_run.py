@@ -1,5 +1,6 @@
-"""Production (D30): the scanner proves the service from its metrics, the agent deploys main and rolls back a release
-that broke the objective, and a release rolled back is never deployed again: that gap goes to people."""
+"""Production (D30, D36): the scanner measures the service and signs what is and numbers, the law bounds when the agent
+may act alone, the engineers' settings restrain it further; the agent deploys main and rolls back a release that broke
+the service, and a release rolled back is never deployed again: that gap goes to people."""
 import argparse
 import hashlib
 import json
@@ -23,7 +24,9 @@ import autonomy.__main__ as agent_process  # noqa: E402
 import trusted.daemon as daemon  # noqa: E402
 from trusted import runtime  # noqa: E402
 from trusted.deploy import Releases  # noqa: E402
-from trusted.policy import Policy, component_id  # noqa: E402
+from autonomy import release  # noqa: E402
+from autonomy.policy import Policy, history, law_bounds  # noqa: E402
+from trusted.runtime import component_id  # noqa: E402
 from trusted.slo import Store, evaluate  # noqa: E402
 from trusted.gateway import AdmissionGateway  # noqa: E402
 
@@ -60,66 +63,47 @@ class Metrics:
         ])
 
 
+N = {"burn_fast": 0, "failing_pct": 0, "budget_pct": 80.0}
+
+
+def facts_of(*args, **kw):
+    return {(r, p): s for r, p, s in runtime.release_facts(*args, **kw)}
+
+
 class Facts(unittest.TestCase):
-    def test_main_is_a_candidate_and_deployable_only_when_engineers_let_it(self):
-        facts, _ = runtime.release_facts("met", A, B, [], set(), 0)
-        self.assertIn(("run:release:all", "lag", "behind"), facts)
-        self.assertIn((f"run:release:all/{A}/{B}", "candidate", "yes"), facts)
-        self.assertIn((f"run:release:all/{A}/{B}", "deployable", "yes"), facts)
-        policy = Policy(60_000, defaults={"auto_deploy": "off"})
-        facts, why = runtime.release_facts("met", A, B, [], set(), 0, policy=policy)
-        self.assertIn((f"run:release:all/{A}/{B}", "candidate", "yes"), facts)
-        self.assertNotIn("deployable", str(facts))                                   # an engineer approves
-        self.assertIn("approves", why["deploy"])
-        facts, why = runtime.release_facts("met", A, B, [{"at": 0, "op": "rollback", "from": B, "to": A}], set(), 0)
-        self.assertEqual(facts, [("run:release:all", "lag", "behind")])
-        self.assertIn("new commit", why["deploy"])
-        self.assertEqual(runtime.release_facts("met", B, B, [], set(), 0)[0], [("run:release:all", "lag", "none")])
-        self.assertIn("behind", str(runtime.release_facts("met", B, B, [], set(), 0, served=A)[0]))   # not served
+    """D36: the scanner signs what is, on exact switches, and numbers; it judges nothing the engineers tune."""
 
-    def test_a_rollback_needs_a_fresh_switch_a_release_known_good_and_a_schema_it_can_run_on(self):
+    def test_main_is_a_candidate_unless_it_was_stepped_back_from(self):
+        f = facts_of(A, B, [], set(), 0, N)
+        self.assertEqual(f[("run:release:all", "lag")], "behind")
+        self.assertEqual(f[(f"run:release:all/{A}/{B}", "candidate")], "yes")
+        self.assertEqual(f[(f"run:release:all/{A}/{B}", "budget_pct")], "80.000")
+        self.assertEqual(f[(f"run:canary:all/{A}/{B}", "candidate")], "yes")       # or on a share of traffic first
+        f = facts_of(A, B, [{"at": 0, "op": "rollback", "from": B, "to": A}], set(), 0, N)
+        self.assertNotIn((f"run:release:all/{A}/{B}", "candidate"), f)
+        self.assertEqual(facts_of(B, B, [], set(), 0, N)[("run:release:all", "lag")], "none")
+        self.assertEqual(facts_of(B, B, [], set(), 0, N, served=A)[("run:release:all", "lag")], "behind")
+
+    def test_a_previous_release_with_its_numbers_and_whether_it_was_proven(self):
         history = [{"at": 1_000, "op": "deploy", "from": A, "to": B}]
-        facts, _ = runtime.release_facts("breached:1", B, B, history, {A}, 1_000 + 60_000)
-        self.assertIn((f"run:service:all/{B}/{A}", "regressed", "yes"), facts)
-        self.assertIn((f"run:service:all/{B}/{A}", "previous", "yes"), facts)          # an engineer may step back
-        facts, why = runtime.release_facts("breached:1", B, B, history, set(), 61_000)  # A never proved good
-        self.assertNotIn("regressed", str(facts))
-        facts, why = runtime.release_facts("breached:1", B, B, history, {A}, 1_000 + 3_600_000)   # too late: people
-        self.assertNotIn("regressed", str(facts))
-        self.assertIn("not attributable", why["rollback"])
-        facts, why = runtime.release_facts("breached:1", B, B, history, {A}, 61_000,
-                                           compat=lambda live, prev: (False, "migration not declared compatible"))
-        self.assertNotIn("regressed", str(facts))
-        self.assertNotIn("previous", str(facts))                                      # not even by hand
-        self.assertIn("migration", why["rollback"])
-        policy = Policy(60_000, defaults={"auto_rollback": "off"})
-        facts, why = runtime.release_facts("breached:1", B, B, history, {A}, 61_000, policy=policy)
-        self.assertNotIn("regressed", str(facts))
-        self.assertIn("engineer decides", why["rollback"])
+        r = f"run:service:all/{B}/{A}"
+        f = facts_of(B, B, history, {A}, 1_000 + 120_000, {**N, "burn_fast": 20.0, "failing_pct": 40.0})
+        self.assertEqual({k: f[(r, k)] for k in ("previous", "proven", "switched_min", "burn_fast", "failing_pct")},
+                         {"previous": "yes", "proven": "yes", "switched_min": "2", "burn_fast": "20.000",
+                          "failing_pct": "40.000"})
+        self.assertNotIn((r, "proven"), facts_of(B, B, history, set(), 61_000, N))   # A never met the objective
+        self.assertNotIn((r, "previous"), facts_of(B, B, history, {A}, 61_000, N, crossed=lambda live, prev: None))
+        f = facts_of(B, B, history, set(), 1_000 + 120_000, N, served=A)            # B never answered: A still does
+        self.assertEqual((f[(r, "unanswered_s")], f[(r, "proven")]), ("120", "yes"))
 
-    def test_a_release_that_never_answers_is_stepped_back_from(self):
-        history = [{"at": 1_000, "op": "deploy", "from": A, "to": B}]
-        facts, why = runtime.release_facts("met", B, B, history, set(), 1_000 + 120_000, served=A)
-        self.assertIn((f"run:service:all/{B}/{A}", "regressed", "yes"), facts)
-        self.assertIn("never answered", why["rollback"])
-        facts, _ = runtime.release_facts("met", B, B, history, set(), 1_000 + 30_000, served=A)   # still starting
-        self.assertNotIn("regressed", str(facts))
-
-    def test_a_restart_only_when_allowed_and_within_its_budget(self):
+    def test_the_live_release_and_its_restarts_in_the_last_hour(self):
         history = [{"at": 0, "op": "deploy", "from": A, "to": B}]
         late = 10 * 3_600_000
-        self.assertIn("off", runtime.release_facts("breached:1", B, B, history, {A}, late)[1]["restart"])
-        policy = Policy(60_000, defaults={"auto_restart": "on", "restarts_per_hour": 1})
-        facts, _ = runtime.release_facts("breached:1", B, B, history, {A}, late, policy=policy)
-        self.assertIn((f"run:process:all/{B}/1", "restartable", "yes"), facts)
+        self.assertEqual(facts_of(B, B, history, {A}, late, N)[(f"run:process:all/{B}/1", "live")], "yes")
         history.append({"at": late - 60_000, "op": "restart", "from": B, "to": B, "n": "1"})
-        facts, why = runtime.release_facts("breached:1", B, B, history, {A}, late, policy=policy)
-        self.assertNotIn("restartable", str(facts))
-        self.assertIn("budget", why["restart"])
-        facts, why = runtime.release_facts("breached:1", B, B, [{"at": late - 60_000, "op": "deploy", "from": A, "to": B}],
-                                           set(), late, policy=policy, compat=lambda live, prev: (False, "migration"))
-        self.assertNotIn("restartable", str(facts))                                   # a code fault: not a restart
-        self.assertIn("follows a switch", why["restart"])
+        f = facts_of(B, B, history, {A}, late, N)
+        self.assertEqual(f[(f"run:process:all/{B}/2", "restarts_last_hour")], "1")
+        self.assertEqual(f[(f"run:process:all/{B}/2", "switched_min")], "600")      # restarts are not switches
 
     def test_an_unreachable_source_is_uncovered_never_met(self):
         production = runtime.Production(["http://x/metrics"], fetch=lambda url: (_ for _ in ()).throw(OSError("down")))
@@ -137,75 +121,14 @@ class Facts(unittest.TestCase):
         production.scrape(91)
         assessed = production.assess(91)
         self.assertEqual(assessed["slo"], "breached:1")
-        self.assertEqual(assessed["components"][0]["why"]["rule"], "error_rate")
-
-
-def change(policy, name, value, at):
-    """A change of standard/rules.json on main (D35): the policy reads the whole file as main has it."""
-    doc = policy.document()
-    scope, key = name.split("/", 1)
-    if scope == "global":
-        doc["global"][key] = value
-    else:
-        part = {"c": "components", "s": "slos", "p": "probes"}[scope[0]]
-        doc[part].setdefault(scope, {})[key] = value
-    for scoped, pending in policy.pending.items():          # the file holds what was written, pending or not
-        s, k = scoped.split("/", 1)
-        if s == "global":
-            doc["global"].setdefault(k, pending["value"])
-    policy.update({}, set(), at, document=(doc, at, f"main@{at}"))
-
-
-class Settings(unittest.TestCase):
-    """What engineers set: stricter applies at once, looser after the law's delay; only the engineer is read."""
-
-    def statement(self, key, value, at, author="h1", n=[0]):
-        n[0] += 1
-        return {f"run:policy/{key}|value|{author}#{n[0]}": {"id": f"s{n[0]}", "resource": f"run:policy/{key}",
-                                                          "property": "value", "status": value, "at": at,
-                                                          "author": author}}
-
-    def test_stricter_at_once_looser_after_the_delay(self):
-        policy = Policy(60_000)
-        change(policy, "global/objective", "99.95", 1_000)
-        self.assertEqual(policy.get("objective"), 99.95)                             # stricter: now
-        change(policy, "global/objective", "99", 2_000)
-        self.assertEqual(policy.get("objective"), 99.95)                             # looser: not yet
-        self.assertIn("global/objective", policy.published()["pending"])
-        policy.update({}, {"h1"}, 62_000)
-        self.assertEqual(policy.get("objective"), 99.0)                              # after the delay
-        change(policy, "global/auto_restart", "on", 63_000)
-        self.assertEqual(policy.get("auto_restart"), "off")                          # more autonomy waits too
-        change(policy, "global/auto_deploy", "off", 64_000)
-        self.assertEqual(policy.get("auto_deploy"), "off")                           # less autonomy: now
-
-    def test_only_the_engineer_within_bounds_is_read(self):
-        policy = Policy(60_000)
-        policy.update(self.statement("m-x/until", "99999999999999", 1_000, author="agent"), {"h1"}, 1_000)
-        self.assertEqual(policy.silences(2_000), {})                                 # a silence only from h1
-        change(policy, "global/objective", "120", 2_000)
-        self.assertEqual(policy.get("objective"), 99.9)
-        self.assertIn("ignored", policy.published()["history"][0]["outcome"])
-        change(policy, "p-x/spec", "rm -rf /", 3_000)
-        self.assertEqual(policy.probes(), [])
-
-    def test_a_component_override_and_its_counting(self):
-        policy = Policy(60_000)
-        cid = component_id("api", "POST", "/orders")
-        change(policy, f"{cid}/p99_ms", "200", 1_000)
-        self.assertEqual(policy.limits("api", "POST", "/orders")["p99_ms"], 200)    # stricter than 1000: now
-        self.assertEqual(policy.limits("api", "GET", "/health")["p99_ms"], 1000.0)
-        self.assertFalse(policy.limits("dependency", "POST", "pay")["counted"])      # outside: shown, not counted
-        change(policy, f"{cid}/counted", "off", 2_000)
-        self.assertTrue(policy.limits("api", "POST", "/orders")["counted"])          # uncounting loosens: waits
+        self.assertAlmostEqual(assessed["failing_pct"], 100 / 3)                     # 100 failed of 300 in the window
 
     def test_probes_see_what_the_product_does_not_report(self):
-        policy = Policy(60_000, defaults={"base_url": "http://shop"})
-        change(policy, "p-a/spec", "GET /health 200", 1_000)
-        metrics = Metrics()
-        answers = iter([200, 200, 503, 503])
-        production = runtime.Production(["http://x/metrics"], fetch=metrics, policy=policy,
-                                        request=lambda method, url: (next(answers), 0.01))
+        metrics, answers = Metrics(), iter([200, 200, 503, 503])
+        production = runtime.Production(["http://x/metrics"], fetch=metrics, request=lambda method, url: (next(answers), 0.01))
+        production.measures = runtime.measures({"global": {"base_url": "http://shop"},
+                                                "probes": {"p-a": {"spec": "GET /health 200"}, "p-b": {"spec": "rm -rf /"}}})
+        self.assertEqual(production.measures["probes"], [("p-a", "GET", "/health", 200)])
         for at in (1, 31):
             production.scrape(at)
         self.assertEqual(production.assess(31)["slo"], "met")
@@ -213,7 +136,103 @@ class Settings(unittest.TestCase):
             production.scrape(at)
         assessed = production.assess(91)
         self.assertEqual(assessed["slo"], "breached:1")                              # metrics fine, probe failing
-        self.assertEqual([c["kind"] for c in assessed["components"] if c["state"] == "failing"], ["probe"])
+        self.assertEqual([c["kind"] for c in assessed["components"] if c["error_rate"]], ["probe"])
+
+
+class Decide(unittest.TestCase):
+    """D36: the agent's restraint, from the engineers' settings, inside the law's bounds."""
+
+    def view(self, **facts):
+        return {f"run:service:all/{B}/{A}": {"previous": "yes", "proven": "yes", "switched_min": "2", "burn_fast": "0",
+                                            "failing_pct": "0", "unanswered_s": "0", "migrations_crossed": "0", **facts}}
+
+    def test_a_rollback_right_after_a_switch_that_broke_the_service(self):
+        decide = lambda facts, doc={}: release.decide(self.view(**facts), Policy(doc), 0)
+        self.assertEqual(decide({})[0], [])
+        self.assertEqual(decide({"burn_fast": "20.000"})[0],
+                         [("rollback", f"run:service:all/{B}/{A}", "agent_rollback")])
+        self.assertEqual(decide({"failing_pct": "40"})[0],
+                         [("rollback", f"run:service:all/{B}/{A}", "agent_rollback_failing")])
+        self.assertEqual(decide({"unanswered_s": "120", "switched_min": "300"})[0][0][2], "agent_rollback_unanswered")
+        actions, why = decide({"failing_pct": "40", "switched_min": "45"})
+        self.assertEqual((actions, "not attributable" in why["rollback"]), ([], True))      # horizon 30 min
+        actions, why = decide({"failing_pct": "40"}, {"global": {"auto_rollback": "off"}})
+        self.assertIn("engineer decides", why["rollback"])
+        actions, why = decide({"failing_pct": "40", "migrations_crossed": "1"}, {"global": {"compatible_migrations": "off"}})
+        self.assertIn("compatible migration", why["rollback"])
+        actions, why = decide({"failing_pct": "40", "proven": "no"})
+        self.assertIn("known", why["rollback"])
+        self.assertEqual(decide({"failing_pct": "6"}, {"global": {"failing": "10"}})[0], [])  # engineers ask for more
+
+    def test_a_restart_only_when_allowed_away_from_a_switch_and_within_budget(self):
+        r = f"run:process:all/{B}/2"
+        view = lambda **f: {r: {"live": "yes", "switched_min": "600", "failing_pct": "40", "burn_fast": "0",
+                                "restarts_last_hour": "0", **f}}
+        on = {"global": {"auto_restart": "on", "restarts_per_hour": "1"}}
+        self.assertIn("off", release.decide(view(), Policy({}), 0)[1]["restart"])
+        self.assertEqual(release.decide(view(), Policy(on), 0)[0], [("restart", r, "agent_restart")])
+        self.assertIn("budget", release.decide(view(restarts_last_hour="1"), Policy(on), 0)[1]["restart"])
+        self.assertIn("follows a switch", release.decide(view(switched_min="3"), Policy(on), 0)[1]["restart"])
+
+    def test_deploy_in_the_window_unfrozen_with_budget_left_or_start_a_canary(self):
+        r = f"run:release:all/{A}/{B}"
+        view = {r: {"candidate": "yes", "budget_pct": "10.000"}, f"run:canary:all/{A}/{B}": {"candidate": "yes"}}
+        self.assertEqual(release.decide(view, Policy({}), 0)[0], [("deploy", r, "agent_deploy")])
+        self.assertIn("approves", release.decide(view, Policy({"global": {"auto_deploy": "off"}}), 0)[1]["deploy"])
+        self.assertIn("budget", release.decide(view, Policy({"global": {"freeze_below": "25"}}), 0)[1]["deploy"])
+        self.assertEqual(release.decide(view, Policy({"global": {"strategy": "canary"}}), 0)[0],
+                         [("canary", f"run:canary:all/{A}/{B}", "agent_canary")])
+        policy = Policy({"global": {"deploy_days": "mon,tue,wed,thu,fri", "deploy_hours": "09-18", "deploy_tz": "Europe/Paris"}})
+        saturday = 1_791_619_200_000                                                  # 2026-10-10 10:00 Paris
+        self.assertIn("window", release.decide(view, policy, saturday)[1]["deploy"])
+        self.assertEqual(release.decide(view, policy, saturday + 2 * 86_400_000)[0][0][0], "deploy")   # Monday
+        view[r]["approved"] = "yes"
+        self.assertEqual(release.decide(view, Policy({"global": {"auto_deploy": "off"}}), 0)[0],
+                         [("deploy", r, "agent_deploy_reviewed")])
+
+    def test_a_canary_bakes_and_is_promoted_a_worse_one_is_taken_out(self):
+        r, abort = f"run:release:all/{A}/{B}", f"run:canary:abort/{A}/{B}"
+        canary = {"global": {"strategy": "canary"}}
+        view = lambda **f: {r: {"candidate": "yes", "canary_error_delta": "0.100", "canary_requests": "500",
+                                "canary_baked_min": "11", "canary_p99_ms": "100", "live_p99_ms": "100", **f},
+                            abort: {"running": "yes"}}
+        self.assertEqual(release.decide(view(), Policy(canary), 0)[0], [("deploy", r, "agent_promote")])
+        actions, why = release.decide(view(canary_baked_min="3"), Policy(canary), 0)
+        self.assertEqual((actions, "baking" in why["canary"]), ([], True))
+        self.assertEqual(release.decide(view(canary_error_delta="5.000", canary_baked_min="2"), Policy(canary), 0)[0],
+                         [("abort", abort, "agent_abort")])
+        moved = {**view(), r: {"candidate": "no"}}
+        self.assertEqual(release.decide(moved, Policy(canary), 0)[0], [("abort", abort, "agent_abort")])
+
+
+class Settings(unittest.TestCase):
+    """The engineers' settings: the rules file on main, within bounds, and signed silences."""
+
+    def test_only_valid_settings_are_read(self):
+        policy = Policy({"global": {"objective": "120", "auto_deploy": "off"}, "probes": {"p-x": {"spec": "rm -rf /"}}})
+        self.assertEqual((policy.get("objective"), policy.get("auto_deploy")), (99.9, "off"))
+        self.assertEqual([i["setting"] for i in policy.ignored], ["global/objective", "p-x/spec"])
+        policy = Policy({}, transitions={"run:policy/m-x/until": {"value": "99999999999999"},
+                                         "run:policy/m-x/target_of": {"value": "all"}})
+        self.assertEqual(policy.silences(2_000)["m-x"]["target_of"], "all")
+
+    def test_a_component_override_and_its_counting(self):
+        cid = component_id("api", "POST", "/orders")
+        policy = Policy({"components": {cid: {"p99_ms": "200", "counted": "off"}}})
+        self.assertEqual(policy.limits("api", "POST", "/orders")["p99_ms"], 200)
+        self.assertFalse(policy.limits("api", "POST", "/orders")["counted"])
+        self.assertEqual(policy.limits("api", "GET", "/health")["p99_ms"], 1000.0)
+        self.assertFalse(policy.limits("dependency", "POST", "pay")["counted"])      # outside: shown, not counted
+        self.assertFalse(runtime.measures({"components": {cid: {"counted": "off"}}})["counted"][cid])   # the scanner too
+
+    def test_the_law_bounds_and_the_history_of_the_rules(self):
+        from floors import FLOORS
+        bounds = law_bounds(FLOORS["conditions"])
+        self.assertEqual((bounds["burn_fast"], bounds["rollback_horizon_min"], bounds["restarts_per_hour"]),
+                         (("ge", 14.4), ("le", 240.0), ("le", 12.0)))
+        changes = history([(1, "h1", {}), (2, "h1", {"global": {"strategy": "canary"}}), (3, "alice", {})])
+        self.assertEqual([(c["at"], c["setting"], c["value"]) for c in changes],
+                         [(3, "global/strategy", "(retiré)"), (2, "global/strategy", "canary")])
 
 
 class Migrations(unittest.TestCase):
@@ -226,15 +245,13 @@ class Migrations(unittest.TestCase):
         base = git("rev-parse", "HEAD", cwd=repo)
         expand = commit("migrations/0002_note.compatible.sql", "ALTER TABLE o ADD COLUMN note TEXT;\n")
         drop = commit("migrations/0003_drop.sql", "DROP TABLE o;\n")
-        self.assertEqual(runtime.compatible(repo, expand, base, True), (True, None))
-        self.assertFalse(runtime.compatible(repo, expand, base, False)[0])           # engineers said no
-        fits, why = runtime.compatible(repo, drop, expand, True)
-        self.assertFalse(fits)
-        self.assertIn("0003_drop.sql", why)
+        self.assertEqual(runtime.crossed(repo, expand, base), 1)
+        self.assertEqual(runtime.crossed(repo, base, base), 0)
+        self.assertIsNone(runtime.crossed(repo, drop, expand))
 
 
 class Objectives(unittest.TestCase):
-    """SLOs with error budgets and multi-window burn rates (D32)."""
+    """SLOs with error budgets and multi-window burn rates (D32), as numbers (D36)."""
 
     def store(self, minutes, bad_share, per_minute=100, start=0, latency_le="0.1"):
         store = Store()
@@ -247,99 +264,42 @@ class Objectives(unittest.TestCase):
         return {"s-1": {"name": "x", "sli": "availability", "target": 99.9, "window_d": 1, "selector": "counted",
                         "threshold_ms": None, **kw}}
 
-    def test_a_fast_burn_fires_only_on_both_windows(self):
+    def test_a_fast_burn_needs_both_windows(self):
         counted = lambda cid, kind: True
-        hot = evaluate(self.store(60, 0.02), self.slo(), 59, counted=counted, burn_fast=14.4, burn_slow=6)["s-1"]
-        self.assertEqual(hot["burn"]["5m"], 20.0)                                     # 2 % bad for 0.1 % allowed
-        self.assertTrue(hot["fast"])
+        hot = evaluate(self.store(60, 0.02), self.slo(), 59, counted=counted)["s-1"]
+        self.assertEqual((hot["burn"]["5m"], hot["fast_burn"]), (20.0, 20.0))         # 2 % bad for 0.1 % allowed
         self.assertLess(hot["budget"], 0)
         store = self.store(55, 0.0)
         for m in range(55, 60):
             store.add(m, "c-000000000001", "api", 100, 2, {"+Inf": 100})
-        blip = evaluate(store, self.slo(), 59, counted=counted, burn_fast=14.4, burn_slow=6)["s-1"]
+        blip = evaluate(store, self.slo(), 59, counted=counted)["s-1"]
         self.assertGreater(blip["burn"]["5m"], 14.4)                                  # five bad minutes
-        self.assertFalse(blip["fast"])                                                # but not over the hour
-        quiet = evaluate(self.store(60, 0.0005), self.slo(), 59, counted=counted, burn_fast=14.4, burn_slow=6)["s-1"]
-        self.assertFalse(quiet["fast"] or quiet["slow"])
+        self.assertLess(blip["fast_burn"], 14.4)                                      # but not over the hour
+        quiet = evaluate(self.store(60, 0.0005), self.slo(), 59, counted=counted)["s-1"]
+        self.assertLess(max(quiet["fast_burn"], quiet["slow_burn"]), 1)
         self.assertAlmostEqual(quiet["budget"], 0.5)
 
     def test_a_latency_sli_counts_requests_under_the_threshold(self):
         got = evaluate(self.store(10, 0.0), self.slo(sli="latency", threshold_ms=100, target=95.0), 9,
-                       counted=lambda c, k: True, burn_fast=14.4, burn_slow=6)["s-1"]
+                       counted=lambda c, k: True)["s-1"]
         self.assertAlmostEqual(got["compliance"], 0.9)                                # 90 % under 100 ms
         got = evaluate(self.store(10, 0.0), self.slo(sli="latency", threshold_ms=80, target=95.0), 9,
-                       counted=lambda c, k: True, burn_fast=14.4, burn_slow=6)["s-1"]
+                       counted=lambda c, k: True)["s-1"]
         self.assertAlmostEqual(got["compliance"], 0.5)                                # never rounded up to 100 ms
-
-    def test_release_policy_windows_freeze_and_budget(self):
-        policy = Policy(60_000, defaults={"deploy_days": "mon,tue,wed,thu,fri", "deploy_hours": "09-18",
-                                          "deploy_tz": "Europe/Paris"})
-        saturday = 1_791_619_200_000                                                  # 2026-10-10 10:00 Paris
-        self.assertFalse(policy.deploy_open(saturday)[0])
-        self.assertTrue(policy.deploy_open(saturday + 2 * 86_400_000)[0])             # Monday 10:00
-        facts, why = runtime.release_facts("met", A, B, [], set(), saturday, policy=policy)
-        self.assertNotIn("deployable", str(facts))
-        self.assertIn("window", why["deploy"])
-        policy = Policy(60_000, defaults={"freeze_below": 25.0})
-        facts, why = runtime.release_facts("met", A, B, [], set(), 0, policy=policy, budget=0.1)
-        self.assertNotIn("deployable", str(facts))
-        self.assertIn("budget", why["deploy"])
-        self.assertIn((f"run:release:all/{A}/{B}", "candidate", "yes"), facts)       # an engineer may still decide
-        facts, _ = runtime.release_facts("met", A, B, [], set(), 0, policy=Policy(60_000), budget=-3.0)
-        self.assertIn("deployable", str(facts))                                       # 0 % means never frozen
-
-    def test_settings_that_narrow_apply_at_once(self):
-        policy = Policy(60_000)
-        s = Settings.statement
-        change(policy, "global/deploy_days", "mon,tue", 1_000)
-        self.assertEqual(policy.get("deploy_days"), "mon,tue")                       # fewer days: now
-        change(policy, "global/deploy_days", "mon,tue,wed", 2_000)
-        self.assertEqual(policy.get("deploy_days"), "mon,tue")                       # more days: waits
-        change(policy, "s-api/target", "99.5", 3_000)
-        self.assertIn("s-api", policy.slos())                                         # a new SLO: now
-        change(policy, "s-api/state", "off", 4_000)
-        self.assertIn("s-api", policy.slos())                                         # removing one waits
-        change(policy, "global/strategy", "canary", 5_000)
-        self.assertEqual(policy.get("strategy"), "canary")                           # canary is stricter
-        policy.update(s(self, "m-x/until", "99999999999999", 6_000), {"h1"}, 6_000)
-        self.assertIn("m-x", policy.silences(7_000))                                  # a silence holds no bar
 
 
 class Canary(unittest.TestCase):
-    def history(self):
-        return [{"at": 0, "op": "deploy", "from": "none", "to": A}, {"at": 60_000, "op": "canary", "from": A, "to": B}]
-
-    def facts(self, canary_err, live_err=0.0, requests=500, now=60_000 + 11 * 60_000, canary=B, main=B):
-        policy = Policy(60_000, defaults={"strategy": "canary"})
-        stats = {B: {"requests": requests, "error_rate": canary_err, "p99": 100.0},
-                 A: {"requests": 5000, "error_rate": live_err, "p99": 100.0}}
-        return runtime.release_facts("met", A, main, self.history(), {A}, now, policy=policy, canary=canary,
-                                     canary_stats=lambda release, since: stats.get(release))
-
-    def test_start_bake_promote(self):
-        policy = Policy(60_000, defaults={"strategy": "canary"})
-        facts, _ = runtime.release_facts("met", A, B, [], set(), 0, policy=policy)
-        self.assertIn((f"run:canary:all/{A}/{B}", "canary_ready", "yes"), facts)
-        self.assertNotIn("deployable", str(facts))
-        facts, why = self.facts(0.001, now=60_000 + 3 * 60_000)
-        self.assertEqual([f for f in facts if "/" in f[0] and f[1] != "candidate"], [])          # still baking
-        self.assertIn("baking", why["canary"])
-        facts, why = self.facts(0.001)
-        self.assertIn((f"run:release:all/{A}/{B}", "promotable", "yes"), facts)
-
-    def test_a_worse_canary_is_taken_out_and_never_offered_again(self):
-        facts, why = self.facts(0.05, now=60_000 + 2 * 60_000)                       # fails fast, before the bake
-        self.assertIn((f"run:canary:abort/{A}/{B}", "canary_bad", "yes"), facts)
-        self.assertIn("points more", why["canary"])
-        history = self.history() + [{"at": 200_000, "op": "abort", "from": A, "to": B}]
-        facts, why = runtime.release_facts("met", A, B, history, {A}, 300_000,
-                                           policy=Policy(60_000, defaults={"strategy": "canary"}))
-        self.assertNotIn("canary_ready", str(facts))
-        self.assertIn("new commit", why["deploy"])
-
-    def test_main_moving_on_takes_the_canary_out(self):
-        facts, _ = self.facts(0.0, main=C)
-        self.assertIn((f"run:canary:abort/{A}/{B}", "canary_bad", "yes"), facts)
+    def test_the_scanner_signs_the_canary_numbers_beside_the_live_release(self):
+        history = [{"at": 0, "op": "deploy", "from": "none", "to": A}, {"at": 60_000, "op": "canary", "from": A, "to": B}]
+        stats = {B: {"requests": 500, "error_rate": 0.05, "p99": 120.0}, A: {"requests": 5000, "error_rate": 0.0, "p99": 100.0}}
+        f = facts_of(A, B, history, {A}, 60_000 + 11 * 60_000, N, canary=B, canary_stats=lambda rel, since: stats[rel])
+        r = f"run:release:all/{A}/{B}"
+        self.assertEqual({k: f[(r, k)] for k in ("canary_error_delta", "canary_requests", "canary_baked_min",
+                                                 "canary_p99_ms", "live_p99_ms")},
+                         {"canary_error_delta": "5.000", "canary_requests": "500", "canary_baked_min": "11",
+                          "canary_p99_ms": "120.000", "live_p99_ms": "100.000"})
+        self.assertEqual(f[(f"run:canary:abort/{A}/{B}", "running")], "yes")
+        self.assertNotIn((f"run:canary:all/{A}/{B}", "candidate"), f)                # one canary at a time
 
     def test_the_adapter_starts_promotes_and_aborts(self):
         root = Path(tempfile.mkdtemp())
@@ -460,7 +420,7 @@ class Production(unittest.TestCase):
             rounds()
             self.assertEqual(operator.releases.current(), m0)                 # m1 is never offered again
             self.assertEqual(obs("run:release:all|lag"), "behind")
-            self.assertEqual(obs(f"run:release:all/{m0}/{m1}|deployable"), "no")    # withdrawn once it went live
+            self.assertEqual(obs(f"run:release:all/{m0}/{m1}|candidate"), "no")     # withdrawn once it went live
             health = operator.service.view()["health"]
             self.assertIn("run-live", [o.get("target") for o in health["open"]])  # someone's gap, with a due date
             self.assertIn("run-slo", [p["target"] for p in health["proven"]])     # the service itself recovered
@@ -487,7 +447,8 @@ class Production(unittest.TestCase):
             rounds(2)
             self.assertEqual(operator.releases.current(), m0)                 # a candidate, not deployed alone
             self.assertEqual(obs(f"run:release:all/{m0}/{m2}|candidate"), "yes")
-            self.assertIsNone(obs(f"run:release:all/{m0}/{m2}|deployable"))
+            notes = json.loads((install / "agent" / "releases.json").read_text())
+            self.assertIn("approves", notes["why"]["deploy"])                  # the agent's restraint, said
             decide(f"run:release:all/{m0}/{m2}", "approved", "yes")
             rounds(1)
             self.assertEqual(operator.releases.current(), m2)                 # the engineer's decision, by the guard
@@ -499,7 +460,6 @@ class Production(unittest.TestCase):
             metrics.started = clock() // 1000 + 5                             # the runner started it again
             rounds(1)
             self.assertNotIn(f"proof:{restart}", operator.journal.snapshot()["obligations"])
-            self.assertEqual(operator.policy.get("auto_deploy"), "off")
         finally:
             gateway.shutdown()
             gateway.server_close()
@@ -576,13 +536,13 @@ class CanaryEndToEnd(unittest.TestCase):
             r1 = git("rev-parse", "main", cwd=repo)
             self.assertNotEqual(r1, m0)
             self.assertEqual(git("show", f"{r1}:standard/rules.json", cwd=repo).encode() + b"\n", doc)
-            self.assertEqual(operator.policy.get("strategy"), "canary")
             rounds(2)
             self.assertEqual((operator.releases.current(), operator.releases.canary()), (m0, r1))   # on a share
             rounds(9)
             self.assertEqual((operator.releases.current(), operator.releases.canary()), (r1, None))   # promoted
 
             def commit(text):
+                git("reset", "-q", "--hard", cwd=repo)                        # the guard moved main, not this tree
                 (repo / "app.py").write_text(text)
                 git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", text[:9], cwd=repo)
                 return git("rev-parse", "main", cwd=repo)
@@ -604,7 +564,6 @@ class CanaryEndToEnd(unittest.TestCase):
             facts = operator.service.view()["transitions"]
             self.assertEqual(facts[f"repo:config:rules/{here}/{sneaky}"]["configured"], "no")
             self.assertEqual(facts[f"repo:config:rules/{here}/{unsigned}"]["configured"], "no")
-            self.assertEqual(operator.policy.get("strategy"), "canary")
         finally:
             gateway.shutdown()
             gateway.server_close()

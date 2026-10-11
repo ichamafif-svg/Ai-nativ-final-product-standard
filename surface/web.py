@@ -309,13 +309,13 @@ class Installation:
         """The product in production: its APIs and their metrics, and the latest releases."""
         openapi = git(self.repo, "show", "main:openapi.json", check=False)
         from .telemetry import declared_routes
-        findings = _json(self.findings)
-        self.settle(findings)
+        findings, view = _json(self.findings), self.client.view()
+        policy = self.settle(view)
         report = self.telemetry.report(declared_routes(openapi), window=window)
-        self.frontier(report, findings)
+        self.frontier(report, findings, policy)
         report["burn"] = self.burn()
         return {**report, "product": self.product, "releases": self.history(8),
-                "live": self.live(findings, self.client.view()), "openapi": bool(openapi.strip())}
+                "live": self.live(findings, view), "openapi": bool(openapi.strip())}
 
     BURN = ((300, 14.4, "page"), (3600, 6.0, "ticket"))   # SRE workbook: budget spent 14.4x / 6x too fast
 
@@ -335,26 +335,46 @@ class Installation:
         view = self.client.view()
         return {"facts": view.get("facts", []), "prefix": view["prefix"], "law": view["law"]["digest"]}
 
-    def settle(self, findings: dict):
-        """The operator's effective settings (published beside the findings), so that the console judges as T does."""
-        from trusted.policy import Policy
-        published = findings.get("run:policy", {}).get("details")
-        if not published:
-            return None
-        policy = Policy(published["delay_ms"], None, defaults=published["defaults"])
-        policy.effective, policy.pending, policy.history = published["effective"], published["pending"], published["history"]
+    def rules_doc(self, commit: str = "main") -> dict:
+        try:
+            doc = json.loads(git(self.repo, "show", f"{commit}:standard/rules.json", check=False) or "{}")
+        except ValueError:
+            doc = {}
+        return doc if isinstance(doc, dict) else {}
+
+    def settle(self, view: dict | None = None):
+        """The engineers' settings as main carries them, and the signed silences (D36), so that the console judges
+        and alerts with them."""
+        from autonomy.policy import Policy
+        policy = Policy(self.rules_doc(), transitions=(view or {}).get("transitions"))
         self.telemetry.limits, self.telemetry.late_periods = policy.limits, int(policy.get("late_periods"))
         self.telemetry.slo = policy.get("objective") / 100
         return policy
 
+    def changes(self) -> list:
+        """The rules file's history on main: who changed what, when (git keeps it; the journal keeps the proofs)."""
+        from autonomy.policy import history
+        log = git(self.repo, "log", "-30", "--format=%H %at %an", "main", "--", "standard/rules.json", check=False)
+        versions = [(int(at) * 1000, author, self.rules_doc(h)) for h, at, author in
+                    (line.split(" ", 2) for line in log.splitlines()[::-1] if line.count(" ") >= 2)]
+        return history(versions)
+
+    @staticmethod
+    def flagged(findings: dict, policy) -> dict:
+        """The SLOs the scanner measured, with the engineers' alert thresholds applied: fast is a page, slow a ticket."""
+        return {sid: {**e, "fast": (e.get("fast_burn") or 0) >= policy.get("burn_fast"),
+                      "slow": (e.get("slow_burn") or 0) >= policy.get("burn_slow")}
+                for sid, e in (findings.get("run:slos", {}).get("details") or {}).items()}
+
     def burning(self) -> dict:
         """The SLOs burning their error budget, as open conditions for the alerts: fast is a page, slow a ticket."""
-        out = {}
+        out, policy = {}, self.settle()
         for sid, s in (_json(self.findings).get("run:slos", {}).get("details") or {}).items():
-            if s.get("fast") or s.get("slow"):
-                span = "1h" if s["fast"] else "6h"
-                out[("slo", "page" if s["fast"] else "ticket", s["name"])] = (
-                    "failing" if s["fast"] else "degraded",
+            fast = (s.get("fast_burn") or 0) >= policy.get("burn_fast")
+            if fast or (s.get("slow_burn") or 0) >= policy.get("burn_slow"):
+                span = "1h" if fast else "6h"
+                out[("slo", "page" if fast else "ticket", s["name"])] = (
+                    "failing" if fast else "degraded",
                     {"rule": "burn", "slo": sid, "span": span, "value": s["burn"][span], "budget": s["budget"]})
         return out
 
@@ -362,16 +382,16 @@ class Installation:
         """What an SLO would have said over the operator's recorded history: compliance, budget left, and how many
         times its fast and slow burn alerts would have fired. Nothing is signed: it helps choose before signing."""
         from trusted.slo import SPANS, Store, good_under, matches
-        policy = self.settle(_json(self.findings))
+        policy = self.settle()
         target, window_d = float(query.get("target", 99.9)), max(1, min(90, int(float(query.get("window_d", 30)))))
         sli, threshold = query.get("sli", "availability"), float(query.get("threshold_ms") or 1000)
         selector = query.get("selector", "counted")
-        fast, slow = (float(query.get("burn_fast") or (policy.get("burn_fast") if policy else 14.4)),
-                      float(query.get("burn_slow") or (policy.get("burn_slow") if policy else 6)))
+        fast, slow = (float(query.get("burn_fast") or policy.get("burn_fast")),
+                      float(query.get("burn_slow") or policy.get("burn_slow")))
         if not self.slo_db.exists():
             return {"minutes": 0}
         now_minute = int(time.time()) // 60
-        counted = lambda cid, kind: (policy.get("counted", cid) == "on" if policy and policy.get("counted", cid)
+        counted = lambda cid, kind: (policy.get("counted", cid) == "on" if policy.get("counted", cid)
                                      else kind != "dependency")
         total, bad = {}, {}
         for minute, cid, kind, t, b, buckets in Store(self.slo_db, readonly=True).rows(now_minute - window_d * 1440):
@@ -410,8 +430,9 @@ class Installation:
 
     def settings(self) -> dict:
         """Everything an engineer may set, its effective value, what is pending, and every component to tune (D31)."""
+        from autonomy.policy import law_bounds
         findings, view = _json(self.findings), self.client.view()
-        policy = self.settle(findings)
+        policy = self.settle(view)
         report = self.telemetry.report(window=3600)
         components = [{k: r.get(k) for k in ("id", "kind", "operation", "name", "state", "availability", "p99",
                                              "counted")} for rows in report["components"].values() for r in rows
@@ -421,8 +442,9 @@ class Installation:
         landing = [{"digest": k.split("/", 1)[1], **v} for k, v in notes.items() if k.startswith(main + "/")]
         return {"main": main, "rules_landing": landing,
                 "rules_file": bool(git(self.repo, "ls-tree", "--name-only", "main", "standard/rules.json", check=False).strip()),
-                "policy": findings.get("run:policy", {}).get("details") if policy else None, "components": components,
-                "slos": findings.get("run:slos", {}).get("details", {}),
+                "policy": policy.published(int(time.time() * 1000), law_bounds(view["law"]["effective"]["conditions"]),
+                                           self.changes()), "components": components,
+                "slos": self.flagged(findings, policy),
                 "probes": findings.get("run:probes", {}).get("details", []), "configured": self.deploy_root is not None,
                 "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
                             "grant": self.grants.get("engineer")}}
@@ -438,22 +460,23 @@ class Installation:
                                              if r.startswith(prefix) and f.get(prop) == "yes"), None)
         current = next((h["to"] for h in reversed(history) if h.get("op") in ("deploy", "rollback")), None)
         restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == current]
-        return {"configured": self.deploy_root is not None, "lag": lag.get("status"), "details": lag.get("details", []),
+        why = _json(self.request_notes.with_name("releases.json")).get("why") or {}    # the agent's restraint (D36)
+        return {"configured": self.deploy_root is not None, "lag": lag.get("status"),
+                "details": lag.get("details", []) + [f"{k}: {v}" for k, v in sorted(why.items())],
                 "slo": findings.get("run:service:all|slo", {}).get("status"), "switches": history[-12:][::-1],
                 "canary": self.canary_state(history),
-                "slos": findings.get("run:slos", {}).get("details", {}),
+                "slos": self.flagged(findings, self.settle(view)),
                 "actions": {"deploy": offered("run:release:all/", "candidate"),
-                            "abort": offered("run:canary:abort/", "canary_bad") or (
+                            "abort": offered("run:canary:abort/", "running") or (
                                 f"run:canary:abort/{current}/{self.canary_state(history)['release']}"
                                 if self.canary_state(history) else None),
                             "rollback": offered("run:service:all/", "previous"),
                             "restart": f"run:process:all/{current}/{len(restarts) + 1}" if current else None},
                 "grant": self.grants.get("engineer")}
 
-    def acts(self, findings: dict | None) -> str:
+    def acts(self, policy) -> str:
         """What Standard does alone in production, in the engineers' current settings (D31)."""
-        p = ((findings or {}).get("run:policy") or {}).get("details") or {}
-        get = lambda k: (p.get("effective") or {}).get(f"global/{k}", (p.get("defaults") or {}).get(k))
+        get = policy.get
         parts = [f"Retour à la version précédente si l'objectif casse dans les {get('rollback_horizon_min') or 30} min "
                  "qui suivent une mise en production, ou si la nouvelle version ne démarre pas"
                  if get("auto_rollback") != "off" else "Retour arrière décidé par un ingénieur",
@@ -476,7 +499,7 @@ class Installation:
 
     FRONTIER = ("see", "alert", "act", "prove")
 
-    def frontier(self, report: dict, findings: dict | None = None) -> None:
+    def frontier(self, report: dict, findings: dict | None = None, policy=None) -> None:
         """For every component, what Standard does about it without a person, capability by capability, and why not.
 
         see: its metrics are collected and judged against published rules; alert: someone is told when it degrades;
@@ -490,7 +513,7 @@ class Installation:
             "alert": ("Signalé dans l'interface dès qu'il se dégrade ; une personne le prend en charge par une signature. "
                       "Pas encore d'e-mail ni de messagerie.",
                       "Personne n'est prévenu : Standard ne le voit pas en ce moment."),
-            "act": (self.acts(findings), 
+            "act": (self.acts(policy or self.settle()),
                     "Aucune action en production n'est configurée : Standard ne déploie pas, ne revient pas à la version "
                     "précédente, ne redémarre pas et n'ajoute pas de capacité."),
             "prove": ("Son état entre dans le fait signé « run:service:all slo » du journal, vérifiable par un auditeur.",
@@ -530,8 +553,8 @@ class Installation:
             out.append({"id": e["obligation"], "kind": "obligation", "operation": "", "name": e["obligation"],
                         "state": "escalated", "worst": "escalated", "why": {"rule": "overdue", "due": e["due"]},
                         "opened_ms": e["due"], "closed_at": None, "source": "law", "resource": resource})
-        from trusted.policy import component_id
-        silences = ((_json(self.findings).get("run:policy") or {}).get("details") or {}).get("silences", {})
+        from trusted.runtime import component_id
+        silences = self.settle(view).silences(now)
         for a in out:
             facts = view["transitions"].get(a["resource"], {})
             a["taken"] = facts.get("ack") == "taken"

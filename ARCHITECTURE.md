@@ -308,15 +308,15 @@ Chaque ligne de la TCB locale est comptée dans **exactement un** budget, selon 
 
 | Budget | Lignes / plafond | Contenu |
 |---|---|---|
-| Noyau K (sûreté) | **2 228 / 3 200** | jugement, langage, loi, obligations, FLOOR-0, floors |
-| Sûreté T | **1 196 / 1 196** | journal, garde, horloge, frontière, service, passerelle, livraison, release, processus opérateur |
+| Noyau K (sûreté) | **2 240 / 3 200** | jugement, langage, loi, obligations, FLOOR-0, floors |
+| Sûreté T | **1 188 / 1 188** | journal, garde, horloge, frontière, service, passerelle, livraison, release, processus opérateur |
 | Intégrations T06/T07/T08 (sûreté) | **1 099 / 1 099** | instruments de toutes les cibles, isolation, contrat des demandes, données épinglées, recettes, adaptateurs git et GitHub, passes opérateur |
-| Production T06/T07/T08 (sûreté) | **1 205 / 1 205** | instrument de production (573), bascules de release (201), réglages des ingénieurs (320), SLO (111) |
+| Production T06/T07/T08 (sûreté) | **791 / 791** | mesure de production (479 : lecture des métriques, sondes, ce qui est sur chaque bascule, nombres), bascules de release (201), SLO (111). Était 1 205 avant D36 |
 | Hébergement (sûreté) | **71 / 71** | passerelle SSH à commande forcée |
 | Second juge (restrictif seul) | **797 / 797** | |
 | Redevabilité (visibilité) | **250 / 250** | |
 
-  TCB locale : **6 846 lignes**, dont 3 821 hors noyau et second juge. Le budget production est le plus gros morceau de jugement **non relu** hors du noyau : il est borné par la loi (§12, `compare`), pas par une revue. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
+  TCB locale : **6 436 lignes** (6 846 avant D36), dont 3 399 hors noyau et second juge. Depuis D36, le budget production ne contient plus de jugement réglable : il mesure et signe ce qui est, la loi compare, l'agent se retient. Il reste du code **non relu**. Les relèvements de plafond sont consignés avec leur motif dans `tcb-budget.json` (`_raised`).
 - Aucun compactage, renommage ou déplacement ne compte comme réduction.
 
 ---
@@ -653,7 +653,7 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 | T06 | `trusted/instruments.py`, `trusted/operator.py` | Toutes les sondes des floors ; les propriétés **épinglées** (`instruments` des floors : tests, régressions, reproduction, acceptation, contrat, règles, faits de production) ne s'acceptent que comme `measurement` signée par `@scanner` avec méthode, couverture, date et artefact. Une `observation` d'une propriété épinglée est refusée (`PROV.INSTRUMENT`), une mesure d'une autre source aussi (`PROV.COVERAGE`) : un relecteur ne peut pas signer « tests au vert » (D33) |
 | T06 | `trusted/isolation.py` | Le code des contributeurs et de l'agent tourne sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire ; il ne lit pas les clés de la garde. Sonde `qualify` : « T06 contributors' code runs isolated » |
 | T06 | `trusted/build.py` | Le contrat d'une demande (fichier de tests d'acceptation stocké par digest) : `contract` = `red` sur main (la demande demande du nouveau), `acceptance` = `green` sur l'implémentation, `altered` si le fichier diffère (D34) |
-| T06 | `trusted/runtime.py`, `trusted/slo.py`, `trusted/policy.py` | Faits de production signés par le scanner : couverture des sources, SLO tenu ou rompu (taux de consommation), version servie, candidats, canary, migrations compatibles ; nombres pour les bornes de la loi (D30–D35) |
+| T06 | `trusted/runtime.py`, `trusted/slo.py` | Mesures de production signées par le scanner (D36) : couverture des sources, SLO tenu ou rompu, et sur chaque bascule exacte ce qui est (`candidate`, `previous`, `proven`, `live`, `running`) et des nombres (consommation rapide, part en échec, minutes depuis la bascule, deltas du canary, budget restant, migrations traversées). Aucun réglage d'ingénieur n'y est jugé |
 | T07, T08 | `trusted/guard.py`, `trusted/adapters.py`, `trusted/deploy.py` | CAS de `main` (git local ou GitHub), bascules de release (`current`, `canary`, redémarrage sans coupure) ; readback `applied / not_applied / unknown` ; preuve par l'oracle |
 | T09 | `trusted/delivery.py` | Outbox et livraison ; **non branchée** sur e-mail ni messagerie (les alertes ne sont que dans l'interface) |
 
@@ -684,7 +684,7 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 | Integrator | `autonomy/contributions.py` | Soumet `integrate` pour chaque contribution de la boîte de dépôt | Signer un fait |
 | Builder | `autonomy/build.py` | Implémente une demande contractée (`implement`), commit avec `Standard-Request: <rid>` ; livre la demande (`deliver`) quand main passe le contrat | Écrire sous `tests/`, `.github/`, `standard/` |
 | Configurer | `autonomy/rules.py` | Commite exactement le `standard/rules.json` signé par un ingénieur, trailer `Standard-Rules: <digest>`, puis `configure` | Écrire autre chose que ce fichier |
-| Releaser | `autonomy/release.py` | `deploy`, `rollback`, `restart`, `canary`, `abort` quand les faits le permettent (variante autonome ou revue) | Choisir un seuil : il ne lit que les faits |
+| Releaser | `autonomy/release.py`, `autonomy/policy.py` | `deploy`, `rollback`, `restart`, `canary`, `abort` : compare les nombres signés aux réglages des ingénieurs (`standard/rules.json` sur main) et soumet sous la capacité dont la condition tient (D36) | Agir hors des bornes de la loi : le noyau refuse |
 
 ### 11.2 Routes
 
@@ -756,7 +756,7 @@ Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes
 |---|---|---|
 | **Run** | Run | Composants et signaux, version en production, SLO et budgets, frontière d'autonomie par composant (Voit, Prévient, Agit, Prouve, D29), écarts non couverts en tête, décisions qui restent aux ingénieurs (mettre main en production, revenir, redémarrer, promouvoir ou retirer un canary), chacune signée dans le navigateur |
 | **Alertes** (D30) | Run | Une alerte s'ouvre quand un composant passe dégradé ou en échec sur 5 minutes, quand un SLO brûle vite (page) ou lentement (ticket), quand une source se tait ou quand une obligation dépasse son échéance ; prise en charge par une signature (`ack = taken` sur `repo:alert/…`), silences signés (`run:policy/m-*`), fermeture au retour du composant. Bandeau sur toutes les pages, badge, titre de l'onglet. Ni e-mail ni messagerie |
-| **Objectifs et règles** (D31, D32, D35) | Run | Onglets : SLO et budgets, Alertes (fenêtres de consommation), Mise en production (stratégie directe ou canary, fenêtres, gel, gel sur budget), Santé immédiate, Composants (comptés ou non, objectif propre), Sondes, Silences, Règles en code (`standard/rules.json` sur main), Historique. Chaque champ dit sa borne ; resserrer s'applique tout de suite, relâcher après le délai de la loi. Une modification = une signature de l'ingénieur sur `repo:config:rules/<main>` |
+| **Objectifs et règles** (D31, D32, D35, D36) | Run | Onglets : SLO et budgets, Alertes (fenêtres de consommation), Mise en production (stratégie directe ou canary, fenêtres, gel, gel sur budget), Santé immédiate, Composants (comptés ou non, objectif propre), Sondes, Silences, Règles en code (`standard/rules.json` sur main), Historique (le `git log` du fichier). Chaque champ dit sa borne et, s'il y en a une, celle de la loi ; un changement s'applique dès que main le porte. Un réglage qui demande moins que la loi est signalé : l'agent n'agira pas seul pour autant. Une modification = une signature de l'ingénieur sur `repo:config:rules/<main>` |
 | **Autonomie, Conformité, Activité** | Run | Ce que l'agent fait seul, avec un humain, ou pas du tout ; la carte des exigences par domaine (sécurité du code, dépendances et chaîne logicielle, CI, gouvernance du code, organisation) ; les écarts rangés par qui s'en occupe, les réparations de l'agent, ses abandons et leur dossier |
 | **Demandes** (D34) | Construction | Écrire une demande et ses tests d'acceptation, voir le contrat mesuré (`red` = demande du nouveau ; `passes:N` = ne promet rien), signer le contrat, suivre l'implémentation, l'acceptation, la revue et la livraison |
 | **Contributions** | Construction | La boîte de dépôt et les faits mesurés (tests, régressions, revue), avec la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`) |
@@ -802,23 +802,25 @@ Les floors portent la direction (autonomie, sécurité, conformité) dans le **m
 
 **Demandes (D34).** Ressource typée `request` (`build:request/<rid>`, champs `title`, `spec`, `contract` en digests) : `proposed → contracted` exige `contract = red` (les tests d'acceptation échouent sur main : la demande demande du nouveau), `contracted → delivered` exige `accepted = yes` (main passe le contrat), `withdraw` depuis les deux premiers états. Enregistrer et contracter : le rôle produit (`register:request`, `transition:request:contract`).
 
-**Production (D30–D35)** — cibles observées par `@scanner`, fraîcheur 15 min :
+**Production (D30–D36)** — cibles observées par `@scanner`, fraîcheur 15 min :
 
 | Id | Ressource | Attendu | Échéance | Réparation |
 |---|---|---|---|---|
 | run-sources | `run:sources:all` | couverture complète | 1 h | humaine |
-| run-slo | `run:service:all` | `slo = met` | 30 min | `rollback` |
+| run-slo | `run:service:all` | `slo = met` (aucun composant compté à 5 % d'échecs ou plus, aucun SLO qui consomme à 14,4 ou plus) | 30 min | `rollback` |
 | run-live | `run:release:all` | `lag = none` | 1 jour | `deploy` |
 
-| Opération | Ressource | Autonome | Revue |
-|---|---|---|---|
-| `deploy` | `run:release:all/{from}/{to}` | `deployable = yes` ; en canary : `promotable = yes`, `canary_error_delta ≤ 2`, `canary_requests ≥ 20`, `canary_baked_min ≥ 1` | `candidate` + `approved` |
-| `rollback` | `run:service:all/{from}/{to}` | `regressed = yes`, `breach_age_min ≤ 240` | `previous` + `requested` |
-| `restart` | `run:process:all/{release}/{n}` | `restartable = yes`, `restarts_last_hour ≤ 11` | `requested` |
-| `canary` | `run:canary:all/{from}/{to}` | `canary_ready = yes` | — |
-| `abort` | `run:canary:abort/{from}/{to}` | `canary_bad = yes` | `requested` |
+Le scanner signe ce qui est sur chaque bascule exacte et des nombres ; la loi dit sur quelles preuves l'agent agit seul (D36) :
 
-Les bornes numériques sont des valeurs **de la loi**, comparées par le noyau (`compare`) : un scanner fautif ne peut pas promouvoir un canary qui a 3 points d'erreurs de plus. Les seuils plus fins (objectif, canary à 0,5 point, horizon) sont des réglages des ingénieurs, lus et appliqués par l'instrument de production (`trusted/policy.py`) : la loi est le plafond ; un réglage plus lâche que la loi reste sans effet, le noyau refuse.
+| Opération | Ressource | Autonome (capacité) | Revue |
+|---|---|---|---|
+| `deploy` | `run:release:all/{from}/{to}` | `candidate` (`agent_deploy`) ; promotion d'un canary : `candidate`, `canary_error_delta ≤ 2`, `canary_requests ≥ 20`, `canary_baked_min ≥ 1` (`agent_promote`) | `candidate` + `approved` |
+| `rollback` | `run:service:all/{from}/{to}` | `previous`, `proven`, `switched_min ≤ 240` et `burn_fast ≥ 14,4` (`agent_rollback`) ou `failing_pct ≥ 5` (`agent_rollback_failing`) ; ou `previous`, `proven`, `unanswered_s ≥ 90` (`agent_rollback_unanswered`) | `previous` + `requested` |
+| `restart` | `run:process:all/{release}/{n}` | `live`, `restarts_last_hour ≤ 11`, et `failing_pct ≥ 5` (`agent_restart`) ou `burn_fast ≥ 14,4` (`agent_restart_burn`) | `requested` |
+| `canary` | `run:canary:all/{from}/{to}` | `candidate` | — |
+| `abort` | `run:canary:abort/{from}/{to}` | `running` (retirer un canary est toujours sûr) | `requested` |
+
+Les bornes sont la **preuve minimale** pour agir seul, comparée par le noyau. Les réglages des ingénieurs (stratégie, fenêtres, gel, horizon de 30 min, canary à 0,5 point, seuils d'alerte, interrupteurs d'autonomie) sont la retenue de l'agent, hors TCB (`autonomy/policy.py`) : ils peuvent exiger plus, jamais moins. Pour un arrêt garanti par le noyau, révoquer une capacité ou geler un périmètre (`run:release:*`) s'applique tout de suite ; rendre l'autonomie attend le délai témoigné.
 
 **Instruments épinglés (D33).** Les floors réservent à `@scanner` : `tests`, `regressions`, `reproduced`, `acceptance`, `contract`, `configured`, `accepted` et tous les faits de production ci-dessus. Chacun déclare méthode, couverture et fraîcheur ; seule une `measurement` de cette source le porte.
 
@@ -1113,6 +1115,7 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 | D33 | **Deux trous fermés.** (1) Pour mesurer « tests », le côté de confiance exécutait le code d'une contribution sous l'utilisateur de la garde, qui lit les clés : une contribution hostile pouvait signer n'importe quoi. Ce code tourne désormais sous un compte sans clé ni groupe de la garde (`[tests] runner_user`, via `sudo -n -u … env -i`), dans un espace de noms sans réseau (`unshare -rn`), sous limite mémoire, sur une copie du dépôt (`trusted/isolation.py`) ; la qualification le vérifie (T06). (2) Les conditions exigeaient un fait indépendant de l'acteur, pas un fait de l'instrument : un relecteur pouvait signer lui-même « tests au vert ». Les faits qui ouvrent un droit (tests, régressions, reproduction, acceptation, faits de production) sont maintenant des **instruments épinglés** dans les planchers : le noyau ne les admet que comme mesures du scanner (méthode, couverture, fraîcheur), le second juge aussi | Deux promesses centrales (« un agent ou un client compromis ne peut rien signer », « une personne ne remplace pas une mesure par une opinion ») ne tenaient pas ; le noyau avait déjà le mécanisme des instruments, inutilisé |
 | D34 | **Construire sous la loi.** Une demande est une ressource typée (`request` : proposée, contrat signé, livrée, retirée). Son contrat est un fichier de tests d'acceptation écrit par une personne avant tout code, gardé par son empreinte. Le contrat ne se signe que si le scanner a vu chacun de ses tests échouer sur main (un test qui passe déjà ne promet rien). L'agent implémente (code seulement, jamais un test, le contrat recopié à l'octet), vérifie dans son bac à sable, propose ; l'op `implement` exige acceptation au vert sur cette transition exacte, tests de main au vert, aucune régression et une revue signée. Un contributeur peut aussi implémenter (même contrat, trailer `Standard-Request:`). La demande est livrée quand main passe le contrat (`accepted`), et l'agent l'enregistre | Ce que la loi ne savait pas vérifier (« le changement fait ce qui était demandé ») devient un fait mesuré contre un contrat signé, avec la même chaîne que la maintenance. Limites : sans modèle configuré, l'agent n'implémente pas ; un contrat ne couvre que ce que ses tests disent |
 | D35 | **Les règles dans le dépôt ; la loi borne le jugement du scanner.** `standard/rules.json` sur main est la source de tous les réglages sauf les silences : on le change par une contribution relue, ou depuis l'interface en signant une fois le nouveau fichier (l'agent le commit à l'identique, le scanner vérifie que seul ce fichier change et que l'empreinte est celle signée par un ingénieur pour ce main, l'op `configure` l'intègre). Le noyau gagne un atome `compare` (comparaison décimale exacte, recalculée par le second juge) : les planchers bornent de l'extérieur ce que le jugement du scanner peut ouvrir (canary : au plus 2 points d'erreurs de plus, au moins 20 requêtes et une minute ; retour arrière dans les 240 min ; pas de 12e redémarrage dans l'heure) | Git pour l'ingénieur, le journal pour l'auditeur, un clic pour la personne pressée. Le jugement fin reste côté confiance (réglages plus stricts), mais un défaut de ce code ne peut plus dépasser les bornes que le noyau vérifie. La base de confiance n'a pas rétréci : la partie production est passée à 1 205 lignes |
+| D36 | **Le scanner mesure, la loi borne, l'agent se retient.** Le scanner ne juge plus rien de réglable : il signe ce qui est sur chaque bascule exacte (`candidate`, `previous`, `proven`, `live`, `running`) et des nombres (`burn_fast`, `failing_pct`, `switched_min`, `unanswered_s`, `restarts_last_hour`, `migrations_crossed`, `budget_pct`, deltas du canary). Les floors fixent la preuve minimale pour agir seul (§12), comparée par le noyau. Les réglages des ingénieurs passent dans U (`autonomy/policy.py`) : l'agent les applique avant de soumettre, et ils ne peuvent qu'exiger plus que la loi. Le délai sur les assouplissements de D31 disparaît des réglages : il reste là où il garantit quelque chose, sur la loi et les capacités (resserrer, révoquer, geler : tout de suite ; élargir : après le délai témoigné) | La production était 1 205 lignes de jugement non relu dans la TCB, dont 320 de réglages et ~150 de décisions qui ouvraient des droits. Un défaut dans la retenue de l'agent ne donne plus que ce que la loi permet déjà ; un défaut du scanner reste possible, mais sur des mesures, plus simples à vérifier qu'un jugement. Prix : un ingénieur qui assouplit un réglage, dans les bornes de la loi, est suivi dès l'intégration |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1186,11 +1189,11 @@ trusted/     T — journal, pins, garde, horloge, livraison, passerelle, service
              opérateur (daemon), second juge (checker), release ;
              intégrations : instruments, operator (passes), recipes, adapters, github, data,
              isolation (exécutant), build (contrat des demandes) ;
-             production : runtime (instrument), slo, policy (réglages), deploy (bascules) ;
+             production : runtime (mesure), slo, deploy (bascules) ;
              hosting (passerelle SSH).
 autonomy/    U — projection, Work Engine, agent, cycle, bac à sable, précontrôle, mémoire,
              carte du dépôt, porte LLM ; Integrator (contributions), Builder (demandes),
-             Configurer (règles), Releaser (production).
+             Configurer (règles), Releaser et policy (production : la retenue de l'agent, D36).
 surface/     Interface : CLI (`python -m surface`), web (`python -m surface.web`), telemetry
              (lecture Prometheus), static/ (page, application, signature dans le navigateur).
 tests/       Un test par règle du registre §17, un par garantie G01–G16, les dix scénarios
@@ -1207,7 +1210,7 @@ demo/        Le dépôt de démonstration, hors de ses floors au départ ; servi
 - `kernel` n'importe rien de Standard.
 - `trusted` n'importe que `kernel`.
 - Le second juge n'importe ni le noyau ni son évaluateur.
-- `autonomy` et `surface` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable. Ils peuvent seulement utiliser comme bibliothèques (`U_MAY_USE` dans `tools/check_tcb.py`) `trusted.instruments`, `trusted.build`, `trusted.runtime`, `trusted.policy`, `trusted.slo` (lecture et calcul, sans clé), `trusted.recipes`, `trusted.data`, `trusted.signing` (signer avec leur propre clé) et `trusted.gateway`.
+- `autonomy` et `surface` ne parlent à K/T que par la passerelle d'admission ; ils ne reçoivent ni clé, ni credential, ni journal mutable. Ils peuvent seulement utiliser comme bibliothèques (`U_MAY_USE` dans `tools/check_tcb.py`) `trusted.instruments`, `trusted.build`, `trusted.runtime`, `trusted.slo` (lecture et calcul, sans clé), `trusted.recipes`, `trusted.data`, `trusted.signing` (signer avec leur propre clé) et `trusted.gateway`.
 - Le budget de chaque fichier de `kernel/` et `trusted/` est déclaré ; tout dépassement bloque.
 
 ---
@@ -1271,6 +1274,7 @@ Chaque garantie est évaluée sur cinq axes — sémantique, compositions, défa
 | Isolation et instruments (D33) | Fait et vérifié : une contribution hostile ne lit pas la clé et n'atteint pas le réseau (test), qualification T06 PASS en direct ; un relecteur qui signe « tests au vert » est refusé par le noyau |
 | Construction (D34) | Fait et démontré en direct : demande écrite et signée dans Chromium par h1, contrat rouge sur main vérifié par le scanner, contrat signé, implémentation par Alice (contrat recopié, trailer), acceptation au vert mesurée en isolation, revue de h3, intégration, livraison enregistrée par l'agent, mise en production. L'implémentation par l'agent est testée avec un modèle simulé, jamais avec un vrai modèle |
 | Règles dans le dépôt (D35) | Fait et démontré en direct : passage en canary signé une fois par h1, fichier commité par l'agent, intégré par la loi, puis le changement lui-même passé en canary |
+| Production réduite à la mesure (D36) | Fait et testé (bout en bout, dont un retour arrière refusé par le noyau sur une consommation de 9,5) : budget production 1 205 → 791 lignes. **Non redémontré en direct** : la démo installée tourne encore l'ancien code |
 | Tests | 125 tests (`make check` : couches, budgets, tests) |
 | Pas encore là | Agent avec un vrai modèle (jamais exécuté) ; adaptateurs Kubernetes et Prometheus managé ; livraison des alertes hors interface ; projection conformité ISO/NIS2/DORA ; métriques du canary vues par le seul lanceur (auto-déclarées par le produit) ; budget production (1 205 lignes) non relu, borné seulement par la loi |
 | Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |

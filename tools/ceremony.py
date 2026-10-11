@@ -46,9 +46,12 @@ GRANTS = {
     "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*", "run:*"], []),
     "agent_deploy": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-autonomous"]),
     "agent_rollback": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-autonomous"]),
+    "agent_rollback_failing": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-failing"]),
+    "agent_rollback_unanswered": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-unanswered"]),
     "agent_deploy_reviewed": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-reviewed"]),
     "agent_rollback_reviewed": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-reviewed"]),
     "agent_restart": ("agent", ["effect:restart"], ["run:process:*"], ["restart-autonomous"]),
+    "agent_restart_burn": ("agent", ["effect:restart"], ["run:process:*"], ["restart-burn"]),
     "agent_restart_reviewed": ("agent", ["effect:restart"], ["run:process:*"], ["restart-reviewed"]),
     "agent_canary": ("agent", ["effect:canary"], ["run:canary:*"], ["canary-autonomous"]),
     # D34: the agent implements contracted requests (always reviewed) and records their delivery.

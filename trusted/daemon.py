@@ -24,7 +24,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from floors import RELEASE
 from kernel import Kernel
-from kernel.floor0 import MIN_DELAY_MS
 
 from .adapters import GitRepository, Readback
 from .boundary import SignedAssessment
@@ -37,7 +36,6 @@ from .journal import Journal, PinStore
 from .operator import MAIN_OPS, Instruments, Prover
 from .release import code_digest
 from .isolation import Isolation
-from .policy import Policy
 from .slo import Store
 from .runtime import Pass, Production
 from .service import TrustedService
@@ -82,13 +80,10 @@ class Installation:
             self.repo_path = self.proposals = resolve(repo["mirror"])
             self.world = self.repository
         run, deploy = c.get("run", {}), c.get("deploy")
-        self.policy = Policy(MIN_DELAY_MS, self.path.parent / "policy.json", defaults={   # D31: engineers' settings
-            "objective": float(run.get("slo", 99.9)), "base_url": run.get("base_url", "")})
-        production = Production(run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100, policy=self.policy,
-                                store=Store(self.path.parent / "slo.db"),
+        production = Production(run.get("metrics", []), store=Store(self.path.parent / "slo.db"),
                                 release_source=(deploy or {}).get("runner_metrics"))
         self.releases = Releases(self.repo_path, resolve(deploy["root"]), deploy.get("restart"), clock=self.clock,
-                                 served=production.served, canary_percent=lambda: self.policy.get("canary_percent")
+                                 served=production.served, canary_percent=lambda: production.measures["canary_percent"]
                                  ) if deploy else None
         ports = {op: self.repository.remediate for op in MAIN_OPS} | ({
             "deploy": self.releases.switch, "rollback": self.releases.switch,
@@ -113,11 +108,8 @@ class Installation:
                                                           if gid == grants.get("engineer")})
         self.prover = Prover(self.service, self.repository, key(self.keys, "oracle"), grants["oracle"], self.clock,
                              releases=self.releases)
-        engineer = grants.get("engineer")
         self.production = Pass(self.service, self.instruments.instrument, production, self.repo_path,
-                               releases=self.releases, state=self.path.parent / "production.json", policy=self.policy,
-                               authors=lambda: {g["holder"] for gid, g in self.journal.snapshot()["grants"].items()
-                                                if gid == engineer})
+                               releases=self.releases, state=self.path.parent / "production.json")
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):

@@ -564,7 +564,7 @@ let settingsData = null, objTab = localGet("objtab") || "slos";
 function objectivesView() {
   return `<h1>Objectifs et règles</h1><p class="lede">Ce que la production doit tenir, comment on est prévenu et ce que Standard a le droit d'y faire seul.
     Tout vit dans <span class="sha">standard/rules.json</span>, dans le dépôt : chaque changement fait ici est ce fichier, signé une fois, commité par l'agent et intégré par la loi.
-    <b>Plus strict : appliqué dès l'intégration. Plus souple : après le délai de la loi.</b></p>
+    <b>Appliqué dès l'intégration, dans les bornes de la loi : un réglage qui demande moins que la loi ne permet rien de plus à l'agent.</b></p>
     <div class="tabs" role="tablist">${TABS.map(([id, label]) => `<button role="tab" data-objtab="${id}" aria-selected="${id === objTab}">${label}</button>`).join("")}</div>
     <div id="obj"><p class="quiet">Chargement</p></div>`;
 }
@@ -601,13 +601,14 @@ async function loadObjectives() {
     const what = { objective: "objectif", p99_ms: "p99 max", counted: "compté dans l'objectif" }[key] || key;
     return `${comps[scope] || "Composant"}, ${what} : ${val}`;
   };
+  const lawText = (key) => p.law[key] ? `la loi : ${p.law[key][0] === "ge" ? "au moins" : "au plus"} ${p.law[key][1]}` : "";
   const pend = (name) => p.pending[name] ? `<span class="fact wait"><i></i>${esc(label(name, p.pending[name].value))} : plus souple, appliqué ${left(p.pending[name].applies_at)}</span>` : "";
   const field = (key, scope = "global", fallback = p.defaults[key]) => {
     const name = `${scope}/${key}`, v = value(name, fallback), [lab, unit, help] = SETTINGS[key], b = p.bounds[key];
     const input = key === "deploy_tz"
       ? `<select data-set="${name}" ${dis}>${ZONES.map((z) => `<option ${z === v ? "selected" : ""}>${z}</option>`).join("")}</select>`
       : `<input class="num" type="${["base_url", "deploy_hours"].includes(key) ? "text" : "number"}" data-set="${name}" value="${esc(v ?? "")}" ${b && typeof b[0] === "number" ? `min="${b[0]}" max="${b[1]}" step="any"` : ""} ${dis}>`;
-    return `<div class="set"><div class="sl"><b>${lab}</b><span class="small quiet">${help}</span></div>
+    return `<div class="set"><div class="sl"><b>${lab}</b><span class="small quiet">${help}${p.law[key] ? ` Pour agir seul, ${lawText(key)}.` : ""}</span></div>
       <div class="sv">${input}<span class="unit">${unit}</span><button class="btn" data-save="${name}" ${dis}>Enregistrer</button></div><div class="sp">${pend(name)}</div></div>`;
   };
   const toggle = (key) => {
@@ -649,7 +650,7 @@ async function loadObjectives() {
           <div class="sv"><div class="seg">${[["direct", "Directe"], ["canary", "Canary"]].map(([v, l]) => `<button data-strategy="${v}" aria-pressed="${v === strategy}" ${dis}>${l}</button>`).join("")}</div></div><div class="sp">${pend("global/strategy")}</div></div>
         ${strategy === "canary" ? ["canary_percent", "canary_bake_min", "canary_max_error_delta", "canary_min_requests"].map((k) => field(k)).join("") : ""}</div>
       <h3>Quand</h3><div class="panel sets">${toggle("freeze")}
-        <div class="set"><div class="sl"><b>Jours de mise en production</b><span class="small quiet">Retirer un jour s'applique tout de suite ; en ajouter attend le délai.</span></div>
+        <div class="set"><div class="sl"><b>Jours de mise en production</b><span class="small quiet">L'agent ne met en production seul que ces jours-là.</span></div>
           <div class="sv"><div class="days">${Object.entries(DAYNAMES).map(([d, l]) => `<label><input type="checkbox" data-day="${d}" ${days.includes(d) ? "checked" : ""} ${dis}>${l}</label>`).join("")}</div>
           <button class="btn" id="savedays" ${dis}>Enregistrer</button></div><div class="sp">${pend("global/deploy_days")}</div></div>
         ${field("deploy_hours")}${field("deploy_tz")}${field("freeze_below")}</div>
@@ -817,14 +818,9 @@ async function loadObjectives() {
     return out;
   };
   const way = (key, old, nw) => {
-    const w = p.ways[key];
-    if (w === null || w === undefined) return "neutre";
-    if (old === undefined) return "plus strict";
-    if (w === "subset") return nw.split(",").every((d) => old.split(",").includes(d)) ? "plus strict" : "plus souple";
-    if (w === "within") { const [a, b] = old.split("-").map(Number), [c, d] = String(nw).split("-").map(Number); return a <= c && d <= b ? "plus strict" : "plus souple"; }
-    if (typeof w === "string") return nw === w || nw === old ? "plus strict" : "plus souple";
-    if (w === 0) return "plus souple";
-    return (Number(nw) - Number(old)) * w >= 0 ? "plus strict" : "plus souple";
+    const l = p.law[key];
+    if (!l) return "neutre";
+    return (l[0] === "ge" ? Number(nw) >= l[1] : Number(nw) <= l[1]) ? "dans la loi" : "hors loi";
   };
   $("#codediff")?.addEventListener("click", () => {
     let doc;
@@ -834,7 +830,7 @@ async function loadObjectives() {
     $("#diff").innerHTML = !changes.length ? `<p class="small quiet">Aucun changement.</p>` : `<div class="rows">${changes.map(([k, v]) => {
       const w = way(k.split("/")[1], before[k], v);
       return `<div class="rowi"><div class="main"><span class="sha">${esc(k)}</span> <span class="del">${esc(String(before[k] ?? "—"))}</span> → <span class="add">${esc(String(v))}</span>
-        <div class="facts">${fact(w === "plus souple" ? `plus souple : appliqué dans ${Math.round(p.delay_ms / 60000)} min` : w === "neutre" ? "appliqué tout de suite" : "plus strict : appliqué tout de suite", w === "plus souple" ? "wait" : "ok")}</div></div></div>`; }).join("")}</div>
+        <div class="facts">${fact(w === "hors loi" ? `au-delà de la loi (${lawText(k.split("/")[1])}) : l'agent n'agira pas seul pour autant` : "appliqué dès l'intégration", w === "hors loi" ? "wait" : "ok")}</div></div></div>`; }).join("")}</div>
       <div class="decide"><button class="btn primary" id="codesign">Signer ce fichier (${changes.length} changement${changes.length > 1 ? "s" : ""})</button>
         <span class="small quiet">Une signature : l'agent commit le fichier, la loi l'intègre après les mesures.</span></div>`;
     $("#codesign").onclick = async () => {

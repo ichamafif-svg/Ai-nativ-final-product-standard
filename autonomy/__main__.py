@@ -89,8 +89,15 @@ def build(config_path) -> tuple[Cycle, callable]:
         cycle.run = lambda mode="RUN": {**run_build(mode), "build": builder.run()}
     if switches:                                          # D30: production follows main, and steps back on a breach
         from .release import Releaser
+        def rules() -> dict:                              # D36: the engineers' settings, as main carries them
+            shown = subprocess.run(["git", "-C", str(store), "show", "refs/heads/main:standard/rules.json"],
+                                   capture_output=True, text=True, timeout=60)
+            try:
+                return json.loads(shown.stdout) if shown.returncode == 0 else {}
+            except ValueError:
+                return {}
         releaser = Releaser(cycle.service, signer, switches, clock=lambda: cycle.clock(),
-                            notes=store.parent / "releases.json")
+                            notes=store.parent / "releases.json", rules=rules)
         run_release = cycle.run
         cycle.run = lambda mode="RUN": {**run_release(mode), "release": releaser.run()}
     return cycle, refresh
