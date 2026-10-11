@@ -14,3 +14,12 @@ def test_metrics_are_a_cumulative_histogram():
     text = m.render()
     assert 'le="0.005"} 1' in text
     assert 'le="+Inf"} 2' in text
+
+
+def test_every_component_has_its_signals():
+    m = Metrics()
+    m.record("messaging_process_duration_seconds", {"messaging_destination_name": "orders"}, 0.02)
+    m.set("messaging_queue_depth", {"messaging_destination_name": "orders"}, 4)
+    text = m.render()
+    assert 'messaging_queue_depth{messaging_destination_name="orders"} 4' in text
+    assert "process_resident_memory_bytes" in text

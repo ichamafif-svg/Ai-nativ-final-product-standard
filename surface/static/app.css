@@ -221,3 +221,12 @@ input[type=text] { width: 100%; max-width: 360px; padding: 9px 12px; border-radi
 @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, 1fr); } .kpi:nth-child(4) { border-left: 0; }
   .kpi:nth-child(n+4) { border-top: 1px solid var(--hair); } }
 @media (max-width: 900px) { .table.api { display: block; overflow-x: auto; } .table.api colgroup { display: none; } }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 28px; }
+.tile { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; padding: 14px 16px;
+  background: var(--surface); border-radius: var(--r-md); box-shadow: 0 0 0 1px var(--hair); text-decoration: none; color: var(--ink); }
+.tile:hover { box-shadow: 0 0 0 1px var(--hair-2); }
+.tile .state { grid-row: 1; } .tile b { font-size: 22px; font-weight: 600; }
+.tile span:not(.state) { grid-column: 1 / -1; font-size: 13px; color: var(--ink-2); }
+.tile em { grid-column: 1 / -1; font-style: normal; font-size: 12.5px; margin-top: 2px; }
+.tile em.held { color: var(--held); } .tile em.gap { color: var(--gap); } .tile em.escalated { color: var(--esc); }

@@ -193,6 +193,48 @@ function runView() {
     <div id="run"><p class="quiet">Chargement des métriques</p></div>`;
 }
 
+const KIND = {
+  api: ["APIs", "API", "APIs"], worker: ["Workers et files", "worker", "workers"], job: ["Tâches planifiées", "tâche planifiée", "tâches planifiées"],
+  database: ["Bases de données", "base de données", "bases de données"], dependency: ["Services externes", "service externe", "services externes"],
+  process: ["Processus", "processus", "processus"],
+};
+const bytes = (v) => v == null ? "—" : v >= 1 << 30 ? `${nf(v / (1 << 30), 1)} Go` : `${nf(v / (1 << 20), 0)} Mo`;
+const dur = (s) => s == null ? "—" : s < 120 ? `${nf(s, 0)} s` : s < 7200 ? `${nf(s / 60, 0)} min` : s < 172800 ? `${nf(s / 3600, 0)} h` : `${nf(s / 86400, 0)} j`;
+const stateCell = (s) => `<td><span class="state ${ROUTE_STATE[s][0]}"><i></i>${ROUTE_STATE[s][1]}</span></td>`;
+
+function table(cols, rows) {
+  return `<table class="table api"><colgroup>${cols.map(([, w]) => `<col${w ? ` style="width:${w}px"` : ""}>`).join("")}</colgroup>
+    <thead><tr>${cols.map(([h, , num]) => `<th class="${num ? "num" : ""}">${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+const SECTIONS = {
+  api: (rs, d) => table([["État", 150], ["Méthode", 76], ["Route"], ["Trafic", 136], ["Req/s", 80, 1], ["Erreurs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["p99", 78, 1], ["Dispo.", 92, 1]],
+    rs.map((r) => `<tr class="${r.state === "idle" ? "idle" : ""}">${stateCell(r.state)}<td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
+      <td><span class="path">${esc(r.name)}</span>${r.observed && !r.declared && d.openapi ? `<div class="sub">absente d'openapi.json</div>` : ""}</td>
+      <td>${r.observed ? spark(r.spark) : ""}</td><td class="num">${r.observed ? nf(r.rps, 2) : "—"}</td>
+      <td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td><td class="num">${msf(r.p50)}</td>
+      <td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td><td class="num">${pct(r.availability, 2)}</td></tr>`)),
+  worker: (rs) => table([["État", 150], ["File"], ["Débit", 136], ["Messages/s", 96, 1], ["Échecs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["En attente", 100, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span><div class="sub">${esc(r.operation)}</div></td>
+      <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
+      <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num ${r.backlog > 100 ? "bad" : ""}">${nf(r.backlog)}</td></tr>`)),
+  job: (rs) => table([["État", 150], ["Tâche"], ["Dernier succès", 150, 1], ["Durée", 100, 1], ["Période", 100, 1], ["Dernière exécution", 160, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span>${r.state === "degraded" ? `<div class="sub">en retard sur sa période</div>` : ""}</td>
+      <td class="num">${r.last_success ? ago(r.last_success * 1000) : "jamais"}</td><td class="num">${r.duration == null ? "—" : msf(r.duration * 1000)}</td>
+      <td class="num">${dur(r.period)}</td><td class="num ${r.ok === 0 ? "bad" : ""}">${r.ok === 0 ? "en échec" : r.ok === 1 ? "réussie" : "—"}</td></tr>`)),
+  database: (rs) => table([["État", 150], ["Base"], ["Opération", 110], ["Trafic", 136], ["Op/s", 80, 1], ["Erreurs", 84, 1], ["p50", 78, 1], ["p95", 78, 1], ["p99", 78, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb">${esc(r.operation)}</span></td>
+      <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
+      <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td></tr>`)),
+  dependency: (rs) => table([["État", 150], ["Service"], ["Méthode", 76], ["Trafic", 136], ["Appels/s", 86, 1], ["Erreurs", 84, 1], ["p95", 78, 1], ["p99", 78, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span></td><td><span class="verb ${esc(r.operation.toLowerCase())}">${esc(r.operation)}</span></td>
+      <td>${spark(r.spark)}</td><td class="num">${nf(r.rps, 2)}</td><td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
+      <td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td></tr>`)),
+  process: (rs) => table([["État", 150], ["Processus"], ["CPU", 110, 1], ["Mémoire", 120, 1], ["Démarré depuis", 150, 1]],
+    rs.map((r) => `<tr>${stateCell(r.state)}<td><span class="path">${esc(r.name)}</span></td><td class="num">${r.cpu == null ? "—" : pct(r.cpu, 1)}</td>
+      <td class="num">${bytes(r.memory)}</td><td class="num">${dur(r.uptime)}</td></tr>`)),
+};
+
 async function loadRun() {
   try {
     const r = await fetch(`/api/run?window=${runWindow}`, { cache: "no-store" });
@@ -202,16 +244,23 @@ async function loadRun() {
     $("#run").innerHTML = `<div class="note bad">Les métriques sont indisponibles : ${esc(err.message)}</div>`;
     return;
   }
-  const d = runData, f = d.fleet, observed = d.routes.filter((r) => r.observed);
-  const total = d.routes.reduce((acc, r) => r.spark.map((v, i) => (acc[i] || 0) + v), []);
+  const d = runData, f = d.fleet, c = d.components;
+  const total = c.api.reduce((acc, r) => r.spark.map((v, i) => (acc[i] || 0) + v), []);
   const budgetTone = f.budget == null ? "" : f.budget < 0 ? "bad" : f.budget < 0.25 ? "warn" : "";
   const down = d.targets.filter((t) => !t.up);
   const kpi = (label, value, sub, tone = "") => `<div class="kpi ${tone}"><div class="k">${label}</div><div class="v">${value}</div><div class="s">${sub}</div></div>`;
   const order = { failing: 0, degraded: 1, healthy: 2, idle: 3 };
-  const routes = [...d.routes].sort((a, b) => order[a.state] - order[b.state] || b.rps - a.rps);
+  const kinds = Object.keys(KIND).filter((k) => c[k]?.length);
+  const tile = (k) => {
+    const rs = c[k], bad = rs.filter((r) => r.state === "failing").length, warn = rs.filter((r) => r.state === "degraded").length;
+    const tone = bad ? "escalated" : warn ? "gap" : "held";
+    const word = bad ? `${bad} en échec` : warn ? `${warn} ${warn > 1 ? "dégradés" : "dégradé"}` : "opérationnels";
+    return `<a class="tile" href="#k-${k}"><span class="state ${tone}"><i></i></span><b>${rs.length}</b><span>${rs.length > 1 ? KIND[k][2] : KIND[k][1]}</span><em class="${tone}">${word}</em></a>`;
+  };
   $("#run").innerHTML = `
     ${!d.targets.length ? `<div class="note warn">Aucune source de métriques n'est configurée. Ajoutez dans standard.toml : <span class="sha">[run] metrics = ["http://127.0.0.1:9000/metrics"]</span>.</div>` : ""}
     ${down.length ? `<div class="note bad">${plural(down.length, "source de métriques ne répond pas", "sources de métriques ne répondent pas")} : ${down.map((t) => esc(t.url)).join(", ")}.</div>` : ""}
+    <div class="tiles">${kinds.map(tile).join("")}</div>
     <div class="kpis">
       ${kpi("Requêtes", `${nf(f.rps, 1)}<small>/s</small>`, `${nf(f.requests)} sur la période`)}
       ${kpi("Erreurs", pct(f.error_rate), "réponses 5xx", f.error_rate > 0.01 ? "bad" : "")}
@@ -221,25 +270,14 @@ async function loadRun() {
       ${kpi("Budget d'erreur", f.budget == null ? "—" : f.budget < 0 ? "Épuisé" : pct(f.budget, 0),
         f.budget == null ? "pas de trafic" : f.budget < 0 ? `consommé à ${pct(1 - f.budget, 0)}` : "restant sur la période", budgetTone)}
     </div>
-    <section class="chart"><h2>Trafic</h2>${area(total.length ? total : [0, 0])}</section>
-    <section><h2>APIs <span class="quiet small">${plural(d.routes.length, "route", "routes")}${d.openapi ? ", déclarées dans openapi.json" : ""}</span></h2>
-      <table class="table api"><colgroup><col style="width:150px"><col style="width:76px"><col><col style="width:136px"><col style="width:86px"><col style="width:86px"><col style="width:80px"><col style="width:80px"><col style="width:80px"><col style="width:96px"></colgroup>
-      <thead><tr><th>État</th><th>Méthode</th><th>Route</th><th>Trafic</th><th class="num">Req/s</th><th class="num">Erreurs</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">Dispo.</th></tr></thead><tbody>
-      ${routes.map((r) => `<tr class="${r.state === "idle" ? "idle" : ""}">
-        <td><span class="state ${ROUTE_STATE[r.state][0]}"><i></i>${ROUTE_STATE[r.state][1]}</span></td>
-        <td><span class="verb ${esc(r.method.toLowerCase())}">${esc(r.method)}</span></td>
-        <td><span class="path">${esc(r.route)}</span>${r.observed && !r.declared && d.openapi ? `<div class="sub">absente d'openapi.json</div>` : ""}</td>
-        <td>${r.observed ? spark(r.spark) : ""}</td>
-        <td class="num">${r.observed ? nf(r.rps, 2) : "—"}</td>
-        <td class="num ${r.error_rate > 0.01 ? "bad" : ""}">${pct(r.error_rate)}</td>
-        <td class="num">${msf(r.p50)}</td><td class="num">${msf(r.p95)}</td><td class="num">${msf(r.p99)}</td>
-        <td class="num">${pct(r.availability, 2)}</td></tr>`).join("")}
-      </tbody></table></section>
+    ${c.api.length ? `<section class="chart"><h2>Trafic des APIs</h2>${area(total.length ? total : [0, 0])}</section>` : ""}
+    ${kinds.map((k) => `<section id="k-${k}"><h2>${KIND[k][0]} <span class="quiet small">${c[k].length}${k === "api" && d.openapi ? ", déclarées dans openapi.json" : ""}</span></h2>
+      ${SECTIONS[k]([...c[k]].sort((a, b) => order[a.state] - order[b.state] || (b.rps || 0) - (a.rps || 0)), d)}</section>`).join("")}
     <section class="cols">
       <div><h2>Mises en production</h2>${feed(6)}</div>
       <div><h2>Sources</h2><div class="rows">${d.targets.map((t) => `<div class="rowi"><div class="main"><span class="sha">${esc(t.url)}</span>
         <div class="facts">${fact(t.up ? "Répond" : `Ne répond pas : ${t.error}`, t.up ? "ok" : "bad")}${t.at ? fact(`dernière collecte ${ago(t.at * 1000)}`, "") : ""}</div></div></div>`).join("") || `<div class="rowi quiet">Aucune source</div>`}</div>
-        <p class="small quiet" style="margin-top:12px">${observed.length} routes observées. Les métriques sont des informations pour l'équipe : elles n'ouvrent aucun droit.</p></div>
+        <p class="small quiet" style="margin-top:12px">Les métriques sont des informations pour l'équipe : elles n'ouvrent aucun droit.</p></div>
     </section>`;
 }
 

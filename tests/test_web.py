@@ -130,13 +130,13 @@ class Telemetry(unittest.TestCase):
         t.scrape(now=1000)
         t.scrape(now=1100)
         report = t.report([("GET", "/users/{id}"), ("DELETE", "/orders/{id}")], window=600, now=1100)
-        users = next(r for r in report["routes"] if r["route"] == "/users/{id}")
+        users = next(r for r in report["routes"] if r["name"] == "/users/{id}")
         self.assertEqual((users["requests"], users["rps"]), (1000, 10.0))
         self.assertAlmostEqual(users["error_rate"], 0.1)
         self.assertEqual(users["state"], "failing")
         self.assertLess(report["fleet"]["budget"], 0)                    # 10 % errors against a 99.9 % objective
         self.assertEqual(users["p50"], 62.5)                              # 500th of 800 under 100 ms
-        idle = next(r for r in report["routes"] if r["route"] == "/orders/{id}")
+        idle = next(r for r in report["routes"] if r["name"] == "/orders/{id}")
         self.assertEqual((idle["state"], idle["observed"], idle["declared"]), ("idle", False, True))
         t.scrape(now=1200)                                                # the service restarted: counters fell
         self.assertEqual(t.report(window=600, now=1200)["fleet"]["requests"], 1050)
@@ -153,3 +153,37 @@ class Telemetry(unittest.TestCase):
         report = t.report(window=600, now=1000)
         self.assertFalse(report["targets"][0]["up"])
         self.assertIsNone(report["fleet"]["error_rate"])
+
+
+class Components(unittest.TestCase):
+    """Not only APIs: workers, jobs, databases, external dependencies and processes, each with its own signals."""
+
+    def test_every_kind_is_recognised_from_the_conventions(self):
+        from surface.telemetry import Telemetry as T
+        def page(n, last_success):
+            h = lambda fam, labels, count: (f'{fam}_bucket{{{labels},le="0.1"}} {count}\n'
+                                            f'{fam}_bucket{{{labels},le="+Inf"}} {count}\n{fam}_count{{{labels}}} {count}\n')
+            return (h("messaging_process_duration_seconds", 'messaging_destination_name="orders"', n)
+                    + h("messaging_process_duration_seconds", 'messaging_destination_name="orders",error_type="declined"', n // 10)
+                    + 'messaging_queue_depth{messaging_destination_name="orders"} 7\n'
+                    + h("db_client_operation_duration_seconds", 'db_system_name="postgresql",db_namespace="shop",db_operation_name="select"', n)
+                    + h("http_client_request_duration_seconds", 'server_address="api.payments.example",http_response_status_code="503"', n // 5)
+                    + f'job_last_success_timestamp_seconds{{job="daily-report"}} {last_success}\n'
+                    + 'job_period_seconds{job="daily-report"} 60\njob_last_status{job="daily-report"} 1\n'
+                    + f"process_cpu_seconds_total {n / 100}\nprocess_resident_memory_bytes 52428800\nprocess_start_time_seconds 100\n")
+        pages = iter([page(0, 900), page(100, 1000)])
+        t = T(Path(tempfile.mkdtemp()) / "t.db", ["http://svc:9000/metrics"], fetch=lambda url: next(pages))
+        t.scrape(now=1000)
+        t.scrape(now=1100)
+        c = t.report(window=600, now=1300)["components"]
+        worker = c["worker"][0]
+        self.assertEqual((worker["name"], worker["backlog"], worker["requests"]), ("orders", 7, 110))
+        self.assertAlmostEqual(worker["error_rate"], 10 / 110)
+        self.assertEqual(c["database"][0]["name"], "postgresql/shop")
+        self.assertEqual(c["dependency"][0]["name"], "api.payments.example")
+        self.assertEqual(c["dependency"][0]["state"], "failing")
+        job = c["job"][0]
+        self.assertEqual((job["name"], job["state"]), ("daily-report", "degraded"))   # 300 s since success, period 60
+        process = c["process"][0]
+        self.assertEqual((process["name"], process["memory"], process["uptime"]), ("svc:9000", 52428800, 1200))
+        self.assertAlmostEqual(process["cpu"], 0.01)
