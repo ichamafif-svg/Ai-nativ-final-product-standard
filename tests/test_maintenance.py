@@ -12,13 +12,13 @@ from pathlib import Path
 
 from fixture import Ledger, client_law
 
-from autonomy import Agent, Cycle, Route, WorkEngine
-from trusted import Journal, PinStore, Signer, TrustedService
-from trusted.adapters import GitRepository
-from trusted.transactions import Boundary, ledger_of
+from product.autonomy import Agent, Cycle, Route, WorkEngine
+from bt import Journal, PinStore, Signer, TrustedService
+from bt.adapters import GitRepository
+from bt.transactions import Boundary, ledger_of
 from instruments.data import TrustedData
-from trusted.host import Evidence, Host
-from trusted.operator import Instrument, Instruments, Prover
+from bt.host import Evidence, Host
+from product.runtime.operator import Instrument, Instruments, Prover
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,7 +101,7 @@ class Stand(unittest.TestCase):
         git_repo = GitRepository(self.repo, self.store)
         self.world = type("World", (), {"protections": lambda _: set()})()
         self.host = host_for(root, self.repo, self.data, self.world, clock=clock)
-        from floors import CONTRACTS, PROGRAMS
+        from product.floors import CONTRACTS, PROGRAMS
         self.boundary = Boundary(self.host.evidence, root / "transactions.jsonl", CONTRACTS, PROGRAMS, clock,
                                  ledger=lambda: ledger_of(self.journal))
         effects = {"remediate": git_repo}
@@ -187,7 +187,7 @@ class Maintenance(Stand):
     def test_a_proposal_that_is_not_the_recipe_is_never_autonomous(self):
         self.instruments.measure()
         base = sh(self.repo, "git", "rev-parse", "main")
-        from autonomy.agent import commit_files
+        from product.autonomy.agent import commit_files
         head = commit_files(self.store, base, {"sbom.json": b'{"components": []}\n'}, "hand-made")
         self.witness()
         self.instruments.measure()
@@ -202,8 +202,8 @@ class Maintenance(Stand):
         import contextlib
         import io
         import threading
-        from surface.cli import main
-        from trusted import AdmissionGateway
+        from product.surface.cli import main
+        from bt import AdmissionGateway
         self.instruments.measure()
         path = os.path.join(tempfile.mkdtemp(), "admission.sock")
         server = AdmissionGateway(path, self.service)

@@ -1,9 +1,10 @@
-.PHONY: check budget test
+.PHONY: check layers test
+PYTHON ?= python3
 
-check: budget test
+check: layers test
 
-budget:
-	python3 tools/check_tcb.py
+layers:
+	$(PYTHON) tools/check_layers.py
 
 test:
-	cd tests && python3 -W error::ResourceWarning -m unittest -v test_kernel test_trusted test_maintenance test_coverage test_install test_hosting test_agent test_web test_run test_isolation test_build test_boundary
+	$(PYTHON) -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py' -v

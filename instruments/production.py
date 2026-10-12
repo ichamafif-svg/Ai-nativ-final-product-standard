@@ -183,7 +183,7 @@ RELEASE_LINE = re.compile(r'^standard_release_(requests_total|duration_seconds_b
 
 
 def parse_releases(text: str) -> dict:
-    """{release: {"count", "errors", "buckets"}} from the runner's own measures (tools/run_release.py): what each
+    """{release: {"count", "errors", "buckets"}} from the runner's own measures (product/tools/run_release.py): what each
     release answered, seen from in front of it."""
     out = {}
     for raw in text.splitlines():

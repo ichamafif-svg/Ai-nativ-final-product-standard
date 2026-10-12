@@ -13,16 +13,16 @@ from fixture import CODE, HOUR, Keys, Ledger, client_law
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from floors import RELEASE
+from product.floors import RELEASE
 from kernel import Kernel, Refused, canon, digest
 from kernel.floor0 import DISPATCH_MS
-from trusted import (AdmissionGateway, Checker, ClockError, Disagreement, EffectPort, EscalationOutbox,
+from bt import (AdmissionGateway, Checker, ClockError, Disagreement, EffectPort, EscalationOutbox,
                      GatewayClient, Halted, Journal, PinStore, SignedAssessment, Signer, TrustUnavailable,
                      TrustedService, WitnessClock, required_for)
-from trusted.boundary import BASE, PREFIX as ASSESSMENT_PREFIX
-from trusted.clock import PREFIX as CLOCK_PREFIX
-from trusted.delivery import PREFIX as RECEIPT_PREFIX
-from trusted.gateway import answer
+from bt.assessment import BASE, PREFIX as ASSESSMENT_PREFIX
+from bt.clock import PREFIX as CLOCK_PREFIX
+from bt.delivery import PREFIX as RECEIPT_PREFIX
+from bt.gateway import answer
 
 
 def raw_public(sk):
@@ -137,7 +137,7 @@ class Effects(unittest.TestCase):
         return body["id"]
 
     def guard(self, adapter):
-        from trusted import Guard
+        from bt import Guard
         return Guard(self.J, self.signer, EffectPort({"inventory-refresh": adapter}), self.now)
 
     def test_one_departure_under_both_judges(self):

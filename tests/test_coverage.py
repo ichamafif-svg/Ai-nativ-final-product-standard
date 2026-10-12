@@ -5,7 +5,7 @@ import unittest
 from test_maintenance import FILES, Stand, sh
 
 from kernel import digest
-from surface.human import attest, review
+from product.surface.human import attest, review
 from instruments.data import DataError, TrustedData
 
 SBOM_24_1 = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [

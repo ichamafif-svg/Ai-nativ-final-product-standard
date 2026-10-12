@@ -13,9 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "tools"))
 
-import ceremony  # noqa: E402
+from product.tools import ceremony  # noqa: E402
 from kernel.canon import canon  # noqa: E402
 from kernel.identity import open_envelope, statement, verify  # noqa: E402
 from test_install import Clock  # noqa: E402
@@ -31,7 +30,7 @@ console.log(JSON.stringify({ env: await envelope(domain, "observation", JSON.par
 
 def node_sign(key_text: str, domain: str, body: dict) -> dict:
     script = Path(tempfile.mkdtemp()) / "sign.mjs"
-    script.write_text(NODE % (ROOT / "surface" / "static" / "sign.js").as_uri())
+    script.write_text(NODE % (ROOT / "product" / "surface" / "static" / "sign.js").as_uri())
     r = subprocess.run(["node", str(script), key_text, domain, json.dumps(body)], capture_output=True, text=True,
                        timeout=60)
     if r.returncode != 0:
@@ -42,7 +41,7 @@ def node_sign(key_text: str, domain: str, body: dict) -> dict:
 @unittest.skipUnless(subprocess.run(["which", "node"], capture_output=True).returncode == 0, "node is not installed")
 class BrowserSigning(unittest.TestCase):
     def test_the_browser_signs_the_very_bytes_the_kernel_verifies(self):
-        from trusted.signing import envelope
+        from bt.signing import envelope
         root = Path(tempfile.mkdtemp())
         signer = ceremony.new_key(root / "h3.key")
         body = {"id": "review-1", "at": 1_900_000_000_000, "author": "h3", "under": "grant-reviewer",
@@ -59,10 +58,10 @@ class BrowserSigning(unittest.TestCase):
 
 class Server(unittest.TestCase):
     def test_state_dossier_and_admission_through_the_gateway(self):
-        import trusted.daemon as daemon
-        from surface.web import Installation, handler
+        import product.runtime.daemon as daemon
+        from product.surface.web import Installation, handler
         from http.server import ThreadingHTTPServer
-        from trusted.gateway import AdmissionGateway
+        from bt.gateway import AdmissionGateway
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, FILES)
         clock = Clock(1_900_000_000_000)
@@ -120,8 +119,8 @@ class Server(unittest.TestCase):
             alert = source[0]
             self.assertEqual((alert["kind"], alert["why"]["rule"]), ("source", "source_down"))
             self.assertEqual(alert["severity"], "page")                                   # D32: page or ticket
-            from surface.human import load_signer
-            from trusted.signing import envelope
+            from product.surface.human import load_signer
+            from bt.signing import envelope
             ack = envelope(alerts["signing"]["domain"], "observation", {
                 "id": "ack-1", "at": max(clock(), alerts["signing"]["as_of"] + 1), "author": "h3",
                 "under": alerts["signing"]["grant"]["id"], "resource": alert["resource"], "property": "ack",
@@ -174,7 +173,7 @@ class Telemetry(unittest.TestCase):
         return "\n".join(out) + f"\nsome_other_metric 3\n"
 
     def test_rates_errors_quantiles_budget_and_restarts(self):
-        from surface.telemetry import Telemetry as T, declared_routes, quantile
+        from product.surface.telemetry import Telemetry as T, declared_routes, quantile
         pages = iter([self.exposition(0, 0, 0, 0), self.exposition(900, 100, 800, 0), self.exposition(50, 0, 50, 0)])
         t = T(Path(tempfile.mkdtemp()) / "t.db", ["http://svc/metrics"], slo=0.999, fetch=lambda url: next(pages))
         t.scrape(now=1000)
@@ -195,7 +194,7 @@ class Telemetry(unittest.TestCase):
         self.assertEqual(declared_routes('{"paths": {"/a": {"get": {}, "parameters": []}}}'), [("GET", "/a")])
 
     def test_a_silent_source_is_reported_never_zero(self):
-        from surface.telemetry import Telemetry as T
+        from product.surface.telemetry import Telemetry as T
 
         def down(url):
             raise OSError("connection refused")
@@ -210,7 +209,7 @@ class Components(unittest.TestCase):
     """Not only APIs: workers, jobs, databases, external dependencies and processes, each with its own signals."""
 
     def test_every_kind_is_recognised_from_the_conventions(self):
-        from surface.telemetry import Telemetry as T
+        from product.surface.telemetry import Telemetry as T
         def page(n, last_success):
             h = lambda fam, labels, count: (f'{fam}_bucket{{{labels},le="0.1"}} {count}\n'
                                             f'{fam}_bucket{{{labels},le="+Inf"}} {count}\n{fam}_count{{{labels}}} {count}\n')

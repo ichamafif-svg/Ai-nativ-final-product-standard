@@ -11,13 +11,12 @@ from pathlib import Path
 
 from test_maintenance import FILES, demo_repository
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import ceremony  # noqa: E402
+from product.tools import ceremony  # noqa: E402
 
-import autonomy.__main__ as agent_process  # noqa: E402
-import trusted.daemon as daemon  # noqa: E402
-from trusted.gateway import AdmissionGateway  # noqa: E402
+import product.autonomy.__main__ as agent_process  # noqa: E402
+import product.runtime.daemon as daemon  # noqa: E402
+from bt.gateway import AdmissionGateway  # noqa: E402
 
 
 class Clock:
@@ -68,7 +67,7 @@ class Installation(unittest.TestCase):
         ceremony.now = Clock(1_900_000_000_000)
         ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None,
                                          pins=None))
-        import qualify
+        from product.tools import qualify
         report = {p["probe"]: p for p in qualify.qualify(root / "install" / "standard.toml")}
         failed = {name for name, p in report.items() if p["result"] == "FAIL"}
         self.assertTrue({"T04 pins apart from the journal", "T02 humans hold their own keys",
@@ -79,7 +78,7 @@ class Installation(unittest.TestCase):
 
 class GitHubAdapter(unittest.TestCase):
     def github(self, replies):
-        from trusted.github import GitHub
+        from bt.adapters import GitHub
         calls = []
 
         def transport(method, url, token, body=None):
@@ -105,7 +104,7 @@ class GitHubAdapter(unittest.TestCase):
         self.assertEqual(gh.remediate("r", args, "k"), "failed")             # nothing was sent
 
     def test_the_git_route_is_the_same_compare_and_swap(self):
-        from trusted.github import GitHub
+        from bt.adapters import GitHub
         root = Path(tempfile.mkdtemp())
         origin = demo_repository(root, FILES)
         git = lambda *a: __import__("subprocess").run(["git", *a], check=True, capture_output=True, text=True).stdout.strip()
@@ -129,7 +128,7 @@ class GitHubAdapter(unittest.TestCase):
 
 class Refresh(unittest.TestCase):
     def test_a_snapshot_audits_the_fixed_versions_too(self):
-        import refresh_data
+        from product.tools import refresh_data
         answers = {"24.1": [{"id": "GHSA-1", "affected": [{"ranges": [{"events": [{"fixed": "24.2"}]}]}]}], "24.2": []}
 
         def get(url, body=None):
