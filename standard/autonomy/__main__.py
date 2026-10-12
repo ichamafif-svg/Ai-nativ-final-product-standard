@@ -1,6 +1,6 @@
 """The agent process (U), separate from the operator process:
 
-    python -m product.autonomy run standard.toml [interval-seconds]
+    python -m standard.autonomy run standard.toml [interval-seconds]
 
 It reads the agent's own key, the gateway socket, the proposals store and, optionally, the Claude API key file. It
 never reads the journal, the pins, the guard's key or the provider token.
@@ -106,7 +106,7 @@ def build(config_path) -> tuple[Cycle, callable]:
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) < 2 or argv[0] != "run":
-        print("usage: python -m product.autonomy run standard.toml [interval-seconds]")
+        print("usage: python -m standard.autonomy run standard.toml [interval-seconds]")
         return 2
     cycle, refresh = build(argv[1])
     interval = float(argv[2]) if len(argv) > 2 else 60.0

@@ -17,7 +17,7 @@ CORE = ("kernel", "bt")
 def code_digest(root=None, *, sources=CORE) -> str:
     """Core by default; installations also name their privileged assembly and release declarations.
 
-    Moving code to product/ must not remove it from the installation's pin. Missing sources refuse fingerprinting.
+    Moving code to standard/ must not remove it from the installation's pin. Missing sources refuse fingerprinting.
     """
     root = Path(root) if root else Path(__file__).resolve().parents[1]
     files = {}

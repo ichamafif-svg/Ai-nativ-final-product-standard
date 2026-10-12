@@ -1,10 +1,13 @@
-.PHONY: check layers test
+.PHONY: check layers coverage test
 PYTHON ?= python3
 
 check: layers test
 
 layers:
 	$(PYTHON) tools/check_layers.py
+
+coverage:
+	$(PYTHON) -m tools.coverage
 
 test:
 	GIT_AUTHOR_NAME="$${GIT_AUTHOR_NAME:-standard-tests}" \

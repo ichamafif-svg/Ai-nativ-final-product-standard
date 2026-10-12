@@ -11,14 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from product.autonomy.agent import Agent, AgentError  # noqa: E402
-from product.autonomy.cycle import Cycle  # noqa: E402
-from product.autonomy.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
-from product.autonomy.memory import Memory  # noqa: E402
-from product.autonomy.precheck import precheck  # noqa: E402
-from product.autonomy.repomap import RepoMap  # noqa: E402
-from product.autonomy.sandbox import Sandbox  # noqa: E402
-from product.floors import FLOORS  # noqa: E402
+from standard.autonomy.agent import Agent, AgentError  # noqa: E402
+from standard.autonomy.cycle import Cycle  # noqa: E402
+from standard.autonomy.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
+from standard.autonomy.memory import Memory  # noqa: E402
+from standard.autonomy.precheck import precheck  # noqa: E402
+from standard.autonomy.repomap import RepoMap  # noqa: E402
+from standard.autonomy.sandbox import Sandbox  # noqa: E402
+from standard.floors import FLOORS  # noqa: E402
 from instruments import probes as instruments  # noqa: E402
 from instruments.data import EMPTY  # noqa: E402
 from instruments.suite import tests_report  # noqa: E402
@@ -91,7 +91,7 @@ class WholeLaw(unittest.TestCase):
         self.box = Sandbox()
 
     def candidate(self, files):
-        from product.autonomy.agent import commit_files
+        from standard.autonomy.agent import commit_files
         return commit_files(self.store, self.base, {p: c.encode() for p, c in files.items()}, "candidate")
 
     def test_a_fix_that_breaks_main_tests_is_not_proposed(self):
@@ -206,7 +206,7 @@ class Memory_(unittest.TestCase):
             def craft(self, *a, **kw):
                 raise AgentError("nothing passes")
 
-        import product.autonomy.cycle as cycle_module
+        import standard.autonomy.cycle as cycle_module
         real = cycle_module.project
         cycle_module.project = lambda view, routes, qualify, mode: {"state": "IN_PROGRESS", "tasks": []}
         self.addCleanup(setattr, cycle_module, "project", real)              # never leak into the next test

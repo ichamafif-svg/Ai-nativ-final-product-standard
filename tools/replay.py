@@ -1,6 +1,6 @@
 """Replay the measures of an installation (D37): every fact the scanner signed is a pure function of a run record.
 
-    python product/tools/replay.py standard.toml [--limit N] [RECORD ...]
+    python tools/replay.py standard.toml [--limit N] [RECORD ...]
 
 A measurement in the ledger names its method (`programs@<digest>/<contract>`: the pinned programs, instruments/) and
 its artifact (the OBSERVE boundary transaction, D38, which names the run record: job, inputs by digest, answer). This tool opens the ledger read-only, takes the records the
@@ -23,15 +23,15 @@ import sys
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from product.floors import RELEASE  # noqa: E402
+from standard.floors import RELEASE  # noqa: E402
 from kernel import Kernel  # noqa: E402
 from bt.host import Evidence, Host  # noqa: E402
 from bt.isolation import Isolation  # noqa: E402
 from bt.journal import Journal, PinStore  # noqa: E402
-from product.runtime import code_digest  # noqa: E402
+from standard.runtime import code_digest  # noqa: E402
 
 
 def facts(output: dict) -> set:

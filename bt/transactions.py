@@ -1,7 +1,7 @@
 """T — Boundary Transactions (D38): the one way Standard meets the world outside the ledger.
 
 Every claim that enters and every effect that leaves is a boundary transaction under a contract the floors declare
-(product.floors.CONTRACTS). A transaction is a record, kept by digest in the evidence store and listed in transactions.jsonl:
+(standard.floors.CONTRACTS). A transaction is a record, kept by digest in the evidence store and listed in transactions.jsonl:
 
     kind        observe | effect | resolve
     identity    who: the scanner, the guard, the oracle (never an agent)
@@ -46,7 +46,7 @@ def _matches(resource: str, prefixes) -> bool:
 
 class Boundary:
     def __init__(self, evidence, index, contracts: dict, programs: str, clock, ledger=lambda: {}):
-        """evidence: bt.host.Evidence; index: the transactions list (jsonl); contracts: product.floors.CONTRACTS;
+        """evidence: bt.host.Evidence; index: the transactions list (jsonl); contracts: standard.floors.CONTRACTS;
         programs: `programs@<digest>`; ledger(): {"genesis", "head", "law"} at this moment."""
         self.evidence, self.index, self.contracts = evidence, Path(index), contracts
         self.programs, self.clock, self.ledger = programs, clock, ledger

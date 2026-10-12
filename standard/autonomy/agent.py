@@ -124,7 +124,7 @@ class Agent:
                  publish=None, llm=None, sandbox=None, iterations: int = 2):
         """capability: one grant id, or {"recipe": id, "review": id} when the two routes are granted apart.
         data: the same pinned snapshot the instruments use, so that recipes reproduce.
-        llm: the egress gate (product.autonomy.llm.Gate); `api_key` and `ask(prompt, key) -> dict` build one for tests."""
+        llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and `ask(prompt, key) -> dict` build one for tests."""
         from .llm import Gate, Provider
         from .sandbox import Sandbox
         self.capabilities = capability if isinstance(capability, dict) else {"recipe": capability, "review": capability}

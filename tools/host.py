@@ -1,7 +1,7 @@
 """Host repositories behind the SSH gate (D23, bt/hosting.py). Run as root.
 
-    python product/tools/host.py create HOSTING.toml NAME --from PATH --guard-user G --gate-user U
-    python product/tools/host.py authorize HOSTING.toml NAME IDENTITY --key id_ed25519.pub [--write] --gate-user U
+    python tools/host.py create HOSTING.toml NAME --from PATH --guard-user G --gate-user U
+    python tools/host.py authorize HOSTING.toml NAME IDENTITY --key id_ed25519.pub [--write] --gate-user U
 
 `create` makes two bare repositories: the canonical one (owned by the guard, no group or other write; the guard's
 compare-and-swap is the only way main moves) and the inbox (owned by the gate user, with the update hook that keeps
@@ -19,11 +19,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bt.hosting import HOOK, IDENTITY  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def git(*args, user=None) -> str:
@@ -38,7 +38,7 @@ def load(path: Path) -> dict:
 
 
 def save(path: Path, config: dict) -> None:
-    lines = ["# Repositories served by the SSH gate (bt/hosting.py). Written by product/tools/host.py."]
+    lines = ["# Repositories served by the SSH gate (bt/hosting.py). Written by tools/host.py."]
     for name, repo in sorted(config["repositories"].items()):
         lines.append(f"\n[repositories.{name}]")
         for key in ("canonical", "inbox", "readers", "writers"):

@@ -1,16 +1,16 @@
 """U08 — the entry point for agents and humans (ARCHITECTURE.md §11.5).
 
-    python -m product.surface [--socket PATH] status            the verdict and what is known at the current prefix
-    python -m product.surface [--socket PATH] tasks             the work the law asks for, most urgent first
-    python -m product.surface [--socket PATH] context TASK_ID   one task: its debt, its law, the T its routes need
-    python -m product.surface [--socket PATH] law SECTION/ID    one declaration of the effective law (floors or client)
-    python -m product.surface review TARGET BASE HEAD --identity ID --key FILE --under GRANT [--changes-requested]
-    python -m product.surface attest TARGET --identity ID --key FILE --under GRANT
-    python -m product.surface set SCOPE/KEY VALUE --identity ID --key FILE --under GRANT    a production setting (D31), e.g.
+    python -m standard.surface [--socket PATH] status            the verdict and what is known at the current prefix
+    python -m standard.surface [--socket PATH] tasks             the work the law asks for, most urgent first
+    python -m standard.surface [--socket PATH] context TASK_ID   one task: its debt, its law, the T its routes need
+    python -m standard.surface [--socket PATH] law SECTION/ID    one declaration of the effective law (floors or client)
+    python -m standard.surface review TARGET BASE HEAD --identity ID --key FILE --under GRANT [--changes-requested]
+    python -m standard.surface attest TARGET --identity ID --key FILE --under GRANT
+    python -m standard.surface set SCOPE/KEY VALUE --identity ID --key FILE --under GRANT    a production setting (D31), e.g.
                                                     set global/objective 99.95 ; set c-1a2b3c4d5e6f/p99_ms 250
-    python -m product.surface decide RESOURCE PROPERTY --identity ID --key FILE --under GRANT    an engineer's decision, e.g.
+    python -m standard.surface decide RESOURCE PROPERTY --identity ID --key FILE --under GRANT    an engineer's decision, e.g.
                                                     decide run:release:all/FROM/TO approved
-    python -m product.surface dossier HEAD --repo PATH          what a reviewer reads before signing: the agent's dossier
+    python -m standard.surface dossier HEAD --repo PATH          what a reviewer reads before signing: the agent's dossier
 
 `--findings FILE` adds the instruments' findings (where the gap is) to `context`; `--memory FILE` adds to `tasks` the
 obligations the agent gave up on. Both are information, never facts.
@@ -25,7 +25,7 @@ import json
 import os
 import sys
 
-from product.autonomy.projection import Route, project
+from standard.autonomy.projection import Route, project
 from bt.gateway import GatewayClient
 
 DEFAULT_SOCKET = os.environ.get("STANDARD_SOCKET", "/run/standard/admission.sock")
@@ -112,7 +112,7 @@ def declaration(view: dict, ref: str) -> str:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m product.surface")
+    parser = argparse.ArgumentParser(prog="python -m standard.surface")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("command", choices=("status", "tasks", "context", "law", "review", "attest", "dossier", "set",
                                                        "decide"))

@@ -181,7 +181,7 @@ class Telemetry:
                 "late_periods": self.late_periods}
 
     extra = None           # more open conditions to track as incidents: {(kind, operation, name): (state, why)}
-    limits = None          # the engineers' settings (product.autonomy.policy.Policy.limits)
+    limits = None          # the engineers' settings (standard.autonomy.policy.Policy.limits)
     late_periods = LATE_PERIODS
 
     def _limits(self, kind: str, op: str, name: str) -> dict:

@@ -6,7 +6,7 @@ The gate user's authorized_keys gives every client key a forced command:
 
 - fetch (git-upload-pack 'NAME'): the canonical repository, which the gate user can read but not write.
 - push (git-receive-pack 'NAME'): the repository's inbox only, and there only refs/heads/<identity>/* (the inbox's
-  update hook, installed by product/tools/host.py). A client never writes the canonical repository.
+  update hook, installed by tools/host.py). A client never writes the canonical repository.
 
 `main` of a canonical repository moves only by the guard's compare-and-swap. The gate runs as its own Unix user, owns
 the inboxes and nothing the guard owns; the guard reads an inbox from outside only (ls-remote, fetch), so a client's

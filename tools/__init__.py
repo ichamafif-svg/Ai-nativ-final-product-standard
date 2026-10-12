@@ -1,1 +1,1 @@
-"""Repository checks; product installation and operation tools live in product.tools."""
+"""Installation, operation, qualification and repository inspection tools for Standard."""

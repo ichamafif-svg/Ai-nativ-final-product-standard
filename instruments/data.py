@@ -1,7 +1,7 @@
 """Trusted data: third-party security data as snapshots pinned by digest (D17, §15.4).
 
 An instrument and an agent that compute from the same snapshot compute the same thing; a snapshot is refreshed only
-by the operator (product/tools/refresh_data.py) and loaded only if its bytes match the pinned digest. A vulnerability
+by the operator (tools/refresh_data.py) and loaded only if its bytes match the pinned digest. A vulnerability
 published after the snapshot does not exist for Standard until the next refresh: that is a declared limit, bounded by
 the snapshot's age, which is itself checked against the freshness the floors require.
 

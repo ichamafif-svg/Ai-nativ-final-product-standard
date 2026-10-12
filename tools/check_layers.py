@@ -1,7 +1,7 @@
 """Check dependency boundaries, independent verification and kernel purity. No source-line ceilings.
 
 Static checks of ordinary Python imports, not a proof of runtime isolation or physical trust.
-Product agents and UI may reach BT only through signing and gateway; runtime assembles privileged roles.
+Standard agents and UI may reach BT only through signing and gateway; runtime assembles privileged roles.
 """
 from __future__ import annotations
 
@@ -10,17 +10,19 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STANDARD = {"kernel", "bt", "instruments", "product", "tools", "tests",
+STANDARD = {"kernel", "bt", "instruments", "standard", "product", "tools", "tests", "examples",
             "trusted", "floors", "autonomy", "surface", "demo"}
 ALLOWED = {
     "kernel": ("kernel",),
     "bt": ("kernel", "bt"),
     "instruments": ("kernel", "instruments"),
-    "product/__init__.py": (),
-    "product/floors.py": ("kernel",),
-    "product/runtime": ("kernel", "bt", "instruments", "product.floors", "product.runtime"),
-    "product/autonomy": ("kernel", "instruments", "bt.signing", "bt.gateway", "product.autonomy"),
-    "product/surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "product.autonomy", "product.surface"),
+    "standard/__init__.py": (),
+    "standard/floors.py": ("kernel",),
+    "standard/runtime": ("kernel", "bt", "instruments", "standard.floors", "standard.runtime"),
+    "standard/autonomy": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.autonomy"),
+    "standard/surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.autonomy", "standard.surface"),
+    "tools": ("kernel", "bt", "instruments", "standard", "tools"),
+    "examples": (),
 }
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
 KERNEL_EFFECT_MODULES = {"os", "pathlib", "time", "socket", "sqlite3", "subprocess", "urllib", "http",
@@ -78,13 +80,13 @@ def violations(root: Path = ROOT) -> list[str]:
                     problems.append(f"{rel} imports {name}: kernel must not perform or observe physical effects")
                 if rel == "bt/checker.py" and ((top == "kernel" and name not in CHECKER_ALLOWED) or top == "bt"):
                     problems.append(f"{rel} imports {name}: second judge must remain independent")
-    # A new product module must have a declared role, never silently escape the policy.
-    for path in sorted((root / "product").rglob("*.py")):
+    # A new Standard module must have a declared role, never silently escape the policy.
+    for path in sorted((root / "standard").rglob("*.py")):
         rel = str(path.relative_to(root))
-        if not (rel in ("product/__init__.py", "product/floors.py")
+        if not (rel in ("standard/__init__.py", "standard/floors.py")
                 or any(rel.startswith(prefix + "/") for prefix in
-                       ("product/runtime", "product/autonomy", "product/surface", "product/tools", "product/demo"))):
-            problems.append(f"{rel}: product module has no declared role")
+                       ("standard/runtime", "standard/autonomy", "standard/surface"))):
+            problems.append(f"{rel}: Standard module has no declared role")
     return problems
 
 

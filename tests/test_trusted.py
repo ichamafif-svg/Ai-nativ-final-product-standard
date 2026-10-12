@@ -13,7 +13,7 @@ from fixture import CODE, HOUR, Keys, Ledger, client_law
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from product.floors import RELEASE
+from standard.floors import RELEASE
 from kernel import Kernel, Refused, canon, digest
 from kernel.floor0 import DISPATCH_MS
 from bt import (AdmissionGateway, Checker, ClockError, Disagreement, EffectPort, EscalationOutbox,

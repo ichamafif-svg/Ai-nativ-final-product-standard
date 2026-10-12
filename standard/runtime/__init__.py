@@ -1,7 +1,7 @@
-"""Privileged product assembly. Its location does not remove it from the installation's trust base."""
+"""Privileged Standard assembly. Its location does not remove it from the installation's trust base."""
 from bt.release import code_digest as source_digest
 
-SOURCES = ("kernel", "bt", "product/__init__.py", "product/floors.py", "product/runtime")
+SOURCES = ("kernel", "bt", "standard/__init__.py", "standard/floors.py", "standard/runtime")
 
 
 def code_digest(root=None) -> str:

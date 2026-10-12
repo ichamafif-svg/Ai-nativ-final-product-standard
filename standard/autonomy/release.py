@@ -1,7 +1,7 @@
 """U: switch or restart production when the facts and the engineers' settings say so (D30-D32, D36).
 
 The scanner signs what is on each exact switch, and numbers; the law bounds when the agent may act alone; the
-engineers' settings (standard/rules.json on main, product/autonomy/policy.py) are the agent's own restraint inside those
+engineers' settings (standard/rules.json on main, standard/autonomy/policy.py) are the agent's own restraint inside those
 bounds. The agent submits the intent under the capability whose condition it believes holds; the kernel checks it.
 
     run:service:all/{from}/{to}   previous (+ requested)                       ->  rollback  (agent_rollback_reviewed)

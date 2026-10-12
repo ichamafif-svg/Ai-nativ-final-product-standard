@@ -1,6 +1,6 @@
 """Take a trusted data snapshot (D17) for the pins of one requirements file:
 
-    python product/tools/refresh_data.py requirements.txt [--actions owner/repo@ref ...] > data.json
+    python tools/refresh_data.py requirements.txt [--actions owner/repo@ref ...] > data.json
 
 Advisories come from the OSV API, package metadata from PyPI's JSON API, action refs from GitHub's API. Every fixed
 version proposed by an advisory is audited too, so that the next main can be measured from the same snapshot. The
@@ -16,7 +16,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kernel import canon, digest  # noqa: E402
 

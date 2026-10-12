@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install Standard on one Ubuntu 24.04 server (ARCHITECTURE.md §19.2, D22, D23). Run as root from the project folder:
 #
-#     bash product/tools/install_server.sh            phase 1: system, users, hosting, demo repository, ceremony (init)
-#     bash product/tools/install_server.sh activate   phase 2, at least one hour later (FLOOR-0): activate and start
+#     bash tools/install_server.sh            phase 1: system, users, hosting, demo repository, ceremony (init)
+#     bash tools/install_server.sh activate   phase 2, at least one hour later (FLOOR-0): activate and start
 #
 # The interface listens on localhost only: reach it through an SSH tunnel.
 # DEMO installation: every human and witness key is on this server and the installation assesses itself. qualify.py
@@ -15,7 +15,7 @@ HOSTING=/srv/standard/hosting
 INSTALL=/srv/standard/install
 PINS=/var/lib/standard-pins/pins.db
 PY=$CODE/venv/bin/python
-SRC="$(cd "$(dirname "$0")/../.." && pwd)"
+SRC="$(cd "$(dirname "$0")/.." && pwd)"
 
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 
@@ -52,15 +52,15 @@ EOF
   say "firewall: SSH only"
   { ufw allow OpenSSH >/dev/null && ufw --force enable >/dev/null; } || echo "WARNING: firewall not enabled"
 
-  say "hosting: one repository (app) seeded from demo/"
+  say "hosting: one repository (app) seeded from examples/demo/"
   rm -rf /srv/standard; mkdir -p /srv/standard/seed "$HOSTING" "$(dirname "$PINS")"; chmod 755 /srv/standard "$HOSTING"
-  cp -a "$CODE/product/demo/." /srv/standard/seed/
+  cp -a "$CODE/examples/demo/." /srv/standard/seed/
   git -C /srv/standard/seed init -q -b main
   git -C /srv/standard/seed add -A
   git -C /srv/standard/seed -c user.name=Standard -c user.email=standard@localhost commit -qm "Demo repository"
   for u in standard-guard standard-agent standard-gate; do rm -f "/home/$u/.gitconfig"; done
   cd "$CODE"
-  "$PY" product/tools/host.py create "$HOSTING/hosting.toml" app --from /srv/standard/seed \
+  "$PY" tools/host.py create "$HOSTING/hosting.toml" app --from /srv/standard/seed \
         --guard-user standard-guard --gate-user standard-gate
   git config --global --add safe.directory "$HOSTING/repos/app.git"
   for r in "$HOSTING/repos/app.git" "$HOSTING/inbox/app.git"; do   # the interface reads both, from outside
@@ -68,18 +68,18 @@ EOF
   done
   if [ -s /root/.ssh/authorized_keys ]; then
     head -1 /root/.ssh/authorized_keys > /tmp/owner.pub
-    "$PY" product/tools/host.py authorize "$HOSTING/hosting.toml" app owner --key /tmp/owner.pub --write --gate-user standard-gate
+    "$PY" tools/host.py authorize "$HOSTING/hosting.toml" app owner --key /tmp/owner.pub --write --gate-user standard-gate
   fi
 
   say "trusted data snapshot (OSV advisories, PyPI metadata, action commits), pinned by its digest"
-  "$PY" product/tools/refresh_data.py /srv/standard/seed/requirements.txt \
+  "$PY" tools/refresh_data.py /srv/standard/seed/requirements.txt \
         --actions actions/checkout@v4 actions/setup-python@v5 > /srv/standard/data.json \
     || { echo "WARNING: no data snapshot: vulnerabilities and action pinning stay uncovered"; rm -f /srv/standard/data.json; }
   chmod 644 /srv/standard/data.json 2>/dev/null || true
 
   say "ceremony, phase 1"
   DATA=(); [ -s /srv/standard/data.json ] && DATA=(--data /srv/standard/data.json)
-  "$PY" product/tools/ceremony.py init "$INSTALL" --repo "$HOSTING/repos/app.git" --inbox "$HOSTING/inbox/app.git" \
+  "$PY" tools/ceremony.py init "$INSTALL" --repo "$HOSTING/repos/app.git" --inbox "$HOSTING/inbox/app.git" \
         --pins "$PINS" "${DATA[@]}"
   printf '\n[run]\nmetrics = ["http://127.0.0.1:9000/metrics"]\nslo = 99.9\nbase_url = "http://127.0.0.1:9000"\n' >> "$INSTALL/standard.toml"
   # D30: the guard switches the live release (deploy, rollback); the product's user only reads it.
@@ -111,7 +111,7 @@ EOF
 
   echo
   echo "Phase 1 done. FLOOR-0 makes the grants wait one hour. Then run:"
-  echo "    bash $CODE/product/tools/install_server.sh activate"
+  echo "    bash $CODE/tools/install_server.sh activate"
 }
 
 unit() {   # name user args
@@ -138,22 +138,22 @@ EOF
 phase2() {
   cd "$CODE"
   say "ceremony, phase 2"
-  "$PY" product/tools/ceremony.py activate "$INSTALL"
-  "$PY" product/tools/ceremony.py separate "$INSTALL" --guard-user standard-guard --agent-user standard-agent
+  "$PY" tools/ceremony.py activate "$INSTALL"
+  "$PY" tools/ceremony.py separate "$INSTALL" --guard-user standard-guard --agent-user standard-agent
   if [ -f "$INSTALL/claude.key" ]; then
     chown standard-agent:standard-agent "$INSTALL/claude.key"; chmod 600 "$INSTALL/claude.key"
   fi
 
   say "two services: the operator (guard) and the agent"
-  unit standard-operator standard-guard "-m product.runtime serve $INSTALL/standard.toml 30"
-  unit standard-agent standard-agent "-m product.autonomy run $INSTALL/standard.toml 60"
-  unit standard-web standard-web "-m product.surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
+  unit standard-operator standard-guard "-m standard.runtime serve $INSTALL/standard.toml 30"
+  unit standard-agent standard-agent "-m standard.autonomy run $INSTALL/standard.toml 60"
+  unit standard-web standard-web "-m standard.surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
   # DEMO: the demo product's API and steady traffic, so that Run shows real metrics.
   id standard-demo >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-demo
   install -d -o standard-guard -g standard-guard -m 0755 /srv/standard/deploy
   install -d -o standard-demo -g standard-demo -m 0750 /srv/standard/data      # the product's data, not the guard's
-  unit standard-demo-service standard-demo "$CODE/product/tools/run_release.py /srv/standard/deploy 9000 --repo $HOSTING/repos/app.git --data /srv/standard/data"
-  unit standard-demo-load standard-demo "$CODE/product/tools/demo_load.py http://127.0.0.1:9000 20"
+  unit standard-demo-service standard-demo "$CODE/tools/run_release.py /srv/standard/deploy 9000 --repo $HOSTING/repos/app.git --data /srv/standard/data"
+  unit standard-demo-load standard-demo "$CODE/examples/load.py http://127.0.0.1:9000 20"
   systemctl daemon-reload
   systemctl enable --now standard-operator
   sleep 5
@@ -162,7 +162,7 @@ phase2() {
   systemctl enable --now standard-demo-service standard-demo-load
 
   say "qualification"
-  "$PY" product/tools/qualify.py "$INSTALL/standard.toml" | "$PY" -c \
+  "$PY" tools/qualify.py "$INSTALL/standard.toml" | "$PY" -c \
     'import json,sys; [print(p["result"], "|", p["probe"]) for p in json.load(sys.stdin)]' || true
   echo
   echo "Interface: from your computer, ssh -L 8080:localhost:8080 root@<this server>, then open http://localhost:8080"

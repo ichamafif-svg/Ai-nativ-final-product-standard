@@ -14,16 +14,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from product.tools import ceremony  # noqa: E402
+from tools import ceremony  # noqa: E402
 from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
-import product.autonomy.__main__ as agent_process  # noqa: E402
-import product.runtime.daemon as daemon  # noqa: E402
-from product.autonomy.agent import AgentError  # noqa: E402
-from product.autonomy.build import Builder, in_scope  # noqa: E402
-from product.autonomy.llm import Gate, Provider  # noqa: E402
-from product.surface.human import load_signer  # noqa: E402
+import standard.autonomy.__main__ as agent_process  # noqa: E402
+import standard.runtime.daemon as daemon  # noqa: E402
+from standard.autonomy.agent import AgentError  # noqa: E402
+from standard.autonomy.build import Builder, in_scope  # noqa: E402
+from standard.autonomy.llm import Gate, Provider  # noqa: E402
+from standard.surface.human import load_signer  # noqa: E402
 from bt.gateway import AdmissionGateway  # noqa: E402
 from bt.signing import envelope  # noqa: E402
 
@@ -138,7 +138,7 @@ class Construction(unittest.TestCase):
             self.assertEqual(facts("build:request/r-mul")["accepted"], "yes")
             builder.run()
             self.assertEqual(entity("r-mul")["state"], "delivered")
-            from product.tools import replay                                                       # D37: the facts replay, isolated
+            from tools import replay                                                       # D37: the facts replay, isolated
             config = install / "standard.toml"
             results = [replay.replay(replay.host_for(config), r) for r in replay.records(config, 200)]
             self.assertEqual({r["result"] for r in results}, {"agrees"}, results)

@@ -15,16 +15,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from product.tools import ceremony  # noqa: E402
+from tools import ceremony  # noqa: E402
 from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
-import product.autonomy.__main__ as agent_process  # noqa: E402
-import product.runtime.daemon as daemon  # noqa: E402
+import standard.autonomy.__main__ as agent_process  # noqa: E402
+import standard.runtime.daemon as daemon  # noqa: E402
 import instruments.production as runtime  # noqa: E402
 from bt.register import Registers  # noqa: E402
-from product.autonomy import release  # noqa: E402
-from product.autonomy.policy import Policy, history, law_bounds  # noqa: E402
+from standard.autonomy import release  # noqa: E402
+from standard.autonomy.policy import Policy, history, law_bounds  # noqa: E402
 from instruments.production import component_id, evaluate  # noqa: E402
 from bt.gateway import AdmissionGateway  # noqa: E402
 
@@ -225,7 +225,7 @@ class Settings(unittest.TestCase):
         self.assertFalse(runtime.measures({"components": {cid: {"counted": "off"}}})["counted"][cid])   # the scanner too
 
     def test_the_law_bounds_and_the_history_of_the_rules(self):
-        from product.floors import FLOORS
+        from standard.floors import FLOORS
         bounds = law_bounds(FLOORS["conditions"])
         self.assertEqual((bounds["burn_fast"], bounds["rollback_horizon_min"], bounds["restarts_per_hour"]),
                          (("ge", 14.4), ("le", 240.0), ("le", 12.0)))
@@ -363,7 +363,7 @@ class Production(unittest.TestCase):
         ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None,
                                          pins=str(root / "elsewhere" / "pins.db")))
         with open(install / "standard.toml", "a") as f:
-            f.write('\n[run]\nmetrics = ["http://product/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n')
+            f.write('\n[run]\nmetrics = ["http://standard/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n')
         clock.t += 3_600_100
         ceremony.activate(argparse.Namespace(dir=str(install)))
         operator = daemon.Installation(install / "standard.toml")
@@ -416,7 +416,7 @@ class Production(unittest.TestCase):
             self.assertIn("run-slo", [p["target"] for p in health["proven"]])     # the service itself recovered
 
             # D31: the engineer keeps deployment for himself (stricter: at once), then approves one exact switch.
-            from product.surface.human import load_signer
+            from standard.surface.human import load_signer
             from bt.signing import envelope
             h1 = load_signer("h1", install / "keys" / "h1.key")
 
@@ -452,7 +452,7 @@ class Production(unittest.TestCase):
             self.assertNotIn(f"proof:{restart}", operator.journal.snapshot()["obligations"])
 
             # D37: every signed measure is a pure function of its run record; anyone can run it again.
-            from product.tools import replay
+            from tools import replay
             config = install / "standard.toml"
             recorded = replay.records(config, 200)
             jobs = {}
@@ -484,7 +484,7 @@ class CanaryEndToEnd(unittest.TestCase):
         ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None,
                                          pins=str(root / "elsewhere" / "pins.db")))
         with open(install / "standard.toml", "a") as f:
-            f.write('\n[run]\nmetrics = ["http://product/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n'
+            f.write('\n[run]\nmetrics = ["http://standard/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n'
                     'runner_metrics = "http://runner/__standard/metrics"\n')
         clock.t += 3_600_100
         ceremony.activate(argparse.Namespace(dir=str(install)))
@@ -523,7 +523,7 @@ class CanaryEndToEnd(unittest.TestCase):
                     cycle.run()
                 operator.tick()
 
-            from product.surface.human import load_signer
+            from standard.surface.human import load_signer
             from bt.signing import envelope
             h1 = load_signer("h1", install / "keys" / "h1.key")
             m0 = git("rev-parse", "main", cwd=repo)
@@ -563,7 +563,7 @@ class CanaryEndToEnd(unittest.TestCase):
             self.assertIn("abort", [h["op"] for h in operator.releases.history()])
 
             # D35: a rules commit that changes anything else, or bytes nobody signed, is never `configured`.
-            from product.autonomy.agent import commit_files
+            from standard.autonomy.agent import commit_files
             here = git("rev-parse", "main", cwd=repo)
             sneaky = commit_files(cycle.agent.store, here, {"standard/rules.json": doc, "app.py": b"evil = 1\n"},
                                   f"rules\n\nStandard-Rules: {digest}\n")

@@ -1,6 +1,6 @@
 """Steady traffic on the demo service, so that the console has something real to show.
 
-    python product/tools/demo_load.py [http://127.0.0.1:9000] [requests-per-second]
+    python examples/load.py [http://127.0.0.1:9000] [requests-per-second]
 """
 import random
 import sys

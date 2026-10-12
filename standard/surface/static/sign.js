@@ -48,7 +48,7 @@ export function pae(payload) {
   return out;
 }
 
-// A key file holds base64 of the raw 32-byte Ed25519 seed (as product/tools/ceremony.py writes it).
+// A key file holds base64 of the raw 32-byte Ed25519 seed (as tools/ceremony.py writes it).
 const PKCS8_ED25519 = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
 
 export async function importKeyFile(text) {

@@ -12,10 +12,10 @@ from pathlib import Path
 from test_maintenance import FILES, demo_repository
 
 
-from product.tools import ceremony  # noqa: E402
+from tools import ceremony  # noqa: E402
 
-import product.autonomy.__main__ as agent_process  # noqa: E402
-import product.runtime.daemon as daemon  # noqa: E402
+import standard.autonomy.__main__ as agent_process  # noqa: E402
+import standard.runtime.daemon as daemon  # noqa: E402
 from bt.gateway import AdmissionGateway  # noqa: E402
 
 
@@ -67,7 +67,7 @@ class Installation(unittest.TestCase):
         ceremony.now = Clock(1_900_000_000_000)
         ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None,
                                          pins=None))
-        from product.tools import qualify
+        from tools import qualify
         report = {p["probe"]: p for p in qualify.qualify(root / "install" / "standard.toml")}
         failed = {name for name, p in report.items() if p["result"] == "FAIL"}
         self.assertTrue({"T04 pins apart from the journal", "T02 humans hold their own keys",
@@ -128,7 +128,7 @@ class GitHubAdapter(unittest.TestCase):
 
 class Refresh(unittest.TestCase):
     def test_a_snapshot_audits_the_fixed_versions_too(self):
-        from product.tools import refresh_data
+        from tools import refresh_data
         answers = {"24.1": [{"id": "GHSA-1", "affected": [{"ranges": [{"events": [{"fixed": "24.2"}]}]}]}], "24.2": []}
 
         def get(url, body=None):

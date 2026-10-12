@@ -866,7 +866,7 @@ function fact(text, tone) {
   return `<span class="fact ${tone}"><i></i>${esc(text)}</span>`;
 }
 
-const auto = (id) => state.product.autonomy.requirements.find((a) => a.id === id);
+const auto = (id) => state.standard.autonomy.requirements.find((a) => a.id === id);
 
 function requirementTables() {
   return `${DOMAINS.map(([label, test]) => {

@@ -1,7 +1,7 @@
 """Run the live release of a product without downtime, and follow the guard's switches, restarts and canaries
 (D30, D31, D32).
 
-    python product/tools/run_release.py /srv/standard/deploy 9000 --repo /srv/standard/hosting/repos/app.git
+    python tools/run_release.py /srv/standard/deploy 9000 --repo /srv/standard/hosting/repos/app.git
                                 [--releases DIR] [--health /health] [--data /srv/standard/data]
 
 The guard only moves registers, small files in the deploy directory holding commits (D37: bt/register.py). The

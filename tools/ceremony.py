@@ -1,10 +1,10 @@
 """Constitute an installation (§13.2 step 1, D18), in two phases separated by FLOOR-0's witnessed delay:
 
-    python product/tools/ceremony.py init DIR --repo PATH [--pins PATH]                 a local git repository
-    python product/tools/ceremony.py init DIR --github OWNER/NAME --token-file F [--pins PATH]
+    python tools/ceremony.py init DIR --repo PATH [--pins PATH]                 a local git repository
+    python tools/ceremony.py init DIR --github OWNER/NAME --token-file F [--pins PATH]
     ... at least one hour later ...
-    python product/tools/ceremony.py activate DIR
-    python product/tools/ceremony.py separate DIR --guard-user U --agent-user V      (as root, before serving)
+    python tools/ceremony.py activate DIR
+    python tools/ceremony.py separate DIR --guard-user U --agent-user V      (as root, before serving)
 
 `init` writes keys, the client law, the genesis, the witnesses' first checkpoint, the grant proposals, a
 self-assessment and DIR/standard.toml. `activate` anchors time again and activates the grants. The genesis grants
@@ -25,17 +25,17 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat  # noqa: E402
 
-from product.floors import RELEASE  # noqa: E402
+from standard.floors import RELEASE  # noqa: E402
 from kernel import Kernel, canon, digest, empty  # noqa: E402
 from bt.assessment import CONTRACTS, PREFIX, SignedAssessment  # noqa: E402
-from product.runtime.daemon import key  # noqa: E402
+from standard.runtime.daemon import key  # noqa: E402
 from bt.journal import Journal, PinStore  # noqa: E402
-from product.runtime import code_digest  # noqa: E402
+from standard.runtime import code_digest  # noqa: E402
 from bt.signing import Signer, entry  # noqa: E402
 
 IDENTITIES = {"h1": "human", "h2": "human", "h3": "human", "h4": "human", "w1": "witness", "w2": "witness",
@@ -178,7 +178,7 @@ key = "agent/agent.key"
 store = "agent/store"
 {data_section}''')
     print(f"constituted {d}: genesis {domain}. Activate the grants after {time.ctime((journal.snapshot()["last_at"] + 3_600_000) / 1000)}:")
-    print(f"    python product/tools/ceremony.py activate {d}")
+    print(f"    python tools/ceremony.py activate {d}")
 
 
 def activate(args) -> None:
@@ -241,7 +241,7 @@ def separate(args) -> None:
     if "separation" not in c:
         with open(d / "standard.toml", "a") as f:
             f.write(f'\n[separation]\nguard_user = "{guard.pw_name}"\nagent_user = "{agent.pw_name}"\n')
-    print(f"separated: {guard.pw_name} runs `python -m product.runtime serve`, {agent.pw_name} runs `python -m product.autonomy run`")
+    print(f"separated: {guard.pw_name} runs `python -m standard.runtime serve`, {agent.pw_name} runs `python -m standard.autonomy run`")
 
 
 def main() -> int:
@@ -253,8 +253,8 @@ def main() -> int:
     i.add_argument("--github")
     i.add_argument("--token-file")
     i.add_argument("--pins")
-    i.add_argument("--inbox", help="the hosting inbox of this repository (product/tools/host.py)")
-    i.add_argument("--data", help="a reviewed snapshot from product/tools/refresh_data.py, pinned by its digest")
+    i.add_argument("--inbox", help="the hosting inbox of this repository (tools/host.py)")
+    i.add_argument("--data", help="a reviewed snapshot from tools/refresh_data.py, pinned by its digest")
     a = sub.add_parser("activate")
     a.add_argument("dir")
     s = sub.add_parser("separate")

@@ -1,6 +1,6 @@
 """The operator process (§19): assemble K and T from one configuration, serve the gateway, run the passes.
 
-    python -m product.runtime serve standard.toml
+    python -m standard.runtime serve standard.toml
 
 One process, one host, one writer (D06). Every tick: witness (demo only), instruments, departures, readback, proof of
 application. Each pass fails alone and is logged; none can admit anything except through the journal.
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from product.floors import CONTRACTS, PROGRAMS, RELEASE
+from standard.floors import CONTRACTS, PROGRAMS, RELEASE
 from kernel import Kernel
 
 from bt.adapters import GitRepository
@@ -160,7 +160,7 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     os.umask(0o027)                     # T07: what the guard writes, its group (the agent, for the socket) only reads
     if len(argv) < 2 or argv[0] not in ("serve", "tick"):
-        print("usage: python -m product.runtime serve|tick standard.toml [interval-seconds]")
+        print("usage: python -m standard.runtime serve|tick standard.toml [interval-seconds]")
         return 2
     installation = Installation(argv[1])
     if argv[0] == "tick":

@@ -96,13 +96,13 @@ class Integration(unittest.TestCase):
         import argparse
         import threading
         sys.path.insert(0, str(ROOT / "tests"))
-        from product.tools import ceremony
+        from tools import ceremony
         from test_install import Clock
         from test_maintenance import FILES, demo_repository
 
-        import product.autonomy.__main__ as agent_process
-        import product.runtime.daemon as daemon
-        from product.surface.human import load_signer, review
+        import standard.autonomy.__main__ as agent_process
+        import standard.runtime.daemon as daemon
+        from standard.surface.human import load_signer, review
         from bt.gateway import AdmissionGateway
 
         root = Path(tempfile.mkdtemp())

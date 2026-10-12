@@ -5,7 +5,7 @@ its own repository, a commit's manifest, a file at a commit, a blob of a store c
 data, a recorded series of scrapes, a value), how to run the programs package (instruments/) as the isolated runner,
 and how to keep, content-addressed, everything a run read and returned. It refuses to run a package whose digest is
 not the one the floors pin. What a fact means is the program's; that it was computed from these exact inputs by that
-exact code is the host's, and anyone can check it by running the record again (product/tools/replay.py).
+exact code is the host's, and anyone can check it by running the record again (tools/replay.py).
 """
 from __future__ import annotations
 

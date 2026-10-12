@@ -1,6 +1,6 @@
 """U08 — the web interface (ARCHITECTURE.md §11.9): BUILD and RUN of one installation, reviews to sign, the law.
 
-    python -m product.surface.web standard.toml [--bind 127.0.0.1] [--port 8080]
+    python -m standard.surface.web standard.toml [--bind 127.0.0.1] [--port 8080]
 
 It binds to localhost by default: reach it through an SSH tunnel (`ssh -L 8080:localhost:8080 server`) or put a TLS
 proxy in front. It holds no key and decides nothing. It reads the installation through the admission gateway (the view,
@@ -24,7 +24,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from product.autonomy.projection import Route, project
+from standard.autonomy.projection import Route, project
 from instruments.data import EMPTY
 from bt.gateway import GatewayClient
 from instruments.recipes import recipes_for
@@ -34,7 +34,7 @@ SHA = re.compile(r"[0-9a-f]{40}")
 BRANCH = re.compile(r"([0-9a-f]{40})\trefs/heads/([a-z0-9][a-z0-9_-]{0,63})/(\S+)")
 ROUTES = {"RUN": [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
                   Route("scanner", "RUN", "*", frozenset({"observe", "cover", "prove"}))]}
-HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1", "product": "h1"}           # the demo ceremony's grants to people (product/tools/ceremony.py)
+HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1", "product": "h1"}           # the demo ceremony's grants to people (tools/ceremony.py)
 MAX_BODY = 1 << 20
 
 
@@ -346,7 +346,7 @@ class Installation:
     def settle(self, view: dict | None = None):
         """The engineers' settings as main carries them, and the signed silences (D36), so that the console judges
         and alerts with them."""
-        from product.autonomy.policy import Policy
+        from standard.autonomy.policy import Policy
         policy = Policy(self.rules_doc(), transitions=(view or {}).get("transitions"))
         self.telemetry.limits, self.telemetry.late_periods = policy.limits, int(policy.get("late_periods"))
         self.telemetry.slo = policy.get("objective") / 100
@@ -354,7 +354,7 @@ class Installation:
 
     def changes(self) -> list:
         """The rules file's history on main: who changed what, when (git keeps it; the journal keeps the proofs)."""
-        from product.autonomy.policy import history
+        from standard.autonomy.policy import history
         log = git(self.repo, "log", "-30", "--format=%H %at %an", "main", "--", "standard/rules.json", check=False)
         versions = [(int(at) * 1000, author, self.rules_doc(h)) for h, at, author in
                     (line.split(" ", 2) for line in log.splitlines()[::-1] if line.count(" ") >= 2)]
@@ -429,7 +429,7 @@ class Installation:
 
     def settings(self) -> dict:
         """Everything an engineer may set, its effective value, what is pending, and every component to tune (D31)."""
-        from product.autonomy.policy import law_bounds
+        from standard.autonomy.policy import law_bounds
         findings, view = _json(self.findings), self.client.view()
         policy = self.settle(view)
         report = self.telemetry.report(window=3600)
@@ -660,7 +660,7 @@ def handler(inst: Installation):
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m product.surface.web")
+    parser = argparse.ArgumentParser(prog="python -m standard.surface.web")
     parser.add_argument("config")
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)

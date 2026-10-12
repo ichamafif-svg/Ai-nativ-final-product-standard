@@ -41,7 +41,7 @@ class Instrument:
     def observation(self, domain: str, resource: str, prop: str, status: str, artifact: str | None = None,
                     method: str | None = None) -> dict:
         """A property the floors pin to an instrument (D33) is signed as a measurement of the pinned programs."""
-        from product.floors import INSTRUMENTS
+        from standard.floors import INSTRUMENTS
         at = self.clock()
         body = {"id": f"obs-{uuid.uuid4().hex}", "at": at, "author": self.signer.identity,
                 "under": self.capability, "resource": resource, "property": prop, "status": status, "level": "real"}

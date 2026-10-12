@@ -1,6 +1,6 @@
 """Qualification probes for one installation (ARCHITECTURE.md §15.2).
 
-    python product/tools/qualify.py standard.toml
+    python tools/qualify.py standard.toml
 
 Each probe checks what can be checked from this host and states what it does not prove. A PASS here is evidence for
 an independent assessor, not a qualification; a FAIL names the physical premise that does not hold. Exit code 1 when
@@ -14,9 +14,9 @@ import sys
 import tomllib
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from product.runtime import code_digest  # noqa: E402
+from standard.runtime import code_digest  # noqa: E402
 
 HUMANS = ("h1", "h2", "h3", "h4")
 WITNESSES = ("w1", "w2")
@@ -70,7 +70,7 @@ def qualify(config_path) -> list:
                      "the code a contribution brings runs as an account without the guard's keys, without network",
                      "that the kernel's user namespaces and sudo are themselves sound"))
     try:                                                    # D37: the signed measures replay from their records
-        from product.tools import replay
+        from tools import replay
         results = [replay.replay(replay.host_for(path), r) for r in replay.records(path, 5)]
         bad = [r for r in results if r["result"] != "agrees"]
         observed = bad or f"{len(results)} latest records agree" if results else "no measurement recorded yet"
@@ -140,7 +140,7 @@ def qualify(config_path) -> list:
         out.append(probe("T07 hosted repositories behind the gate", ok, bad or f"{len(hosted)} repositories; "
                          f"canonical owned by {guard.pw_name}, inboxes by {gate.pw_name}",
                          "a client's push, run as the gate user, cannot write a canonical repository",
-                         "sshd's configuration, other accounts on the host, and keys authorized outside product/tools/host.py"))
+                         "sshd's configuration, other accounts on the host, and keys authorized outside tools/host.py"))
     return out
 
 
