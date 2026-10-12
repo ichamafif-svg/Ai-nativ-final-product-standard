@@ -1263,6 +1263,7 @@ Le socle a trois paquets. Le produit existant est conservé à part pour être r
 | `RegisterEffect.satisfied` tolère une version servie inconnue et l'interface lit encore le canary avec `readlink` | Produit à reprendre : preuve de service à rendre stricte et lecture de registre à unifier ; aucune correction fonctionnelle incluse ici |
 | Console de télémétrie collectant ses propres séries à côté des captures des instruments | Produit à reprendre : deux collectes / projections, sans autorité supplémentaire accordée à la console |
 | Empreinte calculée après import ; vérification pré-import annoncée dans l'architecture | Ouvert : le calcul d'une empreinte ne démontre pas ce que le processus a chargé |
+| Deux tests créant des commits temporaires sans identité Git dans un environnement vierge | La commande `make test` fournit une identité de test uniquement au processus de vérification ; assertions et runtime inchangés |
 | Second juge et tests adversariaux ciblés, sans démonstration générale ni domaine de panne distinct | Limite conservée : aucun énoncé universel de tolérance à un bug ; isolation physique à qualifier |
 
 Les fonctions du produit sont conservées avec leurs contrats de test. Cette consolidation ne certifie pas les propriétés physiques, ne transforme pas les inconnues en preuves et ne prétend pas terminer le produit.
