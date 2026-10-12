@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import re
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import instruments.probes as probes
 from instruments.tree import Snapshot
 from instruments.recipes import recipes_for
+from instruments.suite import report_measure
 
 from .sandbox import Sandbox
 
@@ -72,16 +72,16 @@ def suite(sandbox: Sandbox, store, base: str, head: str, cache=None) -> tuple[st
             return "uncovered", [str(exc)]
         report = Path(tempfile.mkdtemp()) / "report.xml"
         (report.parent / "pytest.ini").write_text("[pytest]\n")
-        sandbox.run([python, "-m", "pytest", "-c", report.parent / "pytest.ini", "--rootdir", code, "-p",
+        result = sandbox.run([python, "-m", "pytest", "-c", report.parent / "pytest.ini", "--rootdir", code, "-p",
                      "no:cacheprovider", "-q", f"--junitxml={report}", main_tree / "tests"], code, pythonpath=code)
         if not report.exists():
             return "uncovered", ["the suite produced no report"]
-        failed = []
-        for case in ET.parse(report).iter("testcase"):
-            bad = [c for c in case if c.tag in ("failure", "error")]
-            if bad:
-                failed.append(f"{case.get('classname')}::{case.get('name')}\n{(bad[0].text or '')[-1200:]}")
-        return ("red" if failed else "green"), failed
+        try:
+            measure = report_measure(report, result.code)
+            status = probes.verdict("green", measure)
+            return ("red" if status.startswith("found:") else status), list(measure.details)
+        except Exception as exc:
+            return "uncovered", [f"{type(exc).__name__}: {exc}"]
 
 
 def tools(sandbox: Sandbox, store, base: str, head: str, changed: list) -> dict:
@@ -99,6 +99,11 @@ def tools(sandbox: Sandbox, store, base: str, head: str, changed: list) -> dict:
                 r = sandbox.python_module(name, *args, *present, cwd=tree) if present else None
                 lines[label] = {re.sub(r":\d+:\d+:", ":", ln) for ln in (r.out.splitlines() if r else [])
                                 if re.match(r"[^\s:]+\.py:\d+", ln)}
+                if r is not None and not r.ok and not lines[label]:
+                    out[name] = [f"{label}: tool failed without usable diagnostics (exit {r.code}): {r.out[-500:]}"]
+                    break
+        if name in out:
+            continue
         new = sorted(lines["head"] - lines["base"])
         if new:
             out[name] = new[:30]
@@ -107,17 +112,19 @@ def tools(sandbox: Sandbox, store, base: str, head: str, changed: list) -> dict:
 
 def precheck(store, base: str, head: str, target_id: str, targets: dict, data, sandbox: Sandbox,
              cache=None) -> dict:
-    """{"ok": bool, "problems": [str], "fixed": bool, ...}: whether this candidate is worth proposing."""
+    """Candidate checks only; fixed=None means no local instrument measured that requirement, never a success."""
     before, after = measure(Snapshot(store, base), targets, data), measure(Snapshot(store, head), targets, data)
     worse = [tid for tid in after if tid != target_id and _worse(targets[tid]["expect"], before[tid][0], after[tid][0])]
     autonomous = set(recipes_for(data))                   # a gap a recipe closes on the next pass is a follow-up
     problems = [f"{tid}: {before[tid][0]} -> {after[tid][0]} {after[tid][1][:5]}" for tid in worse
                 if tid not in autonomous]
     follow_ups = [tid for tid in worse if tid in autonomous]
-    fixed = target_id not in after or after[target_id][0] == targets[target_id]["expect"]
-    if not fixed:
+    fixed = after[target_id][0] == targets[target_id]["expect"] if target_id in after else None
+    if fixed is False:
         problems.append(f"{target_id} is still {after[target_id][0]}: {after[target_id][1][:5]}")
     status, failures = suite(sandbox, store, base, head, cache)
+    if target_id == "ci":
+        fixed = status == "green"
     if status != "green":
         problems.append(f"main's tests are {status} on this candidate: {failures[:3]}")
     changed = probes.git(store, "diff", "--name-only", base, head).split()

@@ -22,3 +22,10 @@ source unmodifiable during an authorized release refactor. Facts such as `tests`
 for with a trailer: `Standard-Target:` for a repair, `Standard-Request: <id>` for a request.
 
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+A missing route is visible as `NO_ROUTE`; its `investigate` task keeps the same obligation and deadline. The agent may
+read/search its snapshot, fetch only configured research sources, and experiment in the strict bubblewrap jail. Research
+outputs are notes, never signed facts or permission to register an instrument. Generic repairs require an operator-configured
+write scope and human review; the kernel still decides and only the law's accepted source can close the gap.
+The same effective-law context feeds the CLI, web context endpoint and maintenance model. `make coverage` is auxiliary
+source inspection; it is not the law or a runtime qualification. Details and configuration: ARCHITECTURE.md §20.5.

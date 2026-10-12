@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from dataclasses import replace
 
-from .agent import Agent, AgentError
+from .agent import Agent, AgentError, WRITE_SCOPE
 from .memory import Memory
-from .projection import project
+from .projection import Route, project
+from .context import render_context, task_context
 from .work import WorkEngine
 
 
@@ -23,6 +25,13 @@ class Cycle:
         """main(): the maintained repository's current main commit (read-only). state_path: U's own notes.
         findings: the instruments' published findings (information, not facts). memory: the agent's attempts."""
         self.service, self.engine, self.agent, self.routes = service, engine, agent, tuple(routes)
+        if isinstance(agent, Agent):
+            supported = set(agent.scopes) | set(WRITE_SCOPE) \
+                if agent.llm else {"sbom", "vulns", "actions"}
+            self.routes = tuple(replace(r, target_ids=frozenset(supported))
+                                if r.id == "agent-remediate" and r.target_ids is None else r for r in self.routes)
+        if callable(getattr(agent, "investigate", None)) and not any("investigate" in r.needs for r in self.routes):
+            self.routes += (Route("agent-investigate", "BOTH", "*", frozenset({"investigate"})),)
         self.clock, self.main, self.notes, self.backoff_ms = clock, main, Path(state_path), backoff_ms
         self.findings_path = Path(findings) if findings else None
         self.memory = memory or Memory(self.notes.with_name("memory.json"))
@@ -46,10 +55,26 @@ class Cycle:
         law = view["law"]["effective"]
         targets = {t["id"]: t for t in law["targets"]}
         findings = self._findings()
-        proposals, report = self._proposals(), {"state": plan["state"], "crafted": {}, "submitted": {}}
+        proposals, report = self._proposals(), {"state": plan["state"], "crafted": {}, "submitted": {}, "research": {}}
         now = self.clock()
-        while (task := self.engine.claim(mode=mode, now=now, needs=("repair",))) is not None:
+        while (task := self.engine.claim(mode=mode, now=now, needs=("repair", "investigate"))) is not None:
             tid = task["target"]
+            if task.get("need") == "investigate":
+                base = self.main()
+                memory_key = f"research:{task['id']}:{view['law'].get('digest')}"
+                try:
+                    if self.memory.exhausted(memory_key, base):
+                        report["research"][task["id"]] = {"blocked": "research budget exhausted; operator review needed"}
+                    else:
+                        report["research"][task["id"]] = self.agent.investigate(view, task, base, findings)
+                        self.memory.record(memory_key, at=now, base=base, outcome="research",
+                                           why=str(report["research"][task["id"]].get("summary", "proposal recorded")))
+                except (AgentError, OSError, ValueError) as exc:
+                    report["research"][task["id"]] = {"blocked": str(exc)}
+                    self.memory.record(memory_key, at=now, base=base, outcome="research", why=str(exc))
+                self.engine.complete_attempt(mode=mode, task_id=task["id"], lease_until=task["lease_until"],
+                                             next_at=now + self.backoff_ms + 1)
+                continue
             target = targets[tid]
             _, area, item = target["resource"].split(":", 2)
             base = self.main()
@@ -64,7 +89,10 @@ class Cycle:
                 else:
                     if key not in proposals:
                         head, route = self.agent.craft(tid, base, targets=targets, lessons=self.memory.lessons(tid),
-                                                       finding=findings.get(f"{target['resource']}|{target['property']}"))
+                                                       finding=findings.get(f"{target['resource']}|{target['property']}"),
+                                                       law_text=render_context(task_context(view, {**task,
+                                                           "need": task.get("need", "repair"),
+                                                           "resource": target["resource"]}, findings)))
                         proposals[key] = {"target": tid, "area": area, "item": item, "base": base,
                                           "head": head, "route": route, "submitted": False}
                         report["crafted"][tid] = proposals[key]

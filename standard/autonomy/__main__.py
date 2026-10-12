@@ -21,11 +21,12 @@ from instruments.data import EMPTY, TrustedData
 from bt.gateway import GatewayClient
 from bt.signing import Signer
 
-from . import Agent, Cycle, Route, WorkEngine
+from . import Agent, Cycle, WorkEngine
 from .llm import Gate
 from .memory import Memory
+from .projection import installed_routes
 
-ROUTES = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"}))]
+ROUTES = installed_routes(scanner=False)
 
 
 def git(repo, *args) -> str:
@@ -57,8 +58,10 @@ def build(config_path) -> tuple[Cycle, callable]:
     llm = Gate.from_config(c["llm"], resolve, store.parent / "egress.log") if c.get("llm") else None
     agent = Agent(signer, {"recipe": c["grants"]["agent_recipe"], "review": c["grants"]["agent_review"]}, store,
                   data=TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY,
-                  api_key=resolve(api).read_text().strip() if api and not llm else None, publish=publish, llm=llm)
-    cycle = Cycle(GatewayClient(resolve(c["socket"]["path"])), WorkEngine(store.parent / "work.db"), agent, ROUTES,
+                  api_key=resolve(api).read_text().strip() if api and not llm else None, publish=publish, llm=llm,
+                  scopes=agent_cfg.get("scopes"), research_sources=agent_cfg.get("research_sources"))
+    routes = installed_routes(agent.scopes, model=agent.llm is not None, scanner=True)
+    cycle = Cycle(GatewayClient(resolve(c["socket"]["path"])), WorkEngine(store.parent / "work.db"), agent, routes,
                   clock=lambda: int(time.time() * 1000), main=main, state_path=store.parent / "proposals.json",
                   findings=path.parent / "findings.json",
                   memory=Memory(store.parent / "memory.json", budget=int(agent_cfg.get("attempts", 3))))
@@ -83,8 +86,8 @@ def build(config_path) -> tuple[Cycle, callable]:
         builder = Builder(cycle.service, signer, {k: c["grants"][k] for k in ("agent_implement", "agent_deliver")
                                                   if k in c["grants"]}, store,
                           resolve(c.get("build", {}).get("store", "requests")), main=main,
-                          clock=lambda: cycle.clock(), notes=store.parent / "requests.json", llm=llm,
-                          data=agent.data)
+                          clock=lambda: cycle.clock(), notes=store.parent / "requests.json", llm=agent.llm,
+                          data=agent.data, research_sources=agent_cfg.get("research_sources"))
         run_build = cycle.run
         cycle.run = lambda mode="RUN": {**run_build(mode), "build": builder.run()}
     if switches:                                          # D30: production follows main, and steps back on a breach

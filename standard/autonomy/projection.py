@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
-NEEDS = ("cover", "observe", "repair", "prove", "review", "witness")
+NEEDS = ("cover", "observe", "repair", "prove", "review", "witness", "investigate")
 CONTRACTS = tuple(f"T{i:02}" for i in range(1, 10))
 STATES = ("AVAILABLE", "TRUST_BLOCKED", "NO_ROUTE", "HUMAN_REVIEW")
 
@@ -26,14 +26,16 @@ class Route:
     resource: str                      # fnmatch pattern
     needs: frozenset
     required_t: frozenset = frozenset()
+    target_ids: frozenset | None = None
 
     def __post_init__(self):
         if (not self.id or self.mode not in ("BUILD", "RUN", "BOTH") or not self.resource or not self.needs
                 or not set(self.needs) <= set(NEEDS) or not set(self.required_t) <= set(CONTRACTS)):
             raise ProjectionError(f"invalid route {self.id}")
 
-    def serves(self, mode: str, resource: str, need: str) -> bool:
-        return self.mode in (mode, "BOTH") and need in self.needs and fnmatchcase(resource, self.resource)
+    def serves(self, mode: str, resource: str, need: str, target_id=None) -> bool:
+        return (self.mode in (mode, "BOTH") and need in self.needs and fnmatchcase(resource, self.resource)
+                and (self.target_ids is None or target_id in self.target_ids))
 
 
 def minimum_trust(law: dict, resource: str, need: str) -> set:
@@ -76,9 +78,10 @@ def project(view: dict, routes, qualify, *, mode: str = "RUN") -> dict:
     law, health = view["law"]["effective"], view["health"]
     tasks = []
     for item in [*health["open"], *health["escalated"]]:
+        missing_needs = []
         for resource, need in _tasks_of(item, law):
             choices = []
-            for route in sorted((r for r in routes if r.serves(mode, resource, need)), key=lambda r: r.id):
+            for route in sorted((r for r in routes if r.serves(mode, resource, need, item.get("target"))), key=lambda r: r.id):
                 required = set(route.required_t) | minimum_trust(law, resource, need)
                 try:
                     qualify(sorted(required))
@@ -92,10 +95,36 @@ def project(view: dict, routes, qualify, *, mode: str = "RUN") -> dict:
                 state = "AVAILABLE"
             else:
                 state = "TRUST_BLOCKED" if choices else "NO_ROUTE"
+            if state == "NO_ROUTE" and need in ("cover", "observe", "repair", "prove"):
+                missing_needs.append(need)
             tasks.append({"id": f"{item['obligation']}:{need}", "obligation": item["obligation"], "need": need,
                           "resource": resource, "target": item.get("target"), "opened": item["opened"],
                           "due": item["due"], "escalated": "escalated_to" in item, "state": state,
                           "routes": choices})
+        if missing_needs:
+            target = next((t for t in law["targets"] if t["id"] == item.get("target")), None)
+            resource = target["resource"] if target else "intent:" + item.get("intent", "unknown")
+            choices = [{"route": r.id, "state": "AVAILABLE", "required_t": []} for r in routes
+                       if r.serves(mode, resource, "investigate", item.get("target"))]
+            if choices:
+                tasks.append({"id": f"{item['obligation']}:investigate", "obligation": item["obligation"],
+                              "need": "investigate", "for_needs": sorted(set(missing_needs)), "resource": resource,
+                              "target": item.get("target"), "opened": item["opened"], "due": item["due"],
+                              "escalated": "escalated_to" in item, "state": "AVAILABLE", "routes": choices})
     tasks.sort(key=lambda t: (t["due"], t["id"]))
     return {"mode": mode, "basis": view["prefix"], "law": view["law"]["digest"], "state": health["state"],
             "tasks": tasks}
+
+
+def installed_routes(scopes=(), *, model=True, recipes=True, scanner=True):
+    """Actual registered targets, rather than pretending repo:* implements any client requirement."""
+    from instruments.probes import PROBES
+    from .agent import WRITE_SCOPE
+    repair = set(WRITE_SCOPE) | set(scopes) if model else ({"sbom", "vulns", "actions"} if recipes else set())
+    routes = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"}), target_ids=frozenset(repair)),
+              Route("agent-investigate", "BOTH", "*", frozenset({"investigate"}))]
+    if scanner:
+        routes.append(Route("scanner", "RUN", "*", frozenset({"observe", "cover", "prove"}),
+                            target_ids=frozenset({*PROBES, "inventory", "run-sources", "run-slo", "run-live"})))
+        routes.append(Route("oracle", "BOTH", "intent:*", frozenset({"prove"}), frozenset({"T08"})))
+    return routes

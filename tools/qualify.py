@@ -9,22 +9,44 @@ any probe fails.
 from __future__ import annotations
 
 import json
+import base64
 import os
+import sqlite3
+import subprocess
+import time
 import sys
 import tomllib
 from pathlib import Path
+from contextlib import closing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from standard.runtime import code_digest  # noqa: E402
-
-HUMANS = ("h1", "h2", "h3", "h4")
-WITNESSES = ("w1", "w2")
-
+from standard.floors import RELEASE  # noqa: E402
+from kernel import Kernel, empty  # noqa: E402
+from kernel.canon import parse  # noqa: E402
+from bt.assessment import SignedAssessment  # noqa: E402
+from bt.signing import Signer  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
 def probe(name, ok, observed, proves, does_not_prove):
     return {"probe": name, "result": "PASS" if ok else "FAIL", "observed": observed, "proves": proves,
             "does_not_prove": does_not_prove}
+
+
+def release_basis(journal, genesis, actual):
+    """Read-only: validate the signed genesis with K and compare it to the configured external pin."""
+    with closing(sqlite3.connect(Path(journal).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        row = db.execute("SELECT raw FROM entries WHERE seq=0").fetchone()
+    if row is None:
+        raise ValueError("no genesis entry")
+    record, delta = Kernel(RELEASE, actual).decide(empty(), parse(bytes(row[0])))
+    if record["kind"] != "genesis":
+        raise ValueError("first entry is not genesis")
+    domain = next(op[2] for op in delta if op[:2] == ("set", "domain"))
+    if domain != genesis or record["body"]["code"] != actual:
+        raise ValueError("genesis pin or source fingerprint mismatch")
+    return record["body"]["root"]["identities"]
 
 
 def qualify(config_path) -> list:
@@ -34,6 +56,13 @@ def qualify(config_path) -> list:
     journal, pins = resolve(c["ledger"]["journal"]), resolve(c["ledger"]["pins"])
     keys = resolve(c["keys"]["dir"])
     out = []
+    actual = code_digest()
+    try:
+        identities = release_basis(journal, c["ledger"]["genesis"], actual)
+        release_ok, release_observed = True, {"code": actual, "genesis": c["ledger"]["genesis"]}
+    except Exception as exc:
+        identities, release_ok = {}, False
+        release_observed = f"{type(exc).__name__}: {exc}"
     same = os.stat(journal.parent).st_dev == os.stat(pins.parent).st_dev
     out.append(probe("T04 pins apart from the journal", not same,
                      f"journal device {os.stat(journal.parent).st_dev}, pins device {os.stat(pins.parent).st_dev}",
@@ -41,29 +70,56 @@ def qualify(config_path) -> list:
                      "that the two volumes are not restored together from one backup (L-04)"))
     sep = c.get("separation")
     owner = __import__("pwd").getpwnam(sep["guard_user"]).pw_uid if sep else os.getuid()
-    loose = [p.name for p in keys.glob("*.key") if p.stat().st_mode & 0o077 or p.stat().st_uid != owner]
-    out.append(probe("key files owner-only", not loose, loose or "all 0600, owned by this user",
+    files = list(keys.glob("*.key"))
+    loose = [p.name for p in files if p.is_symlink() or not p.is_file() or p.stat().st_mode & 0o077
+             or p.stat().st_uid != owner]
+    local_public = set()
+    for file in files:
+        if file.name in loose:
+            continue
+        try:
+            private = Ed25519PrivateKey.from_private_bytes(base64.b64decode(file.read_text().strip(), validate=True))
+            local_public.add(Signer("diagnostic", private).public)
+        except (OSError, ValueError):
+            loose.append(file.name)
+    out.append(probe("key files owner-only", bool(files) and not loose, loose or f"{len(files)} owner-only files",
                      "no other local user can read a key file", "who else holds a copy (custody, L-03)"))
-    humans = [h for h in HUMANS if (keys / f"{h}.key").exists()]
-    out.append(probe("T02 humans hold their own keys", len(humans) <= 1, humans or "no human key on this host",
+    humans = [h for h, spec in identities.items() if spec["kind"] == "human"
+              and any(key["public"] in local_public for key in spec["keys"])]
+    out.append(probe("T02 humans hold their own keys", release_ok and len(humans) <= 1, humans or "no enrolled human key here",
                      "at most one human key on the operator's host",
                      "that the enrolled humans are distinct persons (G01)"))
-    witnesses = [w for w in WITNESSES if (keys / f"{w}.key").exists()]
-    out.append(probe("T03 witnesses apart from the operator", not witnesses, witnesses or "no witness key here",
+    witnesses = [w for w, spec in identities.items() if spec["kind"] == "witness"
+                 and any(key["public"] in local_public for key in spec["keys"])]
+    out.append(probe("T03 witnesses apart from the operator", release_ok and not witnesses, witnesses or "no enrolled witness key here",
                      "the operator cannot advance witnessed time alone", "that the witnesses' clocks are independent"))
-    assessment = json.loads(resolve(c["assessment"]["path"]).read_text())["payload"]
-    out.append(probe("independent assessment", assessment.get("independent") is True,
-                     f"assessor {assessment.get('assessor')}, independent={assessment.get('independent')}",
-                     "the installation was assessed by an assessor other than the operator (D19)",
-                     "that the assessor's statements are true"))
+    try:
+        bundle = json.loads(resolve(c["assessment"]["path"]).read_text())
+        assessment = SignedAssessment(bundle, {n: base64.b64decode(k, validate=True)
+                                              for n, k in c["assessment"]["assessors"].items()})
+        assessment.check([], release=actual, genesis=c["ledger"]["genesis"], ledger=str(journal),
+                         now=int(time.time() * 1000))
+        independent, observed = release_ok and assessment.independent, "authenticated, bound and in date at the host's wall time"
+    except Exception as exc:
+        independent, observed = False, f"{type(exc).__name__}: {exc}"
+    out.append(probe("independent assessment", independent, observed,
+                     "a pinned assessor signed a bound assessment that declares independence",
+                     "that independence is physical, the assessor's claims are true, or this host's clock is trusted"))
     runner = c.get("tests", {}).get("runner_user")
     try:
         import pwd
         entry = pwd.getpwnam(runner) if runner else None
         guard = sep["guard_user"] if sep else None
-        groups = [g.gr_name for g in __import__("grp").getgrall() if runner in g.gr_mem] if runner else []
-        clean = entry is not None and runner != guard and guard not in groups
-    except KeyError:
+        groups = os.getgrouplist(runner, entry.pw_gid) if entry else []
+        guard_entry = pwd.getpwnam(guard) if guard else None
+        clean = (entry is not None and guard_entry is not None and entry.pw_uid not in (0, guard_entry.pw_uid)
+                 and guard_entry.pw_gid not in groups)
+        if clean:
+            run = subprocess.run(["sudo", "-n", "-u", runner, "--", "/usr/bin/env", "-i",
+                                  "PATH=/usr/bin:/bin", "unshare", "-rn", "true"],
+                                 capture_output=True, timeout=10)
+            clean = run.returncode == 0
+    except (KeyError, OSError, subprocess.SubprocessError):
         entry, clean, groups = None, False, []
     out.append(probe("T06 contributors' code runs isolated", bool(clean),
                      f"runner {runner}, groups {groups}" if runner else "no [tests] runner_user: it runs as the guard",
@@ -96,10 +152,9 @@ def qualify(config_path) -> list:
                          {"group " + guard: members, "beyond agent, web, gate": extra, "sudo": sudo},
                          "who can read the guard's files and join its socket, and every sudo rule naming Standard",
                          "privileges granted outside this host's groups and sudoers (cloud IAM, CI secrets)"))
-    out.append(probe("T01 code release", c.get("demo") is not True,
-                     f"running code {code_digest()}",
-                     "the source files on disk hash to this release",
-                     "that the running process loaded exactly these files (verify before import)"))
+    out.append(probe("T01 code release", release_ok, release_observed,
+                     "the source files match the signed genesis and configured genesis pin",
+                     "that the configured pin has independent custody or the process loaded these files (verify before import)"))
     repo = c["repository"]
     if repo["kind"] == "github":
         from bt.adapters import GitHub

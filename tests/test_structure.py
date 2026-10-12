@@ -12,7 +12,7 @@ from tools.coverage import inventory
 class Structure(unittest.TestCase):
     def test_coverage_does_not_invent_an_instrument_for_a_declared_target(self):
         rows = {r["target"]: r for r in inventory()}
-        self.assertEqual(rows["ci"]["measurement"], "MISSING")
+        self.assertEqual(rows["ci"]["measurement"], "REGISTERED")
         self.assertEqual(rows["ci"]["repair"], "model + human review")
         unknown = {"id": "unknown", "resource": "repo:code:new", "property": "safe"}
         self.assertEqual(inventory([unknown])[0]["measurement"], "MISSING")

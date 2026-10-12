@@ -24,7 +24,7 @@ say() { printf '\n== %s\n' "$*"; }
 phase1() {
   say "system packages"
   apt-get update -q
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip ufw util-linux apparmor >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip ufw util-linux apparmor bubblewrap >/dev/null
 
   say "code in $CODE, its own Python environment"
   if [ "$SRC" != "$CODE" ]; then rm -rf "$CODE"; mkdir -p "$CODE"; cp -a "$SRC"/. "$CODE"/; fi

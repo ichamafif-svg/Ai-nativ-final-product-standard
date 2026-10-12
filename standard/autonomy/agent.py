@@ -18,6 +18,7 @@ import re
 import subprocess
 import tempfile
 import uuid
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from instruments.probes import SECRETS
@@ -25,10 +26,11 @@ from instruments.tree import Snapshot
 from instruments.data import EMPTY
 from instruments.recipes import recipes_for
 from bt.signing import Signer, envelope
+from .research import Research, ResearchError, relative_path
 
 MODEL = os.environ.get("STANDARD_AGENT_MODEL", "claude-sonnet-5-5")
 SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}"
-SOURCE = rf"(?!tests/)(?!\.github/)({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md)"
+SOURCE = rf"(?!tests/)(?!\.github/)(?!standard/)({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md)"
 DEPENDENCIES = r"requirements[A-Za-z0-9_.-]*\.txt|sbom\.json"
 WRITE_SCOPE = {
     "vulns": DEPENDENCIES, "licenses": DEPENDENCIES, "sbom": r"sbom\.json", "deps-age": rf"{DEPENDENCIES}|{SOURCE}",
@@ -50,8 +52,14 @@ class AgentError(ValueError):
     pass
 
 
-def in_scope(target: str, path) -> bool:
-    return target in WRITE_SCOPE and isinstance(path, str) and re.fullmatch(WRITE_SCOPE[target], path) is not None
+def in_scope(target: str, path, scopes=None) -> bool:
+    if not relative_path(path):
+        return False
+    if target in WRITE_SCOPE:
+        return re.fullmatch(WRITE_SCOPE[target], path) is not None
+    if path.split("/")[0] in ("tests", ".github", "standard"):
+        return False
+    return any(fnmatchcase(path, scope) for scope in (scopes or {}).get(target, []))
 
 
 def _git(repo, *args, input: bytes | None = None, env=None) -> str:
@@ -114,6 +122,7 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
             f"What: {', '.join(files)}\n\n"
             f"Checked by the agent ({check.get('isolation', '?')}): main's tests {check.get('tests', '?')} on this "
             f"commit; no other floor target regressed; no new ruff or mypy error in the changed files.\n"
+            f"Target fixed by the agent's measurement: {check.get('fixed', 'unknown')}. "
             f"These are the agent's own checks: the independent instruments measure this commit again.\n"
             + (f"\nRisks: {risks[:1500]}\n" if risks else "")
             + f"\nStandard-Target: {target['id']}\n")
@@ -121,7 +130,7 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
 
 class Agent:
     def __init__(self, signer: Signer, capability, store, *, data=EMPTY, api_key: str | None = None, ask=None,
-                 publish=None, llm=None, sandbox=None, iterations: int = 2):
+                 publish=None, llm=None, sandbox=None, iterations: int = 2, scopes=None, research_sources=None):
         """capability: one grant id, or {"recipe": id, "review": id} when the two routes are granted apart.
         data: the same pinned snapshot the instruments use, so that recipes reproduce.
         llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and `ask(prompt, key) -> dict` build one for tests."""
@@ -136,6 +145,23 @@ class Agent:
             llm = Gate({"frontier": Provider("anthropic", "anthropic", MODEL, api_key)},
                        self.store.parent / "egress.log", transport=transport)
         self.llm, self.sandbox = llm, sandbox or Sandbox()
+        self.scopes = dict(scopes or {})
+        if any(not isinstance(patterns, list) or not patterns or any(not relative_path(p) for p in patterns)
+               for patterns in self.scopes.values()):
+            raise AgentError("custom repair scopes must be configured lists of relative path patterns")
+        self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources)
+
+    def investigate(self, view, task, base, findings=None):
+        from .context import render_context, task_context
+        tree = Snapshot(self.store, base)
+        prompt = ("Find a way to serve this missing need. Inspect, research, reuse or experiment with a tool. "
+                  "Return a summary and proposed tool files if useful, the required independent verification and any "
+                  "operator action. Do not claim the requirement is closed or register a new trusted instrument.\n"
+                  + render_context(task_context(view, task, findings)))
+        try:
+            return self.research.dialogue(prompt, tree, key=task["id"])
+        except ResearchError as exc:
+            raise AgentError(str(exc)) from exc
 
     def _commit(self, base: str, files: dict, message: str) -> str:
         return commit_files(self.store, base, files, message)
@@ -160,7 +186,7 @@ class Agent:
                 raise AgentError(f"the recipe for {target_id} does not pass the agent's precheck: {check['problems']}")
             self.publish(head)
             return head, "recipe"
-        if target_id not in TASKS or self.llm is None:
+        if (target_id not in TASKS and target_id not in self.scopes) or self.llm is None:
             raise AgentError(f"{target_id}: no applicable recipe and no model route")
         feedback, upgrades = "", ""
         if target_id in ("vulns", "deps-age", "licenses"):
@@ -168,7 +194,8 @@ class Agent:
                                    for n, p in self.data.packages.items()}, indent=1)[:6000]
         where = "\n".join(d[:400] for d in finding["details"][:20]) or "(none published)"
         for _ in range(self.iterations):
-            prompt = (f"Repository maintenance. Target `{target_id}`.\nTask: {TASKS[target_id]}\n"
+            instruction = TASKS.get(target_id, "Serve the client requirement using the configured write scope; human review is required.")
+            prompt = (f"Repository maintenance. Target `{target_id}`.\nTask: {instruction}\n"
                       f"Requirement: {target['resource']} must have {target['property']} = {target['expect']}; "
                       f"the independent instrument reports {finding['status']}.\nWhere:\n{where}\n{law_text}\n"
                       + (f"Earlier attempts that did not pass:\n{lessons}\n" if lessons else "")
@@ -178,9 +205,13 @@ class Agent:
                       f"Return JSON {{\"title\": str, \"files\": {{path: full new content}}, \"risks\": str}}, "
                       f"changing as few files as possible.\n\n"
                       f"{model_context(tree, redact=target_id == 'secrets')}")
-            reply = self.llm.ask(prompt, "frontier" if target_id in FRONTIER else "small")
+            try:
+                reply = self.research.dialogue(prompt, tree, tier="frontier" if target_id in FRONTIER else "small",
+                                               key=f"repair:{target_id}")
+            except ResearchError as exc:
+                raise AgentError(str(exc)) from exc
             files = reply.get("files")
-            if not isinstance(files, dict) or not files or not all(in_scope(target_id, p) and isinstance(c, str)
+            if not isinstance(files, dict) or not files or not all(in_scope(target_id, p, self.scopes) and isinstance(c, str)
                                                                     for p, c in files.items()):
                 raise AgentError(f"the repair of {target_id} leaves its write scope")
             if any(REDACTED.decode() in c for c in files.values()):

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+import tempfile
 from pathlib import Path
 
 from instruments.suite import contract_path, load
@@ -23,6 +24,8 @@ from instruments.tree import Snapshot
 from bt.signing import Signer, envelope
 
 from .agent import AgentError, commit_files, model_context
+from .context import task_context, render_context
+from .research import Research, ResearchError
 
 SCOPE = re.compile(r"(?!tests/)(?!\.github/)(?!standard/)([A-Za-z0-9_][A-Za-z0-9_.-]{0,99}/){0,8}"
                    r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}\.(py|md|txt|json|toml|ya?ml|sql|html|css|js)")
@@ -34,7 +37,7 @@ def in_scope(path) -> bool:
 
 class Builder:
     def __init__(self, service, signer: Signer, grants: dict, store, requests, *, main, clock, notes, llm=None,
-                 sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000):
+                 sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None):
         """grants: {"agent_implement": id, "agent_deliver": id}. store: the agent's proposals store. requests: the
         request store (contracts and specs by digest)."""
         from instruments.data import EMPTY
@@ -44,6 +47,7 @@ class Builder:
         self.requests, self.main, self.clock, self.notes = Path(requests), main, clock, Path(notes)
         self.llm, self.sandbox, self.data = llm, sandbox or Sandbox(), data or EMPTY
         self.iterations, self.backoff_ms = iterations, backoff_ms
+        self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources)
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
     def check(self, base: str, head: str, rid: str, targets: dict) -> list:
@@ -51,11 +55,18 @@ class Builder:
 
         from .precheck import measure, suite, tools
         problems = []
-        with self.sandbox.checkout(self.store, head) as code:
-            r = self.sandbox.python_module("pytest", "-q", "-p", "no:cacheprovider", contract_path(rid), cwd=code,
-                                           pythonpath=code)
-            if not r.ok:
-                problems.append(f"the contract does not pass yet:\n{r.out[-3000:]}")
+        from instruments.suite import report_measure
+        from instruments.tree import verdict
+        with self.sandbox.checkout(self.store, head) as code, tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "acceptance.xml"
+            r = self.sandbox.python_module("pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={report}",
+                                           contract_path(rid), cwd=code, pythonpath=code)
+            try:
+                status = verdict("green", report_measure(report, r.code))
+            except Exception as exc:
+                status = f"uncovered:{type(exc).__name__}"
+            if status != "green":
+                problems.append(f"the contract does not pass yet ({status}):\n{r.out[-3000:]}")
         status, failures = suite(self.sandbox, self.store, base, head, self.store.parent / "venvs")
         if status != "green":
             problems.append(f"main's tests are {status}: {failures[:3]}")
@@ -71,7 +82,7 @@ class Builder:
         return problems
 
     # ---- crafting -------------------------------------------------------------------------------------------------
-    def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict) -> str:
+    def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None) -> str:
         if self.llm is None:
             raise AgentError("no model is configured: a contributor may implement it (trailer Standard-Request)")
         from .repomap import RepoMap
@@ -82,11 +93,15 @@ class Builder:
                       f"Its acceptance tests, signed by the product owner (they will be added as "
                       f"{contract_path(rid)}; you may not change them, nor any other test):\n"
                       f"{contract.decode(errors='replace')[:8000]}\n\n"
+                      + (render_context(context) + "\n" if context is not None else "")
                       + (f"Your previous candidate did not pass:\n{feedback}\n\n" if feedback else "")
                       + f"Repository map:\n{RepoMap(tree).render()}\n\n"
                       f"Return JSON {{\"title\": str, \"files\": {{path: full new content}}, \"risks\": str}}: "
                       f"source files only, never under tests/, as few as possible.\n\n{model_context(tree)}")
-            reply = self.llm.ask(prompt, "frontier")
+            try:
+                reply = self.research.dialogue(prompt, tree, key=f"request:{rid}")
+            except ResearchError as exc:
+                raise AgentError(str(exc)) from exc
             files = reply.get("files")
             if not isinstance(files, dict) or not files or not all(in_scope(p) and isinstance(c, str)
                                                                     for p, c in files.items()):
@@ -140,7 +155,9 @@ class Builder:
             if note.get("base") != base:                     # main moved: implement again on the new main
                 try:
                     note.update(base=base, head=self.craft(rid, e["fields"]["title"], spec or b"", contract, base,
-                                                           targets), state="proposed")
+                                targets, context=task_context(view, {"id": f"request:{rid}", "need": "repair",
+                                      "op": "implement", "resource": resource, "target": None,
+                                      "opened": e.get("created"), "due": None})), state="proposed")
                 except AgentError as exc:
                     note.update(base=base, head=None, state=f"waiting: {exc}", next_at=now + 10 * self.backoff_ms)
             if note.get("head") and note.get("state") != "landing" and "agent_implement" in self.grants:

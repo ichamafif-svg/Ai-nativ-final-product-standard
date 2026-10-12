@@ -25,12 +25,12 @@ import json
 import os
 import sys
 
-from standard.autonomy.projection import Route, project
+from standard.autonomy.projection import installed_routes, project
+from standard.autonomy.context import render_context, task_context
 from bt.gateway import GatewayClient
 
 DEFAULT_SOCKET = os.environ.get("STANDARD_SOCKET", "/run/standard/admission.sock")
-DEFAULT_ROUTES = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
-                  Route("scanner", "RUN", "*", frozenset({"observe", "cover", "prove"}))]
+DEFAULT_ROUTES = installed_routes()
 
 
 def _header(view: dict) -> str:
@@ -61,29 +61,7 @@ def context(view: dict, plan: dict, task_id: str, findings: dict | None = None) 
     task = next((t for t in plan["tasks"] if t["id"] == task_id), None)
     if task is None:
         return f"no task {task_id} at this prefix"
-    law = view["law"]["effective"]
-    target = next((t for t in law["targets"] if t["id"] == task["target"]), None)
-    lines = [_header(view), f"task {task['id']}: {task['need']} {task['resource']}",
-             f"opened {task['opened']}, due {task['due']}{' (escalated)' if task['escalated'] else ''}"]
-    if target:
-        lines.append(f"requirement: {target['property']} = {target['expect']} at level {target['min_level']}, "
-                     f"fresh {target['fresh_ms']} ms, sources {', '.join(target['sources'])}")
-        if target.get("repair"):
-            op = law["ops"][target["repair"]]
-            lines.append(f"repair op: {target['repair']} on {op['resource']} ({op['profile']}), "
-                         f"T: {', '.join(sorted(set(op.get('trusted', [])) | {'T07', 'T08'}))}")
-            for name, cond in law["conditions"].items():
-                if name.startswith(target["repair"]):
-                    lines.append(f"  condition {name}: {json.dumps(cond['all'])}")
-    for c in task["routes"]:
-        lines.append(f"route {c['route']}: {c['state']} (T {', '.join(c['required_t'])})")
-    if target and findings is not None:
-        found = findings.get(f"{target['resource']}|{target['property']}")
-        if found:
-            lines.append(f"instrument reports {found['status']}; where (information, not a fact):")
-            lines += [f"  {d.splitlines()[0][:200]}" for d in found["details"][:20]]
-    lines.append("submit only a signed envelope; the kernel decides.")
-    return "\n".join(lines)
+    return render_context(task_context(view, task, findings))
 
 
 def dossier(repo, head: str) -> str:

@@ -142,9 +142,15 @@ def inventory(tree) -> Measure:
     return Measure(universe, frozenset(p for p, (_, kind, _) in tree.entries.items() if kind in ("blob", "commit")))
 
 
+def ci(tree, ctx) -> Measure:
+    """Standard's CI: execute the suite of this exact main snapshot, not a provider badge."""
+    from .suite import run_suite, suite_of
+    return run_suite(tree, suite_of(tree), "tests", install=ctx.get("install", False))
+
+
 DATA_PROBES = ("vulns", "licenses", "deps-age")
 PROBES = {"secrets": lambda t, c: secrets(t), "sbom": lambda t, c: sbom(t), "actions": actions, "vulns": vulns,
-          "licenses": licenses, "deps-age": deps_age, "sast": sast, "branch": branch, "lineage": lineage}
+          "licenses": licenses, "deps-age": deps_age, "sast": sast, "branch": branch, "lineage": lineage, "ci": ci}
 
 
 LOCAL_PROBES = ("secrets", "sbom", "actions", "vulns", "licenses", "deps-age", "sast")   # no provider, no ledger

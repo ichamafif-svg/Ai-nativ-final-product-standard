@@ -24,7 +24,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from standard.autonomy.projection import Route, project
+from standard.autonomy.projection import installed_routes, project
+from standard.autonomy.context import task_context
 from instruments.data import EMPTY
 from bt.gateway import GatewayClient
 from instruments.recipes import recipes_for
@@ -32,8 +33,6 @@ from instruments.recipes import recipes_for
 STATIC = Path(__file__).with_name("static")
 SHA = re.compile(r"[0-9a-f]{40}")
 BRANCH = re.compile(r"([0-9a-f]{40})\trefs/heads/([a-z0-9][a-z0-9_-]{0,63})/(\S+)")
-ROUTES = {"RUN": [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
-                  Route("scanner", "RUN", "*", frozenset({"observe", "cover", "prove"}))]}
 HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1", "product": "h1"}           # the demo ceremony's grants to people (tools/ceremony.py)
 MAX_BODY = 1 << 20
 
@@ -65,6 +64,8 @@ class Installation:
     def __init__(self, config_path):
         path = Path(config_path).resolve()
         c, base = tomllib.loads(path.read_text()), path.parent
+        self.routes = installed_routes(c.get("agent", {}).get("scopes", ()),
+                                       model=bool(c.get("llm") or c.get("agent", {}).get("api_key_file")))
         resolve = lambda p: (base / p).resolve()
         self.client = GatewayClient(resolve(c["socket"]["path"]))
         repo = c["repository"]
@@ -122,8 +123,16 @@ class Installation:
         return out
 
     # ---- RUN: the product in production, maintained -----------------------------------------------------------
+    def context(self, task_id: str) -> dict:
+        view = self.client.view()
+        plan = project(view, self.routes, self.client.qualify, mode="RUN")
+        task = next((t for t in plan["tasks"] if t["id"] == task_id), None)
+        if task is None:
+            raise ValueError("no task at this prefix")
+        return task_context(view, task, _json(self.findings))
+
     def run(self, view: dict, findings: dict) -> dict:
-        plan = project(view, ROUTES["RUN"], self.client.qualify, mode="RUN")
+        plan = project(view, self.routes, self.client.qualify, mode="RUN")
         targets = {t["id"]: t for t in view["law"]["effective"]["targets"]}
         repairs = []
         for p in _json(self.proposals).values():
@@ -614,6 +623,9 @@ def handler(inst: Installation):
                     return self._send(200, (STATIC / "app.css").read_bytes(), "text/css; charset=utf-8")
                 if route == "/api/state":
                     return self._ok(inst.state())
+                if route == "/api/context":
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    return self._ok(inst.context(query.get("task", [""])[0]))
                 if route == "/api/alerts":
                     return self._ok(inst.alerts())
                 if route == "/api/settings":
