@@ -44,15 +44,15 @@ class VulnerabilityRecipe(unittest.TestCase):
                          {"requirements.txt": b"lib==1.5.0\n"})
 
 
-class HumanReview(unittest.TestCase):
-    """Review, critical 2: a machine holding `observe` on the resource signed `review = approved` for itself."""
+class HumanDecision(unittest.TestCase):
+    """Review, critical 2: a machine holding `observe` on the resource signed a human's decision for itself."""
 
     def setUp(self):
         self.L = L = Ledger()
         L.checkpoint()
         self.scanner = L.grant("scanner", ["observe", "certify:real"], ["repo:*", "run:*", "build:*"])
-        self.reviewer = L.grant("h3", ["observe", "certify:real"], ["repo:*"])
-        self.agent = L.grant("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"])
+        self.human = L.grant("h1", ["observe", "certify:real"], ["repo:*"])
+        self.agent = L.grant("agent", ["effect:remediate"], ["repo:*"])
         self.base, self.head = "a" * 40, "b" * 40
         self.res = f"repo:code:secrets/{self.base}/{self.head}"
         L.measure("scanner", self.scanner, self.res, "tests", "green")
@@ -62,20 +62,19 @@ class HumanReview(unittest.TestCase):
         return dict(under=self.agent, op="remediate",
                     args={"area": "code", "item": "secrets", "base": self.base, "head": self.head})
 
-    def test_a_machine_review_opens_nothing(self):
-        self.L.submit("observation", "scanner", under=self.scanner, resource=self.res, property="review",
-                      status="approved", level="real")
-        self.assertEqual(self.L.refused("intent", "agent", **self.intent()), "CAP.CONDITION")
+    def test_a_machine_decision_opens_nothing(self):
+        self.L.submit("observation", "scanner", under=self.scanner, resource=self.res, property="decision",
+                      status="approve", level="real")
+        self.assertEqual(self.L.refused("intent", "agent", **self.intent()), "CAP.ROUTE")
 
-    def test_a_human_review_opens_the_reviewed_route(self):
-        self.L.submit("observation", "h3", under=self.reviewer, resource=self.res, property="review",
-                      status="approved", level="real")
+    def test_a_human_decision_opens_the_human_route(self):
+        self.L.decide(self.human, self.res)
         self.assertIn(self.L.submit("intent", "agent", **self.intent()), self.L.state["intents"])
 
     def test_the_author_kind_is_a_closed_list(self):
         from kernel.language import LanguageError, compile_program
         with self.assertRaises(LanguageError):
-            compile_program({"all": [{"observed": ["review", "approved", "real", "robot"]}]})
+            compile_program({"all": [{"observed": ["decision", "approve", "real", "robot"]}]})
 
 
 class Violations(unittest.TestCase):
@@ -94,25 +93,22 @@ class Violations(unittest.TestCase):
     def setUp(self):
         from fixture import client_law
         law = client_law(obligations=[{"id": "ack", "level": "escalate", "due_ms": 1000, "on_due": "escalate",
-                                       "open": [{"kind": "freeze", "key": "id"}],
-                                       "close": [{"kind": "veto", "key": "proposal"}]}])
+                                       "open": [{"kind": "intent", "key": "id"}],
+                                       "close": [{"kind": "freeze", "key": "id"}]}])
         self.L = L = Ledger(law=law)
         L.checkpoint()
-        pid = L.submit("grant", "h1", ["h1", "h2"], holder="agent", actions=["observe"], resources=["x:*"],
-                       conditions=[], not_after=10 ** 12)
-        self.veto = L.submit("veto", "h3", proposal=pid)                # closes nothing open: a violation
+        self.freeze = L.submit("freeze", "h1", scope="x:*")             # closes nothing open: a violation
 
     def test_a_human_resolves_a_violation_a_machine_cannot(self):
         L = self.L
-        name = f"violation:ack:{self.veto}"
+        name = f"violation:ack:{self.freeze}"
         self.assertIn(name, [x["obligation"] for x in self.fold(L)["escalated"]])
-        steward = L.grant("h4", ["observe", "certify:real"], ["law:violation/*"])
+        human = L.grant("h1", ["observe", "certify:real"], ["law:violation/*"])
         machine = L.grant("scanner", ["observe", "certify:real"], ["law:violation/*"])
-        L.submit("observation", "scanner", under=machine, resource=f"law:violation/ack/{self.veto}",
-                 property="resolved", status="yes", level="real")
+        L.submit("observation", "scanner", under=machine, resource=f"law:violation/ack/{self.freeze}",
+                 property="decision", status="approve", level="real")
         self.assertIn(name, [x["obligation"] for x in self.fold(L)["escalated"]])
-        L.submit("observation", "h4", under=steward, resource=f"law:violation/ack/{self.veto}",
-                 property="resolved", status="yes", level="real")
+        L.decide(human, f"law:violation/ack/{self.freeze}")
         self.assertNotIn(name, [x["obligation"] for x in self.fold(L)["escalated"]])
 
 
@@ -167,11 +163,16 @@ class SecondJudgeComposition(unittest.TestCase):
         L = Ledger()
         law, client, floors = L.kernel.law_of(L.state), L.state["law"]["client"], L.kernel.release.floors
         _floors_kept(copy.deepcopy(law.raw), floors, client)                 # the honest composition passes
-        for weaken in (lambda w: w["conditions"].__setitem__("remediate-reviewed",
-                                                             {"all": [{"observed": ["tests", "green", "real"]}]}),
+        human = lambda w: w["ops"]["integrate"]["routes"]["human"]
+        for weaken in (lambda w: human(w)["all"].pop(),                                      # no decision any more
+                       lambda w: w["ops"]["integrate"]["routes"].__setitem__("auto", {"all": [
+                           {"observed": ["tests", "green", "real"]}]}),                    # a route the socle lacks
+                       lambda w: w["ops"]["remediate"]["routes"]["scoped"]["all"].pop(),
+                       lambda w: w["settings"].__setitem__("burn_fast", "2"),
+                       lambda w: w["settings"].__setitem__("rollback_horizon_min", 999),
                        lambda w: w["targets"][3].__setitem__("due_ms", w["targets"][3]["due_ms"] + 1),
                        lambda w: w["ttl"].__setitem__("proof", w["ttl"]["proof"] * 2),
-                       lambda w: w["witnesses"].__setitem__("quorum", 1),
+                       lambda w: w["witnesses"].__setitem__("quorum", 0),
                        lambda w: w["ops"]["remediate"].__setitem__("resource", "repo:{area}:{item}"),
                        lambda w: w["targets"].pop(5)):
             weak = copy.deepcopy(law.raw)

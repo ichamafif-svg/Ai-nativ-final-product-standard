@@ -1,10 +1,15 @@
-"""The law the kernel executes (§4): the release floors composed with the client law in force.
+"""The rules of the game the kernel executes (§4): the release floors composed with the client's rules in force.
 
-The floors come with the release and never change from a journal. The client law lives in the journal: it binds the
-floor roles to its identities, adds its own declarations and may only tighten what the floors declare. `compose`
-enforces that, plus the autonomy floor (every target has a repair route the law can execute, or is declared human).
-`Law` then validates the effective result. A law carries declarations and conditions, never authority: authority
-lives in the ledger.
+The floors come with the release and never change from a journal: the ops (the moves), their routes, the least proof
+each route needs and the floor value of every setting. The client's rules live in the journal: they bind the floor
+roles to identities, turn autonomous routes off, set the settings no looser than the floors, add their own
+declarations and may only tighten the rest. `compose` enforces that, plus the autonomy floor (every target has a
+repair op, or is declared human). `Law` then validates the effective result. A law carries declarations and
+conditions, never authority: authority lives in the ledger.
+
+Settings: a `compare` bound may name a setting (`"@burn_fast"`). The effective value replaces it before compilation,
+so the kernel and the agent read one number. The floors' value is the loosest: the way a floor program compares with
+a setting (ge or le) is the way a client value may only move.
 """
 from __future__ import annotations
 
@@ -12,9 +17,9 @@ import copy
 import re
 
 from . import obligations as obl
-from .canon import CanonError, digest
-from .floor0 import MIN_DELAY_MS, MIN_WITNESSES, POLARITY, floor0_digest
-from .language import LanguageError, compile_program
+from .canon import CanonError, canon, digest
+from .floor0 import DECISION, MIN_DELAY_MS, MIN_WITNESSES, POLARITY, floor0_digest
+from .language import LanguageError, compile_program, number
 from .types import ID, RESOURCE, SCALARS, SEGMENT, ShapeError, check_spec
 
 FORMAT = "standard-law/1"
@@ -25,9 +30,10 @@ TRUSTED = tuple(f"T{i:02}" for i in range(1, 10))
 EFFECT_MINIMUM = ("T07", "T08")
 SLOT = re.compile(r"\{([A-Za-z][A-Za-z0-9_]{0,63})\}")
 TOP = ("format", "floor0", "levels", "ops", "evidence", "discharges", "conditions", "ttl", "delays", "witnesses",
-       "controls", "targets", "obligations", "resources", "instruments")
+       "settings", "targets", "obligations", "resources", "instruments")
 CLIENT_TOP = ("format", "floors", "bindings", "ops", "evidence", "discharges", "conditions", "targets", "obligations",
-              "tighten", "ttl", "delays", "witnesses", "controls", "resources", "instruments")
+              "tighten", "ttl", "delays", "witnesses", "routes", "settings", "resources", "instruments")
+MAX_SETTINGS_BYTES = 65_536
 OBLIGATION_RANK = {"measure": 0, "escalate": 1, "refuse": 2}
 YEAR_MS = 365 * 86_400_000
 MAX_ENTITIES = 4096
@@ -45,11 +51,60 @@ class Release:
         self.digest = digest({"format": FORMAT, "floors": self.floors, "roles": list(self.roles)})
 
 
-def _condition(raw):
+def _condition(raw, settings=None):
     try:
-        return compile_program(raw)
+        return compile_program(resolve(raw, settings or {}))
     except LanguageError as exc:
         raise LawError(f"condition: {exc}") from None
+
+
+def resolve(program, settings: dict):
+    """The program with every setting bound (`@name`) replaced by its effective value; LawError if unknown."""
+    if not isinstance(program, dict) or not isinstance(program.get("all"), list):
+        return program
+    out = []
+    for atom in program["all"]:
+        if isinstance(atom, dict) and len(atom) == 1 and "compare" in atom and isinstance(atom["compare"], list) \
+                and len(atom["compare"]) == 4 and isinstance(atom["compare"][2], str) and atom["compare"][2][:1] == "@":
+            name = atom["compare"][2][1:]
+            if name not in settings or number(settings[name]) is None:
+                raise LawError(f"setting {name} is not a number of these rules")
+            atom = {"compare": [*atom["compare"][:2], settings[name], atom["compare"][3]]}
+        out.append(atom)
+    return {**program, "all": out}
+
+
+def programs(law: dict):
+    """Every condition program a law declares: op routes, conditions, transition requirements, obligation guards."""
+    for op in (law.get("ops") or {}).values():
+        if isinstance(op, dict) and isinstance(op.get("routes"), dict):
+            yield from op["routes"].values()
+    yield from (law.get("conditions") or {}).values()
+    for spec in (law.get("resources") or {}).values():
+        for rule in (spec.get("transitions") or {}).values() if isinstance(spec, dict) else ():
+            if isinstance(rule, dict) and "requires" in rule:
+                yield rule["requires"]
+    for decl in law.get("obligations") or []:
+        if isinstance(decl, dict) and "when" in decl:
+            yield decl["when"]
+
+
+def setting_ways(law: dict) -> dict:
+    """{setting: "ge" | "le"}: how the floors compare with each setting they name. A setting is never both."""
+    ways = {}
+    for program in programs(law):
+        for atom in program.get("all", []) if isinstance(program, dict) else ():
+            args = atom.get("compare") if isinstance(atom, dict) else None
+            if isinstance(args, list) and len(args) == 4 and isinstance(args[2], str) and args[2][:1] == "@":
+                if ways.setdefault(args[2][1:], args[1]) != args[1]:
+                    raise LawError(f"setting {args[2][1:]} is compared both ways")
+    return ways
+
+
+def stricter(way: str, floor, value) -> bool:
+    """Whether a client value asks at least as much as the floor's: higher for ge, lower for le."""
+    f, v = number(floor), number(value)
+    return f is not None and v is not None and (v >= f if way == "ge" else v <= f)
 
 
 # ---- composition ----------------------------------------------------------------------------------------------------
@@ -58,8 +113,6 @@ def _tighter(section: str, base, value) -> bool:
         return False
     if section == "ttl":
         return 0 < value <= base                      # sooner expiry, sooner deadlines
-    if section == "controls":
-        return value == base == 0 or (value > 0 and (base == 0 or value <= base))
     return value >= base                              # longer delays, larger witness quorum
 
 
@@ -97,8 +150,8 @@ def compose(release: Release, client) -> dict:
         raise LawError(f"a client law declares only {list(CLIENT_TOP)}")
     if client.get("format") != CLIENT_FORMAT or client.get("floors") != release.digest:
         raise LawError("the client law is not written for the floors of this release")
-    for section in ("ops", "evidence", "discharges", "conditions", "ttl", "delays", "witnesses", "controls", "tighten",
-                    "resources", "instruments"):
+    for section in ("ops", "evidence", "discharges", "conditions", "ttl", "delays", "witnesses", "tighten",
+                    "resources", "instruments", "routes", "settings"):
         if not isinstance(client.get(section, {}), dict):
             raise LawError(f"{section} is a map")
     for section in ("targets", "obligations"):
@@ -124,7 +177,7 @@ def compose(release: Release, client) -> dict:
         if any(not isinstance(i, dict) or i.get("id") in floor_ids for i in extra):
             raise LawError(f"{section}: a client adds entries, it never redefines a floor")
         law[section] = law[section] + copy.deepcopy(extra)
-    for section in ("ttl", "delays", "witnesses", "controls"):
+    for section in ("ttl", "delays", "witnesses"):
         for field, value in client.get(section, {}).items():
             if field not in law[section] or not _tighter(section, law[section][field], value):
                 raise LawError(f"{section}.{field}: a client may only tighten the floors")
@@ -137,7 +190,9 @@ def compose(release: Release, client) -> dict:
                                               for d in rules):
             raise LawError("discharges: a client adds ways to prove, never below the floors' level")
     _tighten(release, law, client.get("tighten", {}), rank)
-    ops = check_ops(law["ops"])
+    _routes(release, law, client.get("routes", {}))
+    _settings(release, law, client.get("settings", {}))
+    ops = check_ops(law["ops"], law["settings"])
     for t in law["targets"]:                          # the autonomy floor
         if not isinstance(t, dict):
             raise LawError("a target is a map")
@@ -150,6 +205,34 @@ def compose(release: Release, client) -> dict:
     return law
 
 
+def _routes(release: Release, law: dict, chosen: dict) -> None:
+    """The client keeps a subset of a floor op's autonomous routes; the human route always stays (F0-12)."""
+    for op, keep in chosen.items():
+        floor = release.floors["ops"].get(op)
+        if (floor is None or not isinstance(keep, list) or len(set(keep)) != len(keep)
+                or any(not isinstance(r, str) or r == "human" or r not in floor["routes"] for r in keep)):
+            raise LawError(f"routes.{op}: a list of the floor op's autonomous routes to keep")
+        law["ops"][op]["routes"] = {name: program for name, program in law["ops"][op]["routes"].items()
+                                    if name == "human" or name in keep}
+
+
+def _settings(release: Release, law: dict, chosen: dict) -> None:
+    """A client sets any setting; one the floors compare with may only ask more than the floor's value."""
+    ways, floors = setting_ways(release.floors), release.floors.get("settings", {})
+    for name, value in chosen.items():
+        if not isinstance(name, str) or not ID.fullmatch(name):
+            raise LawError(f"settings: {name} is not a setting name")
+        if name in ways and not stricter(ways[name], floors.get(name), value):
+            raise LawError(f"settings.{name}: may only ask more than the floors' {floors.get(name)} ({ways[name]})")
+    law["settings"] = {**floors, **copy.deepcopy(chosen)}
+    try:
+        size = len(canon(law["settings"]))
+    except CanonError as exc:
+        raise LawError(f"settings: {exc}") from None
+    if size > MAX_SETTINGS_BYTES:
+        raise LawError("settings: too large")
+
+
 def _tighten(release: Release, law: dict, tighten, rank) -> None:
     if not isinstance(tighten, dict) or set(tighten) - {"targets", "obligations", "ops"}:
         raise LawError("tighten names floor targets, obligations and ops")
@@ -157,12 +240,9 @@ def _tighten(release: Release, law: dict, tighten, rank) -> None:
         raise LawError("tighten sections are maps")
     floors = release.floors
     for op, change in tighten.get("ops", {}).items():
-        if (op not in floors["ops"] or not isinstance(change, dict) or not change or set(change) - {"profile", "trusted"}
-                or change.get("profile", "human_quorum") != "human_quorum"
-                or not isinstance(change.get("trusted", []), list)):
-            raise LawError("tighten.ops only raises a profile to human_quorum or adds trusted contracts")
-        if "profile" in change:
-            law["ops"][op]["profile"] = "human_quorum"
+        if (op not in floors["ops"] or not isinstance(change, dict) or set(change) != {"trusted"}
+                or not isinstance(change["trusted"], list)):
+            raise LawError("tighten.ops only adds trusted contracts")
         if "trusted" in change:
             law["ops"][op]["trusted"] = sorted(set(law["ops"][op].get("trusted", [])) | set(change["trusted"]))
     floor_targets = {t["id"]: t for t in law["targets"][:len(floors["targets"])]}
@@ -189,17 +269,29 @@ def _tighten(release: Release, law: dict, tighten, rank) -> None:
 
 
 # ---- validated sections ---------------------------------------------------------------------------------------------
-def check_ops(raw) -> dict:
-    """An op: a closed scalar argument shape, a resource template filled from separator-free arguments, a profile,
+def op_contract(decl: dict) -> str:
+    """What an intent pins of its op: the declaration with the trusted contracts its effect always needs."""
+    return digest({**decl, "trusted": sorted(set(decl.get("trusted", [])) | set(EFFECT_MINIMUM))})
+
+
+def check_ops(raw, settings=None) -> dict:
+    """An op: a closed scalar argument shape, a resource template filled from separator-free arguments, its routes
+    (F0-12: any number of autonomous ones and the human one, which carries a human decision on the exact resource),
     and the trusted contracts its effect needs (T07 and T08 always)."""
     if not isinstance(raw, dict) or not raw:
         raise LawError("the law declares at least one op")
     ops = {}
     for name, decl in raw.items():
         if (not isinstance(name, str) or not ID.fullmatch(name) or not isinstance(decl, dict)
-                or not {"args", "resource", "profile"} <= set(decl) or set(decl) - {"args", "resource", "profile", "trusted"}
-                or decl["profile"] not in ("capability", "human_quorum")):
-            raise LawError(f"op {name}: args, resource, profile, optional trusted")
+                or not {"args", "resource", "routes"} <= set(decl) or set(decl) - {"args", "resource", "routes", "trusted"}):
+            raise LawError(f"op {name}: args, resource, routes, optional trusted")
+        routes = decl["routes"]
+        if (not isinstance(routes, dict) or "human" not in routes or len(routes) > 16
+                or not all(isinstance(r, str) and ID.fullmatch(r) for r in routes)):
+            raise LawError(f"op {name}: named routes, the human one included")
+        compiled = {r: _condition(program, settings) for r, program in routes.items()}
+        if DECISION not in compiled["human"]:
+            raise LawError(f"op {name}: the human route needs a human decision on the exact resource")
         trusted = decl.get("trusted", [])
         if not isinstance(trusted, list) or len(set(trusted)) != len(trusted) or any(t not in TRUSTED for t in trusted):
             raise LawError(f"op {name}: unknown or repeated trusted contract")
@@ -214,8 +306,8 @@ def check_ops(raw) -> dict:
             raise LawError(f"op {name}: a slot fills from a required segment or int argument")
         if not RESOURCE.fullmatch(SLOT.sub("x", template)):
             raise LawError(f"op {name}: the template yields an exact resource")
-        ops[name] = {"args": args, "resource": template, "profile": decl["profile"],
-                     "trusted": sorted(set(trusted) | set(EFFECT_MINIMUM))}
+        ops[name] = {"args": args, "resource": template, "routes": compiled,
+                     "trusted": sorted(set(trusted) | set(EFFECT_MINIMUM)), "contract": op_contract(decl)}
     return ops
 
 
@@ -261,7 +353,7 @@ def check_targets(raw, rank) -> tuple[dict, dict]:
     return {i: targets[i] for i in order}, by_key
 
 
-def check_resources(raw) -> dict:
+def check_resources(raw, settings=None) -> dict:
     """Versioned resource types with finite transitions; writes touch declared scalar fields only."""
     if not isinstance(raw, dict) or len(raw) > 64:
         raise LawError("resources is a map of at most 64 types")
@@ -292,7 +384,7 @@ def check_resources(raw) -> dict:
             if not isinstance(writes, list) or len(set(writes)) != len(writes) or any(f not in fields for f in writes):
                 raise LawError(f"resource {name}.{operation}: writes names distinct declared fields")
             compiled[operation] = {"from": list(rule["from"]), "to": rule["to"], "writes": list(writes),
-                                   "requires": _condition(rule["requires"])}
+                                   "requires": _condition(rule["requires"], settings)}
         out[name] = {"fields": fields, "states": list(states), "initial": spec["initial"],
                      "transitions": compiled, "contract": digest(spec)}
     return out
@@ -338,9 +430,12 @@ class Law:
                 or not all(isinstance(x, str) and ID.fullmatch(x) for x in levels)):
             raise LawError("levels are an ordered list of names starting at unknown")
         self.levels, self.rank = list(levels), {name: i for i, name in enumerate(levels)}
-        self.ops = check_ops(effective.get("ops"))
+        self.settings = effective.get("settings")
+        if not isinstance(self.settings, dict):
+            raise LawError("settings is a map")
+        self.ops = check_ops(effective.get("ops"), self.settings)
         self.targets, self.by_key = check_targets(effective.get("targets"), self.rank)
-        self.resources = check_resources(effective.get("resources", {}))
+        self.resources = check_resources(effective.get("resources", {}), self.settings)
         self.instruments = check_instruments(effective.get("instruments", {}), self.rank)
         self.evidence = {}
         for name, decl in (effective.get("evidence") or {}).items():
@@ -366,7 +461,7 @@ class Law:
         for name, program in (effective.get("conditions") or {}).items():
             if not isinstance(name, str) or not ID.fullmatch(name):
                 raise LawError(f"condition name {name}")
-            self.conditions[name] = _condition(program)
+            self.conditions[name] = _condition(program, self.settings)
         self.ttl = effective.get("ttl")
         if (not isinstance(self.ttl, dict) or set(self.ttl) != set(TTL)
                 or not all(type(v) is int and v > 0 for v in self.ttl.values())):
@@ -374,20 +469,16 @@ class Law:
         self.delay = effective.get("delays")
         if (not isinstance(self.delay, dict) or set(self.delay) != set(DELAYS)
                 or any(type(v) is not int or v < MIN_DELAY_MS for v in self.delay.values())):
-            raise LawError(f"delays declares exactly {list(DELAYS)}, each at least FLOOR-0's minimum")
+            raise LawError(f"delays declares exactly {list(DELAYS)}, each at least FLOOR-0's minimum (0: at once)")
         witnesses = effective.get("witnesses")
         if (not isinstance(witnesses, dict) or set(witnesses) != {"quorum"} or type(witnesses["quorum"]) is not int
                 or witnesses["quorum"] < MIN_WITNESSES):
             raise LawError(f"witnesses declares a quorum of at least {MIN_WITNESSES}")
         self.witness_quorum = witnesses["quorum"]
-        controls = effective.get("controls")
-        if (not isinstance(controls, dict) or set(controls) != {"heartbeat_ms"}
-                or type(controls["heartbeat_ms"]) is not int or controls["heartbeat_ms"] < 0):
-            raise LawError("controls declares heartbeat_ms (0: no silent-control rule)")
-        self.heartbeat_ms = controls["heartbeat_ms"]
         kinds = {**POLARITY, **dict.fromkeys(self.evidence, "attest")}
         try:
-            self.obligations = obl.validate(effective.get("obligations"), kinds, _condition)
+            self.obligations = obl.validate(effective.get("obligations"), kinds,
+                                            lambda program: _condition(program, self.settings))
         except obl.DeclarationError as exc:
             raise LawError(f"obligations: {exc}") from None
 

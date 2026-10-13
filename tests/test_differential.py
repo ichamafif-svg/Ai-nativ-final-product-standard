@@ -18,18 +18,16 @@ from bt.checker import Disagreement  # noqa: E402
 
 RUNS = int(os.environ.get("STANDARD_DIFFERENTIAL", "12"))
 STEPS = 60
-SHA = ["a" * 40, "b" * 40, "c" * 40]
-HUMANS = ("h1", "h2", "h3", "h4")
+SHA = ["a" * 40, "b" * 40]
+HUMANS = ("h1", "h2")
 
 
 def setup(L):
     L.checkpoint()
     caps = {"scanner": L.grant("scanner", ["observe", "certify:real"], ["repo:*", "run:*", "build:*"]),
             "oracle": L.grant("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*", "run:*"]),
-            "reviewer": L.grant("h3", ["observe", "certify:real"], ["repo:*"]),
-            "recipe": L.grant("agent", ["effect:remediate"], ["repo:*"], ["remediate-autonomous"]),
-            "review": L.grant("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"]),
-            "deploy": L.grant("agent", ["effect:deploy"], ["run:release:*"], ["deploy-autonomous"]),
+            "human": L.grant("h1", ["observe", "certify:real"], ["repo:*", "run:*"]),
+            "agent": L.grant("agent", ["effect:remediate", "effect:deploy"], ["repo:*", "run:*"]),
             "plain": L.grant("agent", ["effect:inventory-refresh"], ["repo:*"], [], budget={"count": 3, "window": HOUR})}
     return caps
 
@@ -41,37 +39,45 @@ def proposal(rng, L, caps):
     at = s["last_at"] + pick([0, 1, 1, 1, 50, 1_000, 400_000])
     intents = sorted(s["intents"])
     tokens = sorted(s["tokens"])
-    base, head = pick(SHA), pick(SHA)
+    base, head = (SHA[0], SHA[1]) if rng.random() < 0.85 else (pick(SHA), pick(SHA))   # facts meet on one move
     res = f"repo:code:sast/{base}/{head}"
-    choice = rng.choices(range(13), weights=[2, 1, 1, 1, 4, 3, 5, 5, 5, 4, 2, 2, 1])[0]
+    choice = rng.choices(range(13), weights=[2, 1, 1, 1, 12, 3, 5, 5, 5, 4, 2, 2, 1])[0]
     if choice == 0:
-        return "checkpoint", "w1", ["w1", "w2"], {"at": at + pick([0, 60_000, HOUR]), "size": s["size"], "head": s["head"]}
+        return "checkpoint", "w1", None, {"at": at + pick([0, 60_000, HOUR]), "size": s["size"], "head": s["head"]}
     if choice == 1:
-        return "freeze", pick(HUMANS + ("sentinel", "agent")), None, {"at": at, "scope": pick(["repo:*", "run:*", "x:*"])}
-    if choice == 2 and intents:
-        return "flag", pick(("h1", "sentinel", "agent")), None, {"at": at, "intent": pick(intents)}
+        return "freeze", pick(HUMANS + ("agent",)), None, {"at": at, "scope": pick(["repo:*", "run:*", "x:*", res])}
+    if choice == 2 and s["frozen"]:
+        return "unfreeze", pick(HUMANS + ("agent",)), None, {"at": at, "scope": pick(sorted(s["frozen"]))}
     if choice == 3:
-        return "heartbeat", pick(("sentinel", "h1")), None, {"at": at, "seen": s["size"] - rng.randrange(2)}
+        from fixture import client_law
+        client = pick([client_law(), client_law(routes={"remediate": ["reproduced"]}),
+                       client_law(settings={"burn_fast": "20"}), client_law(settings={"burn_fast": "1"})])
+        return "law", pick(("h1", "agent")), None, {"at": at, "client": client}
     if choice == 4:
         from standard.floors import INSTRUMENTS
-        prop = pick(["tests", "reproduced", "candidate"])
+        good = {"tests": "green", "reproduced": "yes", "regressions": "none", "scoped": "yes", "candidate": "yes",
+                "window": "open", "budget_pct": "50"}
+        prop = pick(sorted(good))
         method, coverage, _ = INSTRUMENTS[prop]
-        resource = res if prop != "candidate" else f"run:release:all/{pick(SHA)}/{pick(SHA)}"
-        return "measurement", pick(("scanner", "oracle")), None, {
+        resource = res if prop not in ("candidate", "window", "budget_pct") else f"run:release:all/{base}/{head}"
+        return "measurement", "scanner" if rng.random() < 0.9 else "oracle", None, {
             "at": at, "under": caps["scanner"], "resource": resource, "property": prop,
-            "status": pick(["green", "yes", "red"]), "level": "real", "method": method, "coverage": coverage,
+            "status": good[prop] if rng.random() < 0.8 else "red", "level": "real", "method": method, "coverage": coverage,
             "measured_at": at - pick([0, 0, 5, 10 ** 9]), "artifact": "sha256:" + "0" * 64}
     if choice == 5:
-        author = pick(("h3", "scanner", "agent"))
-        cap = caps["reviewer"] if author == "h3" else caps["scanner"]
-        return "observation", author, None, {"at": at, "under": cap, "resource": res, "property": "review",
-                                             "status": pick(["approved", "changes_requested"]), "level": "real"}
+        author = pick(("h1", "scanner", "agent"))
+        cap = caps["human"] if author == "h1" else caps["scanner"]
+        return "observation", author, None, {"at": at, "under": cap, "resource": res, "property": "decision",
+                                             "status": pick(["approve", "reject"]), "level": "real"}
     if choice == 6:
-        route = pick(["recipe", "review", "plain"])
+        route = pick(["agent", "plain", "deploy"])
         if route == "plain":
             return "intent", "agent", None, {"at": at, "under": caps["plain"], "op": "inventory-refresh",
                                              "args": {"scope": pick(["all", "x"])}}
-        fields = {"at": at, "under": caps[route], "op": "remediate",
+        if route == "deploy":
+            return "intent", "agent", None, {"at": at, "under": caps["agent"], "op": "deploy",
+                                             "args": {"from": base, "to": head}}
+        fields = {"at": at, "under": caps["agent"], "op": "remediate",
                   "args": {"area": "code", "item": "sast", "base": base, "head": head}}
         if intents and rng.random() < 0.3:
             fields["retry_of"] = pick(intents)
@@ -79,7 +85,7 @@ def proposal(rng, L, caps):
     if choice == 7 and intents:
         it = s["intents"][pick(intents)]
         from kernel import digest
-        signers = ["guard"] + (["h1", "h2"] if rng.random() < 0.3 else [])
+        signers = ["guard"]
         return "token", "guard", signers, {"at": at, "intent": it["id"], "args_digest": digest(it["args"])}
     if choice == 8 and tokens:
         return "reservation", "guard", None, {"at": at, "token": pick(tokens)}
@@ -95,7 +101,7 @@ def proposal(rng, L, caps):
                                             "subject": it["id"], "level": "real"}
     if choice == 12 and s["grants"] and rng.random() < 0.2:
         return "revoke", pick(("h2", "agent")), None, {"at": at, "grant": pick(sorted(s["grants"]))}
-    return "checkpoint", "w1", ["w1", "w2"], {"at": at, "size": s["size"], "head": s["head"]}
+    return "checkpoint", "w1", None, {"at": at, "size": s["size"], "head": s["head"]}
 
 
 def mutations(delta, rng):

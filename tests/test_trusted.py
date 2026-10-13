@@ -47,12 +47,12 @@ class Checks(unittest.TestCase):
             Checker(RELEASE.floors).check(L.state, record, mutate(copy.deepcopy(delta)), entry, law.raw, law.digest)
 
     def test_r01_a_restriction_must_be_applied(self):
-        self.corrupted("revoke", "h3", lambda d: [op for op in d if op[1] != "revoked"], grant=self.g)
-        self.corrupted("freeze", "h3", lambda d: [("put", "frozen", "other:*", op[3]) if op[1] == "frozen" else op
+        self.corrupted("revoke", "h1", lambda d: [op for op in d if op[1] != "revoked"], grant=self.g)
+        self.corrupted("freeze", "h1", lambda d: [("put", "frozen", "other:*", op[3]) if op[1] == "frozen" else op
                                                  for op in d], scope="repo:*")
 
     def test_no_hidden_mutation(self):
-        self.corrupted("freeze", "h3", lambda d: d + [("put", "grants", "evil", {"holder": "agent"})], scope="repo:*")
+        self.corrupted("freeze", "h1", lambda d: d + [("put", "grants", "evil", {"holder": "agent"})], scope="repo:*")
 
     def test_the_effect_line_moves_only_along_its_table(self):
         self.corrupted("intent", "agent", lambda d: [("put", "line", op[2], {"state": "reserved", "at": op[3]["at"]})
@@ -61,8 +61,8 @@ class Checks(unittest.TestCase):
 
     def test_the_checker_reads_the_signed_entry_not_the_record(self):
         L = self.L
-        body = {"id": "f", "at": L.state["last_at"] + 1, "author": "h3", "scope": "repo:*"}
-        entry = L.entry("freeze", body, ["h3"])
+        body = {"id": "f", "at": L.state["last_at"] + 1, "author": "h1", "scope": "repo:*"}
+        entry = L.entry("freeze", body, ["h1"])
         record, delta = L.kernel.decide(L.state, entry)
         law = L.kernel.law_by_digest(record["law"])
         forged = {**record, "body": {**body, "scope": "x:*"}}
@@ -85,8 +85,8 @@ class Durable(unittest.TestCase):
         self.assertEqual(other.snapshot(), self.L.state)
 
     def test_f0_10_rollback_is_detected(self):
-        self.J.append(self.L.entry("freeze", {"id": "f1", "at": self.L.state["last_at"] + 1, "author": "h3",
-                                              "scope": "a:*"}, ["h3"]))
+        self.J.append(self.L.entry("freeze", {"id": "f1", "at": self.L.state["last_at"] + 1, "author": "h1",
+                                              "scope": "a:*"}, ["h1"]))
         import sqlite3
         from contextlib import closing
         with closing(sqlite3.connect(self.path, isolation_level=None)) as db:
@@ -98,7 +98,7 @@ class Durable(unittest.TestCase):
 
     def test_v6_10_a_crash_between_pin_and_commit_is_recoverable(self):
         state = self.J.snapshot()
-        entry = self.L.entry("freeze", {"id": "f2", "at": state["last_at"] + 1, "author": "h3", "scope": "b:*"}, ["h3"])
+        entry = self.L.entry("freeze", {"id": "f2", "at": state["last_at"] + 1, "author": "h1", "scope": "b:*"}, ["h1"])
         self.pins.keep_then_pin(state["size"] + 1, canon(entry))       # the crash: pinned, never committed
         fresh = Journal(self.path, Kernel(RELEASE, CODE), self.pins, state["domain"])
         with self.assertRaises(Refused):
@@ -160,8 +160,8 @@ class Effects(unittest.TestCase):
         g.journal.transact(lambda s: g._sign(s, "reservation", token=token))
         state = self.J.snapshot()
         self.L.state = state
-        self.J.append(self.L.entry("revoke", {"id": "rv", "at": state["last_at"], "author": "h3", "grant": self.g},
-                                   ["h3"]))
+        self.J.append(self.L.entry("revoke", {"id": "rv", "at": state["last_at"], "author": "h1", "grant": self.g},
+                                   ["h1"]))
         self.assertEqual(g._depart(token), "failed")
         self.assertEqual(self.calls, [])
 
@@ -328,7 +328,7 @@ class Service(unittest.TestCase):
         service = TrustedService(journal, boundary=Nothing(), clock=lambda: 0)
         self.assertEqual(service.status()["state"], "FAULT")
         with self.assertRaises(TrustUnavailable):
-            service.admit(L.entry("freeze", {"id": "f", "at": 1, "author": "h3", "scope": "x:*"}, ["h3"])["envelope"])
+            service.admit(L.entry("freeze", {"id": "f", "at": 1, "author": "h1", "scope": "x:*"}, ["h1"])["envelope"])
 
 
 if __name__ == "__main__":

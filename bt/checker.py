@@ -29,19 +29,21 @@ from kernel.canon import canon, digest, parse
 from kernel.floor0 import DISPATCH_MS, LINE, MAX_AHEAD_MS
 
 PREFIX = "urn:standard:kernel:1:"
-RESTRICT = {"veto": ("human",), "revoke": None, "freeze": ("human", "sentinel"), "flag": ("human", "sentinel"),
-            "heartbeat": ("sentinel",), "invalidate": ("human", "oracle")}
+RESTRICT = {"veto": ("human",), "revoke": None, "freeze": ("human",), "invalidate": ("human", "oracle")}
+DECISION = {"observed": ["decision", "approve", "real", "human"]}       # F0-12, restated
 BOOK = {("put", "statements"), ("set", "size"), ("set", "head"), ("set", "last_at")}
 TOUCH = {
     "genesis": {("set", "domain"), ("set", "root"), ("set", "root_digest"), ("set", "anchor_at"), ("set", "code"),
                 ("set", "law")},
-    "rotate": {("put", "proposals")}, "grant": {("put", "proposals")}, "unfreeze": {("put", "proposals")},
-    "law": {("put", "proposals")},
+    # A widening is either a proposal (the law asks it to wait) or its own enactment (F0-5).
+    "rotate": {("put", "proposals"), ("set", "root"), ("set", "root_digest")},
+    "grant": {("put", "proposals"), ("put", "grants")},
+    "unfreeze": {("put", "proposals"), ("drop", "frozen")},
+    "law": {("put", "proposals"), ("set", "law")},
     "activate": {("set", "root"), ("set", "root_digest"), ("set", "law"), ("put", "grants"), ("drop", "frozen"),
                  ("drop", "proposals")},
     "delegate": {("put", "grants")}, "veto": {("drop", "proposals")}, "revoke": {("put", "revoked")},
-    "freeze": {("put", "frozen")}, "flag": {("put", "flags")}, "heartbeat": {("put", "heartbeats")},
-    "invalidate": {("put", "invalidated")}, "checkpoint": {("set", "anchor_at"), ("set", "witnessed")},
+    "freeze": {("put", "frozen")}, "invalidate": {("put", "invalidated")}, "checkpoint": {("set", "anchor_at"), ("set", "witnessed")},
     "intent": {("put", "intents"), ("put", "obligations"), ("put", "line")},
     "token": {("drop", "obligations"), ("put", "tokens"), ("put", "token_of"), ("push", "uses"),
               ("put", "obligations"), ("put", "line")},
@@ -113,6 +115,29 @@ def _number(value):
     return None
 
 
+def _bound(value, settings):
+    """A compare bound, a setting's name resolved against the effective settings."""
+    if isinstance(value, str) and value[:1] == "@":
+        return _number(settings.get(value[1:]))
+    return _number(value)
+
+
+def _ways(floors) -> dict:
+    """How the floors compare with each setting they name, restated: every program of every section."""
+    progs = [r for op in floors.get("ops", {}).values() for r in op.get("routes", {}).values()]
+    progs += list(floors.get("conditions", {}).values())
+    progs += [t["requires"] for spec in floors.get("resources", {}).values() for t in spec["transitions"].values()]
+    progs += [d["when"] for d in floors.get("obligations", []) if "when" in d]
+    ways = {}
+    for program in progs:
+        for atom in program["all"]:
+            args = atom.get("compare")
+            if args and isinstance(args[2], str) and args[2][:1] == "@":
+                if ways.setdefault(args[2][1:], args[1]) != args[1]:
+                    _no(f"the floors compare setting {args[2]} both ways")
+    return ways
+
+
 def _live(ob, at) -> bool:
     return not ((ob["stage"] in LAPSING or ob.get("on_due") == "lapse") and at > ob["due"])
 
@@ -138,9 +163,20 @@ def _floors_kept(effective: dict, floors: dict, client: dict) -> None:
     for name, op in floors["ops"].items():
         e = effective.get("ops", {}).get(name)
         if (not isinstance(e, dict) or e.get("args") != op["args"] or e.get("resource") != op["resource"]
-                or e.get("profile") not in (op["profile"], "human_quorum")
+                or not isinstance(e.get("routes"), dict) or e["routes"].get("human") != op["routes"]["human"]
+                or any(op["routes"].get(r) != program for r, program in e["routes"].items())
                 or not set(op.get("trusted", [])) <= set(e.get("trusted", []))):
             _no(f"the effective law weakens the floor op {name}")
+    for name, op in effective.get("ops", {}).items():                   # F0-12 for every op, the client's too
+        if DECISION not in op["routes"]["human"]["all"]:
+            _no(f"the op {name} has no human route")
+    settings = effective.get("settings")
+    if not isinstance(settings, dict):
+        _no("the effective law declares no settings")
+    for name, way in _ways(floors).items():
+        f, v = _number(floors.get("settings", {}).get(name)), _number(settings.get(name))
+        if f is None or v is None or (v < f if way == "ge" else v > f):
+            _no(f"the effective law loosens the setting {name}")
     t, f = effective.get("ttl", {}), floors["ttl"]
     if set(t) != set(f) or any(type(t[k]) is not int or not 0 < t[k] <= f[k] for k in f):
         _no("the effective law lengthens a floor ttl")
@@ -150,9 +186,6 @@ def _floors_kept(effective: dict, floors: dict, client: dict) -> None:
     if type(effective.get("witnesses", {}).get("quorum")) is not int or \
             effective["witnesses"]["quorum"] < floors["witnesses"]["quorum"]:
         _no("the effective law lowers the witness quorum")
-    hb, base = effective.get("controls", {}).get("heartbeat_ms"), floors["controls"]["heartbeat_ms"]
-    if type(hb) is not int or not (hb == base == 0 or (hb > 0 and (base == 0 or hb <= base))):
-        _no("the effective law relaxes the silent-control rule")
     targets = {x.get("id"): x for x in effective.get("targets", []) if isinstance(x, dict)}
     for ft in floors["targets"]:
         e = targets.get(ft["id"])
@@ -198,11 +231,16 @@ class Checker:
     def _condition_digests(self, names) -> list:
         return sorted(digest({"name": n, "policy": self.raw.get("conditions", {}).get(n)}) for n in names)
 
-    def _op(self, name) -> dict:
-        """The op as the kernel stores it: declared fields, trusted contracts with T07/T08 always."""
+    def _contract(self, name) -> str:
+        """What an intent pins of its op: the declaration, trusted contracts with T07/T08 always."""
         op = self.raw["ops"][name]
-        return {"args": dict(op["args"]), "resource": op["resource"], "profile": op["profile"],
-                "trusted": sorted(set(op.get("trusted", [])) | {"T07", "T08"})}
+        return digest({**op, "trusted": sorted(set(op.get("trusted", [])) | {"T07", "T08"})})
+
+    def _route(self, pre, op, resource, stmt, label, at) -> None:
+        """F0-12 restated: one route of the op holds on these facts."""
+        request = {**stmt, "resource": resource}
+        if not any(self._holds(pre, program, request, label, at) for program in self.raw["ops"][op]["routes"].values()):
+            _no(f"no route of {op} holds")
 
     def _resource_of(self, op: str, args: dict) -> str:
         out, template = "", self.raw["ops"][op]["resource"]
@@ -330,8 +368,8 @@ class Checker:
     # ---- widening ---------------------------------------------------------------------------------------------------
     def _root_ok(self, root) -> None:
         k = root.get("threshold")
-        if type(k) is not int or k < 2 or len(_humans(root)) < k + 2:
-            _no("a root has a quorum of at least two and two more humans")
+        if type(k) is not int or k < 1 or len(_humans(root)) < k:
+            _no("a root has a threshold of at least one human, and that many humans")
         if sum(d["kind"] == "witness" for d in root["identities"].values()) < self.raw["witnesses"]["quorum"]:
             _no("a root keeps enough witnesses for the time quorum")
 
@@ -355,13 +393,18 @@ class Checker:
     def _proposal(self, pre, record, delta, root, signers):
         b, kind = record["body"], record["kind"]
         self._quorum(record, root, signers, 1 if b.get("override") else 0)
+        if kind == "unfreeze" and b["scope"] not in pre["frozen"]:
+            _no("only a frozen scope can be unfrozen")
+        if not self.raw["delays"][kind]:                                # F0-5: no delay, the entry enacts itself
+            if b.get("override"):
+                _no("nothing waits to be overridden")
+            self._enacts(pre, record, delta, kind, b)
+            return
         expected = {"id": b["id"], "kind": kind, "body": b, "signers": sorted(signers & _humans(pre["root"])),
                     "not_before": b["at"] + (2 if b.get("override") else 1) * self.raw["delays"][kind],
                     "override": bool(b.get("override")), "root_digest": pre["root_digest"],
                     "law_digest": pre["law"]["digest"]}
         if kind == "unfreeze":
-            if b["scope"] not in pre["frozen"]:
-                _no("only a frozen scope can be unfrozen")
             expected["freeze"] = pre["frozen"][b["scope"]]
         if delta.count(("put", "proposals", b["id"], expected)) != 1 or len([o for o in delta if o[1] == "proposals"]) != 1:
             _no("the proposal equals the signed request with its delay")
@@ -378,26 +421,32 @@ class Checker:
         if (p is None or p["root_digest"] != pre["root_digest"] or p["law_digest"] != pre["law"]["digest"]
                 or pre["anchor_at"] < p["not_before"]):
             _no("an activation needs a live proposal of this root and law whose witnessed delay has passed")
-        pb = p["body"]
-        if p["kind"] == "rotate":
+        if p["kind"] == "unfreeze" and pre["frozen"].get(p["body"]["scope"]) != p["freeze"]:
+            _no("the scope was frozen again since the proposal")
+        self._enacts(pre, record, [op for op in delta if op[:2] != ("drop", "proposals")], p["kind"], p["body"])
+        if [op for op in delta if op[:2] == ("drop", "proposals")] != [("drop", "proposals", p["id"])]:
+            _no("the activation consumes exactly its proposal")
+
+    def _enacts(self, pre, record, delta, kind, pb) -> None:
+        """What a widening changes, restated: exactly its signed body, nothing else."""
+        if kind == "rotate":
             self._root_ok(pb["root"])
             expected = [("set", "root", pb["root"]), ("set", "root_digest", digest(pb["root"]))]
-        elif p["kind"] == "grant":
+        elif kind == "grant":
+            if pb["not_after"] < record["at"]:
+                _no("a grant enacted after its end")
             expected = [("put", "grants", pb["id"], self._grant_record(pb, "root", record["at"]))]
-        elif p["kind"] == "unfreeze":
-            if pre["frozen"].get(pb["scope"]) != p["freeze"]:
-                _no("the scope was frozen again since the proposal")
+        elif kind == "unfreeze":
             expected = [("drop", "frozen", pb["scope"])]
         else:
             if pb["client"].get("floors") is None:
                 _no("a client law names the floors of its release")
             changed = [op for op in delta if op[:2] == ("set", "law")]
             if len(changed) != 1 or changed[0][2].get("client") != pb["client"]:
-                _no("an activated law puts exactly the proposed client law in force")
+                _no("a widened law puts exactly the signed client law in force")
             expected = changed
-        expected = expected + [("drop", "proposals", p["id"])]
         if [op for op in delta if (op[0], op[1]) not in BOOK] != expected:
-            _no("the activation applies exactly its proposal")
+            _no("the widening applies exactly its signed body")
 
     def _grant_record(self, b, parent, at) -> dict:
         return {"id": b["id"], "parent": parent, "holder": b["holder"], "actions": list(b["actions"]),
@@ -450,16 +499,6 @@ class Checker:
 
     def _freeze(self, pre, record, delta, root, signers):
         self._exactly(delta, [("put", "frozen", record["body"]["scope"], record["body"]["id"])])
-
-    def _flag(self, pre, record, delta, root, signers):
-        if record["body"]["intent"] not in pre["intents"]:
-            _no("a flag names an intent")
-        self._exactly(delta, [("put", "flags", record["body"]["intent"], record["body"]["id"])])
-
-    def _heartbeat(self, pre, record, delta, root, signers):
-        if record["body"]["seen"] > pre["size"]:
-            _no("a heartbeat is about what exists")
-        self._exactly(delta, [("put", "heartbeats", record["author"], record["at"])])
 
     def _invalidate(self, pre, record, delta, root, signers):
         found = [o for o in pre["observations"].values() if o["id"] == record["body"]["evidence"]]
@@ -537,7 +576,7 @@ class Checker:
                          and self._eligible(pre, o, at) and not label & set(o["label"])
                          for o in pre["observations"].values())
             elif op == "compare":                       # D35: decimal bounds, restated with exact arithmetic
-                bound = _number(args[2])
+                bound = _bound(args[2], self.raw.get("settings", {}))
                 ok = bound is not None and any(
                     (o["resource"], o["property"], o["level"]) == (request["resource"], args[0], args[3])
                     and (v := _number(o["status"])) is not None and (v <= bound if args[1] == "le" else v >= bound)
@@ -592,11 +631,12 @@ class Checker:
         b = record["body"]
         resource = self._resource_of(b["op"], b["args"])
         expected = {"id": b["id"], "op": b["op"], "resource": resource, "args": b["args"], "author": b["author"],
-                    "under": b["under"], "stmt": {**b, "resource": resource}, "contract": digest(self._op(b["op"]))}
+                    "under": b["under"], "stmt": {**b, "resource": resource}, "contract": self._contract(b["op"])}
         stored = [op for op in delta if op[:2] == ("put", "intents")]
         if len(stored) != 1 or stored[0][2] != b["id"] or {k: v for k, v in stored[0][3].items() if k != "label"} != expected:
             _no("the stored intent differs from the signed request")
         _, label = self._authority(pre, b["author"], b["under"], "effect:" + b["op"], resource, b, record["at"])
+        self._route(pre, b["op"], resource, b, label, record["at"])
         prior = b.get("retry_of")
         if prior is not None:
             p = pre["intents"].get(prior)
@@ -609,20 +649,12 @@ class Checker:
             _no("the intent's provenance label is wrong")
         self._frozen(pre, resource)
 
-    def _profile(self, pre, it, approvers, root_digest, at) -> None:
-        approved = set(approvers) & _humans(pre["root"]) if root_digest == pre["root_digest"] else set()
-        if self._op(it["op"])["profile"] == "human_quorum" and len(approved) < pre["root"]["threshold"]:
-            _no("a sensitive effect lacks the current human quorum")
-        heartbeat = self.raw["controls"]["heartbeat_ms"]
-        prudent = heartbeat and any(at - pre["heartbeats"].get(i, -10 ** 15) > heartbeat
-                                    for i, d in pre["root"]["identities"].items() if d["kind"] == "sentinel")
-        if (prudent or it["id"] in pre["flags"]) and not approved:
-            _no("a flagged or prudent effect lacks a human co-signature")
-
     def _effect_authority(self, pre, it, at) -> list:
-        if it["contract"] != digest(self._op(it["op"])):
+        if it["op"] not in self.raw["ops"] or it["contract"] != self._contract(it["op"]):
             _no("the operation contract changed")
-        chain, _ = self._authority(pre, it["author"], it["under"], "effect:" + it["op"], it["resource"], it["stmt"], at)
+        chain, label = self._authority(pre, it["author"], it["under"], "effect:" + it["op"], it["resource"],
+                                       it["stmt"], at)
+        self._route(pre, it["op"], it["resource"], it["stmt"], label, at)
         self._frozen(pre, it["resource"])
         return chain
 
@@ -634,12 +666,10 @@ class Checker:
         if b["args_digest"] != digest(it["args"]):
             _no("a token binds the intent's arguments")
         chain = self._effect_authority(pre, it, record["at"])
-        tok = {"intent": b["intent"], "guard": record["author"], "humans": sorted(signers & _humans(root)),
-               "root_digest": pre["root_digest"]}
+        tok = {"intent": b["intent"], "guard": record["author"]}
         if [op for op in delta if op[:2] == ("put", "tokens")] != [("put", "tokens", b["id"], tok)] or \
                 [op for op in delta if op[:2] == ("put", "token_of")] != [("put", "token_of", b["intent"], b["id"])]:
-            _no("the token equals its signed request and verified approvals")
-        self._profile(pre, it, tok["humans"], tok["root_digest"], record["at"])
+            _no("the token equals its signed request")
         self._spent(pre, delta, chain, record["at"])
 
     def _reservation(self, pre, record, delta, root, signers):
@@ -649,7 +679,6 @@ class Checker:
             _no("a token is reserved once, by the guard that issued it")
         it = pre["intents"][tok["intent"]]
         self._effect_authority(pre, it, record["at"])
-        self._profile(pre, it, tok["humans"], tok["root_digest"], record["at"])
         if [op for op in delta if op[:2] == ("put", "reserved")] != [("put", "reserved", token, record["body"]["id"])]:
             _no("the reservation records exactly its token")
 
@@ -891,7 +920,6 @@ class Checker:
                 _no("only a reservation inside its dispatch window may leave")
             it = pre["intents"][tok["intent"]]
             self._effect_authority(pre, it, now)
-            self._profile(pre, it, tok["humans"], tok["root_digest"], now)
             return {"op": it["op"], "resource": it["resource"], "args": copy.deepcopy(it["args"])}
         except Disagreement:
             raise

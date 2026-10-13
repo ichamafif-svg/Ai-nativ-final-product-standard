@@ -57,7 +57,7 @@ class Observe(unittest.TestCase):
         b = boundary(root)
         forged = [["run:service:all", "slo", "met", []],
                   [f"repo:contrib:alice/{A}/{B}", "tests", "green", []],          # not production's to say
-                  [f"run:release:all/{A}/{B}", "review", "approved", []]]        # nor a person's fact
+                  [f"run:release:all/{A}/{B}", "decision", "approve", []]]        # nor a person's fact
         out = b.observe(FakeHost(b.evidence, forged), "scanner", "production", {})
         self.assertEqual([tuple(f[:3]) for f in out["facts"]], [("run:service:all", "slo", "met")])
         self.assertEqual(len(out["refused"]), 2)

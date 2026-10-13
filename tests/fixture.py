@@ -14,29 +14,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat  # noqa: E402
 
-from standard.floors import RELEASE  # noqa: E402
+from standard.floors import RELEASE, rules  # noqa: E402
 from kernel import Kernel, Refused, apply, canon, digest, empty  # noqa: E402
 from kernel.identity import PAYLOAD_TYPE, keyid, pae, statement  # noqa: E402
 from bt.checker import Checker  # noqa: E402
 
 CODE = digest({"code": "test-release"})
 HOUR = 3_600_000
-IDENTITIES = {"h1": "human", "h2": "human", "h3": "human", "h4": "human", "w1": "witness", "w2": "witness",
-              "guard": "guard", "agent": "agent", "scanner": "service", "oracle": "oracle", "sentinel": "sentinel",
-              "tester": "service", "reproducer": "service"}
+# One human and one agent, the machines, and a second human and witness for the team options.
+IDENTITIES = {"h1": "human", "h2": "human", "w1": "witness", "w2": "witness", "guard": "guard", "agent": "agent",
+              "scanner": "service", "oracle": "oracle", "tester": "service", "reproducer": "service"}
+BINDINGS = {"owner": "h1", "inventory_source": "oracle", "scanner": "scanner"}
 
 
 def client_law(**extra) -> dict:
-    law = {"format": "standard-client/1", "floors": RELEASE.digest,
-           "bindings": {"owner": "h1", "inventory_source": "oracle", "scanner": "scanner",
-                        "compliance_officer": "h2"}}
-    law.update(copy.deepcopy(extra))
-    return law
+    """The recommended rules, with these sections replaced (settings merged)."""
+    return rules(BINDINGS, **extra)
 
 
 class Keys:
     def __init__(self):
-        self.private, self.root = {}, {"threshold": 2, "identities": {}}
+        self.private, self.root = {}, {"threshold": 1, "identities": {}}
         for ident, kind in IDENTITIES.items():
             self.add(ident, kind)
 
@@ -103,11 +101,13 @@ class Ledger:
         raise AssertionError(f"{kind} was admitted")
 
     def genesis(self, law, at):
-        self.submit("genesis", "h1", ["h1", "h2"], at, root=self.keys.root, law=law, code=CODE)
+        founders = sorted(i for i, d in self.keys.root["identities"].items() if d["kind"] == "human")
+        self.submit("genesis", "h1", founders[:self.keys.root["threshold"]], at, root=self.keys.root, law=law,
+                    code=CODE)
 
-    def checkpoint(self, at=None):
+    def checkpoint(self, at=None, signers=("w1",)):
         at = self.state["last_at"] + 1 if at is None else at
-        return self.submit("checkpoint", "w1", ["w1", "w2"], at, size=self.state["size"], head=self.state["head"])
+        return self.submit("checkpoint", "w1", list(signers), at, size=self.state["size"], head=self.state["head"])
 
     def advance(self, ms):
         """Witnessed time moves forward by ms."""
@@ -118,7 +118,9 @@ class Ledger:
                   "conditions": list(conditions), "not_after": not_after}
         if budget:
             fields["budget"] = budget
-        pid = self.submit("grant", "h1", ["h1", "h2"], **fields)
-        self.advance(HOUR + 1)
-        self.submit("activate", "h1", ["h1", "h2"], proposal=pid)
-        return pid
+        return self.submit("grant", "h1", ["h1"], **fields)          # no delay: in force with its own entry
+
+    def decide(self, under, resource, author="h1"):
+        """The human's yes on the exact resource of a move."""
+        return self.submit("observation", author, under=under, resource=resource, property="decision",
+                           status="approve", level="real")

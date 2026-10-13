@@ -1,29 +1,30 @@
-"""The floors of this release (ARCHITECTURE.md §12): what Standard imposes on every client.
+"""The socle of this release (ARCHITECTURE.md §12): the rules of the game every client plays under.
 
-Declarative, in the same language as a client law, so every requirement produces a measurable gap: autonomy is the
-distance between what the floors and the client require and what the repository has. Only the Standard team changes
-this file, through a release. A client binds the roles below to its identities, adds its own declarations and may
-only tighten.
+Declarative, in the same language as the client's rules. The socle names the moves (the ops), the routes by which each
+move may be played, the least proof each route needs and the floor value of every setting; the client's rules choose
+inside it. Only the Standard team changes this file, through a release.
 
-Technical measures are observed by the independent scanner and repaired by `remediate`: main moves fast-forward from
-one exact commit (base) to one exact child (head), so the object of the effect is the commit that was judged.
-Autonomy is reproducibility (§11.4): without a human, a repair needs `tests = green` and `reproduced = yes` from an
-independent instrument; otherwise a signed review of this exact transition. Organisational measures are attested by
-the compliance officer and have no automatic repair: their gap goes to people.
+Two players. The agent proposes moves and never holds authority. The human writes the rules and has the last word in
+the situations that matter, by three gestures only: change the rules, say yes (`decision = approve`, signed by a
+human, on the exact resource of a move) and say no (freeze the resource or a scope). Every op has a human route; the
+autonomous routes read only facts that pinned instruments measured. The rules turn autonomous routes off and set the
+settings no looser than here; the kernel and the independent checker read the same numbers as the agent.
 
-Production (D30) is measured by the same scanner from the product's own metrics: every declared source answers, the
-service meets its objective, and production runs main's head. The switches (deploy, rollback, restart, canary, abort)
-move the live release by a compare-and-swap. D36: the scanner signs what is (this switch exists, this release was
-proven good) and numbers (burn rate, failing share, minutes since the switch, canary deltas); the bounds below decide
-when the agent may act alone. The engineers' finer settings are the agent's own restraint inside these bounds.
+Where the human keeps the last word: the rules themselves (power), code the agent did not write (`integrate`), what
+the product must do (a request's contract), what no machine repairs (provider settings), and every move whose
+autonomous routes the rules turned off. Everything else the agent plays alone, inside the rules.
+
+Technical measures are observed by the scanner and repaired by `remediate`: main moves fast-forward from one exact
+commit (base) to one exact child (head), so the object of the effect is the commit that was judged. A repair lands
+alone when a recipe reproduces it, or when main's tests pass, nothing regresses and the change stays in the target's
+write scope (`scoped`). Production (D30, D36) is measured by the same scanner from the product's own metrics.
 """
 import hashlib
 from pathlib import Path
 
 from kernel import FORMAT, Release, floor0_digest
-from kernel.floor0 import MIN_DELAY_MS
 
-ROLES = ("owner", "inventory_source", "scanner", "compliance_officer")
+ROLES = ("owner", "inventory_source", "scanner")
 DAY = 86_400_000
 MINUTE = 60_000
 
@@ -38,39 +39,11 @@ TECHNICAL = (
     ("actions", "repo:ci:actions", "pinned", "all", 7, 30),
     ("sbom", "repo:supply:sbom", "state", "current", 7, 7),
 )
-# Observed by @scanner, repaired by people: only the guard moves main; every commit on main is a judged effect.
+# Observed by @scanner, repaired by the human at the provider: only the guard moves main.
 SETTINGS = (
     ("branch", "repo:settings:main", "protection", "guard-only", 1, 7),
     ("lineage", "repo:main:lineage", "unjudged", "none", 1, 1),
 )
-# (id, resource, fresh days) attested "current" by @compliance_officer under the statement of applicability.
-ORGANISATIONAL = (
-    ("isms", "org:isms:policy", 365), ("risk", "org:risk:assessment", 365), ("access", "org:access:review", 90),
-    ("training", "org:people:training", 365), ("hr", "org:people:hr", 365), ("suppliers", "org:supply:register", 365),
-    ("incident", "org:incident:procedure", 365), ("continuity", "org:continuity:test", 365),
-    ("backup", "org:backup:restore", 90), ("legal", "org:legal:register", 365),
-    ("audit", "org:audit:independent", 365), ("physical", "org:physical:sites", 365),
-    ("crypto", "org:crypto:policy", 365), ("resilience", "org:resilience:testing", 365),
-    ("assets", "org:assets:register", 365), ("infra", "org:infra:baseline", 180),
-    ("monitoring", "org:ops:monitoring", 180), ("threat", "org:threat:intel", 180),
-)
-
-# Release-pinned reading scope, not law: these historical labels are not control-by-control compliance mappings.
-COMPLIANCE_SCOPES = (
-    {"framework": "ISO 27001", "scope": "historical target-family projection", "clause": None,
-     "targets": tuple(sorted({"vulns", "secrets", "sast", "access", "suppliers", "incident", "backup",
-                              "crypto", "monitoring", *(t[0] for t in ORGANISATIONAL)})),
-     "source": "Standard D41 projection", "granularity": "coarse"},
-    {"framework": "DORA", "scope": "historical target-family projection", "clause": None,
-     "targets": ("continuity", "backup", "incident", "resilience", "suppliers", "monitoring",
-                 "run-sources", "run-slo", "run-live"),
-     "source": "Standard D41 projection", "granularity": "coarse"},
-    {"framework": "NIS2", "scope": "historical target-family projection", "clause": None,
-     "targets": ("vulns", "secrets", "sast", "deps-age", "incident", "continuity", "suppliers",
-                 "access", "crypto", "threat"),
-     "source": "Standard D41 projection", "granularity": "coarse"},
-)
-
 
 # D33: the facts that open a right are measurements of a pinned instrument. The kernel admits them only from the
 # scanner, with this method and coverage, fresh; anyone else (a reviewer, an engineer) cannot sign them, so a person
@@ -96,7 +69,7 @@ def _programs() -> str:
 
 PROGRAMS = _programs()
 RUN = ("candidate", "previous", "proven", "live", "running", "good",       # D36: what is, on an exact switch
-       "burn_fast", "failing_pct", "switched_min", "unanswered_s", "restarts_last_hour", "migrations_crossed",
+       "window", "burn_fast", "failing_pct", "switched_min", "unanswered_s", "restarts_last_hour", "migrations_crossed",
        "budget_pct", "canary_error_delta", "canary_requests", "canary_baked_min", "canary_p99_ms", "live_p99_ms",
        "canary_error_pct", "live_error_pct", "live_requests")
 CONTRACTS = {
@@ -104,9 +77,9 @@ CONTRACTS = {
         "floors": {"form": "composite", "jobs": ["floors"], "resources": ["repo:"],
                    "properties": ["coverage", *sorted({t[2] for t in TECHNICAL + SETTINGS})],
                    "attested": ["the pinned third-party data snapshot (D17)", "the provider's settings of main"]},
-        "suite": {"form": "reproducible", "jobs": ["remediation", "configure", "feature", "contribution"],
+        "suite": {"form": "reproducible", "jobs": ["remediation", "feature", "contribution"],
                   "resources": ["repo:"],
-                  "properties": ["tests", "regressions", "reproduced", "acceptance", "configured"], "attested": []},
+                  "properties": ["tests", "regressions", "reproduced", "acceptance", "scoped"], "attested": []},
         "request": {"form": "reproducible", "jobs": ["request"], "resources": ["build:request/"],
                     "properties": ["contract", "accepted"], "attested": []},
         "production": {"form": "composite", "jobs": ["production"], "resources": ["run:"],
@@ -116,13 +89,14 @@ CONTRACTS = {
         "capture": {"form": "attested", "jobs": [], "resources": [], "properties": [],
                     "attested": ["the bytes each declared source returned to the host, at that time"]},
     },
-    "effect": {"remediate": "cas", "integrate": "cas", "implement": "cas", "configure": "cas",
+    "effect": {"remediate": "cas", "integrate": "cas", "implement": "cas",
                "deploy": "cas", "rollback": "cas", "canary": "cas", "abort": "cas", "restart": "observable"},
 }
 INSTRUMENTS = {   # property -> (method, coverage, fresh)
     **{p: (f"{PROGRAMS}/suite", "repo:inventory:all", DAY) for p in CONTRACTS["observe"]["suite"]["properties"]},
     **{p: (f"{PROGRAMS}/request", "repo:inventory:all", DAY) for p in CONTRACTS["observe"]["request"]["properties"]},
-    **{p: (f"{PROGRAMS}/production", "run:sources:all", 15 * MINUTE) for p in RUN},
+    **{p: (f"{PROGRAMS}/production", "run:sources:all", 2 * MINUTE if p == "window" else 15 * MINUTE)
+       for p in RUN},
 }
 
 
@@ -132,117 +106,108 @@ def _target(ident, resource, prop, expect, fresh, due, coverage, source, **extra
             "sources": [source], **extra}
 
 
+DECISION = {"observed": ["decision", "approve", "real", "human"]}        # the human's yes, on the exact resource
+
+
+def _m(prop, status):
+    return {"observed": [prop, status, "real"]}
+
+
+def _c(prop, way, bound):
+    return {"compare": [prop, way, bound, "real"]}
+
+
+def _auto(*atoms):
+    return {"all": list(atoms)}
+
+
+def _human(*atoms):
+    """The human route: the facts that make the move possible at all, and the human's decision on it."""
+    return {"all": [*atoms, DECISION]}
+
+
+_back = (_m("previous", "yes"), _m("proven", "yes"), _c("migrations_crossed", "le", "@rollback_migrations"))
+
 FLOORS = {
     "format": FORMAT,
     "floor0": floor0_digest(),
     "levels": ["unknown", "real"],
     "ttl": {"pending": DAY, "unredeemed": DAY, "reconcile": DAY, "proof": DAY, "observation": DAY},
-    "delays": {"rotate": MIN_DELAY_MS, "grant": MIN_DELAY_MS, "unfreeze": MIN_DELAY_MS, "law": MIN_DELAY_MS},
-    "witnesses": {"quorum": 2},
-    "controls": {"heartbeat_ms": 0},
+    "delays": {"rotate": 0, "grant": 0, "unfreeze": 0, "law": 0},       # a team asks widenings to wait
+    "witnesses": {"quorum": 1},                                           # a team asks for more witnesses
+    # The floor value of every setting a route compares with: the loosest the rules may set (F0-12, D36).
+    "settings": {"burn_fast": "14.4", "failing": 5, "rollback_horizon_min": 240, "rollback_migrations": 1000,
+                 "restarts_per_hour": 11, "freeze_below": 0, "canary_max_error_delta": "2",
+                 "canary_min_requests": 20, "canary_bake_min": 1},
     # Closure on independent proof: every effect leaves a proof obligation only independent evidence closes.
     "evidence": {"evidence": {"fields": {"under": "id", "resource": "resource", "subject": "id", "level": "str"}}},
     "discharges": {"evidence": [{"obligation": "proof", "key": "subject", "min_level": "real"}]},
     "ops": {
         "inventory-refresh": {"args": {"scope": "segment"}, "resource": "repo:inventory:{scope}",
-                              "profile": "capability"},
-        # Fast-forward main from `base` to its child `head`, repairing repo:{area}:{item}. The facts that authorize
-        # it are observed on this very resource, so they bind both commits of the transition.
+                              "routes": {"auto": _auto({"prefix": ["resource", "repo:inventory:"]}),
+                                         "human": _human()}},
+        # Fast-forward main from `base` to its child `head`, repairing repo:{area}:{item}. The facts are observed on
+        # this very resource, so they bind both commits of the transition.
         "remediate": {"args": {"area": "segment", "item": "segment", "base": "segment", "head": "segment"},
-                      "resource": "repo:{area}:{item}/{base}/{head}", "profile": "capability"},
-        # Fast-forward main from `base` to its child `head`, a client's contribution from the hosting inbox (D23).
-        # One judged transition is one commit: the author rebases and squashes onto the current main.
+                      "resource": "repo:{area}:{item}/{base}/{head}",
+                      "routes": {"reproduced": _auto(_m("tests", "green"), _m("reproduced", "yes")),
+                                 "scoped": _auto(_m("tests", "green"), _m("regressions", "none"), _m("scoped", "yes")),
+                                 "human": _human(_m("tests", "green"), _m("regressions", "none"))}},
+        # Fast-forward main from `base` to `head`, a contribution from the hosting inbox (D23): code the agent did not
+        # write lands only on the human's word, after main's tests and no regression.
         "integrate": {"args": {"contributor": "segment", "base": "segment", "head": "segment"},
-                      "resource": "repo:contrib:{contributor}/{base}/{head}", "profile": "capability"},
-        # Switch production from release `from` (a commit of main, or none) to main's head `to` (D30).
-        "deploy": {"args": {"from": "segment", "to": "segment"}, "resource": "run:release:all/{from}/{to}",
-                   "profile": "capability"},
-        # Switch production back from `from` to `to`, the release it replaced, repairing run:service:all.
-        "rollback": {"args": {"from": "segment", "to": "segment"}, "resource": "run:service:all/{from}/{to}",
-                     "profile": "capability"},
-        # Start the live release again (D31): the n-th restart of this release, so each one is judged once.
-        "restart": {"args": {"release": "segment", "n": "segment"}, "resource": "run:process:all/{release}/{n}",
-                    "profile": "capability"},
-        # Fast-forward main from `base` to `head`, the agent's implementation of a contracted request (D34).
+                      "resource": "repo:contrib:{contributor}/{base}/{head}",
+                      "routes": {"human": _human(_m("tests", "green"), _m("regressions", "none"))}},
+        # Fast-forward main from `base` to `head`, the agent's implementation of a contracted request (D34). The
+        # human said what the product must do by signing the contract; its acceptance tests decide.
         "implement": {"args": {"request": "segment", "base": "segment", "head": "segment"},
-                      "resource": "repo:feature:{request}/{base}/{head}", "profile": "capability"},
-        # Fast-forward main from `base` to `head`, a change of standard/rules.json an engineer signed (D35).
-        "configure": {"args": {"base": "segment", "head": "segment"}, "resource": "repo:config:rules/{base}/{head}",
-                      "profile": "capability"},
+                      "resource": "repo:feature:{request}/{base}/{head}",
+                      "routes": {"accepted": _auto(_m("acceptance", "green"), _m("tests", "green"),
+                                                   _m("regressions", "none"), _m("scoped", "yes")),
+                                 "human": _human(_m("acceptance", "green"), _m("tests", "green"),
+                                                 _m("regressions", "none"))}},
+        # Switch production from release `from` (a commit of main, or none) to main's head `to` (D30): directly in
+        # the deployment window with error budget left, or by promoting a canary that held.
+        "deploy": {"args": {"from": "segment", "to": "segment"}, "resource": "run:release:all/{from}/{to}",
+                   "routes": {"direct": _auto(_m("candidate", "yes"), _m("window", "open"),
+                                              _c("budget_pct", "ge", "@freeze_below")),
+                              "promote": _auto(_m("candidate", "yes"),
+                                               _c("canary_error_delta", "le", "@canary_max_error_delta"),
+                                               _c("canary_requests", "ge", "@canary_min_requests"),
+                                               _c("canary_baked_min", "ge", "@canary_bake_min")),
+                              "human": _human(_m("candidate", "yes"))}},
         # Start `to` on a share of traffic beside the live `from` (D32); promoting it is `deploy`.
         "canary": {"args": {"from": "segment", "to": "segment"}, "resource": "run:canary:all/{from}/{to}",
-                   "profile": "capability"},
-        # Take the canary `to` out; it is never offered again.
+                   "routes": {"auto": _auto(_m("candidate", "yes"), _m("window", "open"),
+                                            _c("budget_pct", "ge", "@freeze_below")),
+                              "human": _human(_m("candidate", "yes"))}},
+        # Switch production back from `from` to `to`, the release it replaced, repairing run:service:all: the live
+        # release broke soon after its switch (or never answered), and the one it replaced was proven good.
+        "rollback": {"args": {"from": "segment", "to": "segment"}, "resource": "run:service:all/{from}/{to}",
+                     "routes": {"burn": _auto(*_back, _c("switched_min", "le", "@rollback_horizon_min"),
+                                              _c("burn_fast", "ge", "@burn_fast")),
+                                "failing": _auto(*_back, _c("switched_min", "le", "@rollback_horizon_min"),
+                                                 _c("failing_pct", "ge", "@failing")),
+                                "unanswered": _auto(*_back, _c("unanswered_s", "ge", 90)),
+                                "human": _human(_m("previous", "yes"))}},
+        # Start the live release again (D31): the n-th restart of this release, so each one is judged once.
+        "restart": {"args": {"release": "segment", "n": "segment"}, "resource": "run:process:all/{release}/{n}",
+                    "routes": {"failing": _auto(_m("live", "yes"),
+                                                _c("restarts_last_hour", "le", "@restarts_per_hour"),
+                                                _c("failing_pct", "ge", "@failing")),
+                               "burn": _auto(_m("live", "yes"), _c("restarts_last_hour", "le", "@restarts_per_hour"),
+                                             _c("burn_fast", "ge", "@burn_fast")),
+                               "human": _human()}},
+        # Take the canary `to` out; it is never offered again. Taking a canary out is always safe.
         "abort": {"args": {"from": "segment", "to": "segment"}, "resource": "run:canary:abort/{from}/{to}",
-                  "profile": "capability"},
+                  "routes": {"auto": _auto(_m("running", "yes")), "human": _human()}},
     },
-    # D46: a decision kept for people (review, approved, requested) counts only when a human of the root signed it; an
-    # instrument, the oracle or any machine identity holding `observe` on the resource cannot stand in for a person.
-    "conditions": {
-        "remediate-autonomous": {"all": [{"observed": ["tests", "green", "real"]},
-                                         {"observed": ["reproduced", "yes", "real"]}]},
-        "remediate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
-                                       {"observed": ["regressions", "none", "real"]},
-                                       {"observed": ["review", "approved", "real", "human"]}]},
-        # A client's work never lands on its author's word: main's own tests, no new gap on any floor target, and a
-        # signed human review, always.
-        "integrate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
-                                       {"observed": ["regressions", "none", "real"]},
-                                       {"observed": ["review", "approved", "real", "human"]}]},
-        # D36: the agent acts alone in production only on what the scanner measured, against these bounds. The
-        # engineers' settings may ask for more (a higher burn, a shorter horizon, a canary that bakes longer); never
-        # for less: the kernel refuses.
-        # Main's head, never rolled back, replaces exactly the live release.
-        "deploy-autonomous": {"all": [{"observed": ["candidate", "yes", "real"]}]},
-        # The live release breaks soon after its switch, and the one it replaced was proven good: step back.
-        "rollback-autonomous": {"all": [{"observed": ["previous", "yes", "real"]}, {"observed": ["proven", "yes", "real"]},
-                                        {"compare": ["switched_min", "le", 240, "real"]},
-                                        {"compare": ["burn_fast", "ge", "14.4", "real"]}]},
-        "rollback-failing": {"all": [{"observed": ["previous", "yes", "real"]}, {"observed": ["proven", "yes", "real"]},
-                                     {"compare": ["switched_min", "le", 240, "real"]},
-                                     {"compare": ["failing_pct", "ge", 5, "real"]}]},
-        "rollback-unanswered": {"all": [{"observed": ["previous", "yes", "real"]}, {"observed": ["proven", "yes", "real"]},
-                                        {"compare": ["unanswered_s", "ge", 90, "real"]}]},
-        # The same switches when the engineers keep them for themselves (D31): the scanner's fact that the switch is
-        # possible, and an engineer's signed decision on that exact switch.
-        "deploy-reviewed": {"all": [{"observed": ["candidate", "yes", "real"]},
-                                    {"observed": ["approved", "yes", "real", "human"]}]},
-        "rollback-reviewed": {"all": [{"observed": ["previous", "yes", "real"]},
-                                      {"observed": ["requested", "yes", "real", "human"]}]},
-        "restart-autonomous": {"all": [{"observed": ["live", "yes", "real"]},
-                                       {"compare": ["restarts_last_hour", "le", 11, "real"]},
-                                       {"compare": ["failing_pct", "ge", 5, "real"]}]},
-        "restart-burn": {"all": [{"observed": ["live", "yes", "real"]},
-                                 {"compare": ["restarts_last_hour", "le", 11, "real"]},
-                                 {"compare": ["burn_fast", "ge", "14.4", "real"]}]},
-        "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real", "human"]}]},
-        "canary-autonomous": {"all": [{"observed": ["candidate", "yes", "real"]}]},
-        # D35: the rules file changes from the interface with one signature: the scanner checks the commit changes
-        # only that file, to exactly what an engineer signed, and that main's tests and the floors hold.
-        "configure-signed": {"all": [{"observed": ["configured", "yes", "real"]},
-                                     {"observed": ["tests", "green", "real"]},
-                                     {"observed": ["regressions", "none", "real"]}]},
-        # D34: a feature lands only if its signed contract's acceptance tests pass on this exact transition, main's
-        # own tests still pass, no floor target got worse, and a person reviewed the code.
-        "implement-reviewed": {"all": [{"observed": ["acceptance", "green", "real"]},
-                                       {"observed": ["tests", "green", "real"]},
-                                       {"observed": ["regressions", "none", "real"]},
-                                       {"observed": ["review", "approved", "real", "human"]}]},
-        "deploy-canary": {"all": [{"observed": ["candidate", "yes", "real"]},
-                                  {"compare": ["canary_error_delta", "le", "2", "real"]},
-                                  {"compare": ["canary_requests", "ge", 20, "real"]},
-                                  {"compare": ["canary_baked_min", "ge", 1, "real"]}]},
-        "abort-autonomous": {"all": [{"observed": ["running", "yes", "real"]}]},   # taking a canary out is always safe
-        "abort-reviewed": {"all": [{"observed": ["requested", "yes", "real", "human"]}]},
-    },
+    "conditions": {},
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.
     "targets": [
         {"id": "inventory", "kind": "coverage", "resource": "repo:inventory:all", "property": "coverage",
          "expect": "complete", "min_level": "real", "fresh_ms": DAY, "due_ms": DAY, "owner": "@owner",
          "sources": ["@inventory_source"], "repair": "inventory-refresh"},
-        {"id": "soa", "kind": "coverage", "resource": "org:controls:soa", "property": "coverage",
-         "expect": "complete", "min_level": "real", "fresh_ms": 365 * DAY, "due_ms": 30 * DAY, "owner": "@owner",
-         "sources": ["@compliance_officer"], "human": True},
         {"id": "run-sources", "kind": "coverage", "resource": "run:sources:all", "property": "coverage",
          "expect": "complete", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": 60 * MINUTE,
          "owner": "@owner", "sources": ["@scanner"], "human": True},
@@ -254,8 +219,6 @@ FLOORS = {
          "owner": "@owner", "sources": ["@scanner"], "repair": "deploy"},
         *(_target(*t, "inventory", "@scanner", repair="remediate") for t in TECHNICAL),
         *(_target(*t, "inventory", "@scanner", human=True) for t in SETTINGS),
-        *(_target(i, r, "attested", "current", f, 30, "soa", "@compliance_officer", human=True)
-          for i, r, f in ORGANISATIONAL),
     ],
     "obligations": [],
     # D34: what the product must do, as a request whose contract is a file of acceptance tests a person signs.
@@ -276,3 +239,32 @@ FLOORS = {
 }
 
 RELEASE = Release(FLOORS, ROLES)
+
+# The rules a new installation starts with: the ceremony writes them, the human changes them in the interface. Each
+# key here is a choice inside the socle; the kernel refuses a rule looser than the floors above.
+RECOMMENDED = {
+    "routes": {"restart": []},                  # restarting stays the human's call until the rules say otherwise
+    "settings": {
+        # production, read by the kernel through the routes (the floors' values are the loosest allowed)
+        "rollback_horizon_min": 30, "restarts_per_hour": 2, "canary_max_error_delta": "0.5",
+        "canary_min_requests": 100, "canary_bake_min": 10,
+        # what the scanner measures and the console shows
+        "objective": "99.9", "p99_ms": 1000, "window_s": 300, "late_periods": 2, "burn_slow": "6",
+        "deploy_days": "mon,tue,wed,thu,fri,sat,sun", "deploy_hours": "00-24", "deploy_tz": "UTC",
+        "canary_percent": 10, "base_url": "",
+        "components": {}, "slos": {}, "probes": {}, "silences": {},
+    },
+}
+
+
+def rules(bindings: dict, **changes) -> dict:
+    """A client's rules for this release: the recommended ones, the role bindings, and the given sections."""
+    import copy
+    out = {"format": "standard-client/1", "floors": RELEASE.digest, "bindings": dict(bindings),
+           **copy.deepcopy(RECOMMENDED)}
+    for section, value in changes.items():
+        if section == "settings":
+            out["settings"] = {**out["settings"], **copy.deepcopy(value)}
+        else:
+            out[section] = copy.deepcopy(value)
+    return out

@@ -91,11 +91,11 @@ class Accountability:
 
     @staticmethod
     def _resolve_violation(a, ks, record) -> None:
-        """A violation is an obligation already due; a human of the root closes it by signing that it was handled
-        (`resolved = yes` on law:violation/<declaration>/<entry>). The count of violations stays: closing is not
+        """A violation is an obligation already due; a human of the root closes it by deciding it was handled
+        (`decision = approve` on law:violation/<declaration>/<entry>). The count of violations stays: closing is not
         forgetting, and no machine identity can close one."""
         b = record["body"]
-        if (record["kind"] != "observation" or b["property"] != "resolved" or b["status"] != "yes"
+        if (record["kind"] != "observation" or b["property"] != "decision" or b["status"] != "approve"
                 or not b["resource"].startswith("law:violation/")
                 or ks["root"]["identities"].get(b["author"], {}).get("kind") != "human"):
             return

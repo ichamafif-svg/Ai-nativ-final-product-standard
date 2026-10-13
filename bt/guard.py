@@ -57,14 +57,14 @@ class Guard:
         body = {"id": f"{kind}-{uuid.uuid4().hex}", "at": self._at(state), "author": self.signer.identity, **fields}
         return entry(state, kind, body, [self.signer])
 
-    def issue(self, intent_id: str, cosigners=()) -> str:
+    def issue(self, intent_id: str) -> str:
         def build(state):
             it = state["intents"].get(intent_id)
             if it is None:
                 raise Refused("OBL.NOT_OPEN", "the intent is not in this journal")
             body = {"id": f"token-{uuid.uuid4().hex}", "at": self._at(state), "author": self.signer.identity,
                     "intent": intent_id, "args_digest": digest(it["args"])}
-            return entry(state, "token", body, [self.signer, *cosigners])
+            return entry(state, "token", body, [self.signer])
         return self.journal.transact(build)[1]["body"]["id"]
 
     def redeem(self, token_id: str) -> str:

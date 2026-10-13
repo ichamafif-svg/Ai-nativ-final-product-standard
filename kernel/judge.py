@@ -8,7 +8,8 @@ Admission of an entry, in this order:
     HIST   it extends the head; its time runs forward and stays within reach of the last witnessed time
     PROV   every signature verifies against the root in force; the subject names this ledger; the author signed
     TYPE   the body is exactly of its declared shape
-    CAP    one gate per polarity (F0-5), then the capability chain for what acts, attests or attenuates
+    CAP    one gate per polarity (F0-5), then the capability chain for what acts, attests or attenuates, and for an
+           effect one route of its op (F0-12)
     OBL    the effect line and the law's refuse-level obligations
     NIV    a level is claimed only by a chain allowed to certify it
 Every refusal is MECHANISM.REASON with one of the six mechanisms. Nothing is admitted by default.
@@ -43,8 +44,6 @@ SHAPES = {
     "delegate": {"parent": "id", **_SCOPE},
     "revoke": {"grant": "id"},
     "freeze": {"scope": "pattern"},
-    "flag": {"intent": "id"},
-    "heartbeat": {"seen": "int"},
     "invalidate": {"evidence": "id"},
     "checkpoint": {"size": "int", "head": "digest"},
     "intent": {"under": "id", "op": "id", "args": "map", "retry_of": "id?"},
@@ -75,8 +74,8 @@ def no(code: str, detail: str = ""):
 def empty() -> dict:
     return {"size": 0, "head": None, "domain": None, "last_at": 0, "anchor_at": 0, "witnessed": False,
             "root": None, "root_digest": None, "code": None, "law": None,
-            "statements": {}, "proposals": {}, "grants": {}, "revoked": {}, "frozen": {}, "flags": {},
-            "heartbeats": {}, "obligations": {}, "closed": {}, "intents": {}, "tokens": {}, "token_of": {},
+            "statements": {}, "proposals": {}, "grants": {}, "revoked": {}, "frozen": {},
+            "obligations": {}, "closed": {}, "intents": {}, "tokens": {}, "token_of": {},
             "reserved": {}, "executed": {}, "uses": {}, "line": {}, "observations": {}, "entities": {},
             "invalidated": {}}
 
@@ -301,6 +300,12 @@ class Kernel:
             no("CAP.WITNESS", "the root lacks enough witnesses for the law's time quorum")
 
     def _propose(self, c: _Ctx, d: list, kind: str, extra=None) -> None:
+        """A widening takes effect with its own entry, unless the law declares a delay for its kind (F0-5)."""
+        if not c.law.delay[kind]:
+            if c.body.get("override"):
+                no("TYPE.SHAPE", "an override overrides a veto, and nothing waits to be vetoed")
+            self._enact(c, d, kind, c.body)
+            return
         factor = 2 if c.body.get("override") else 1
         d.append(("put", "proposals", c.body["id"], {
             "id": c.body["id"], "kind": kind, "body": c.body, "signers": sorted(c.signers & humans(c.s["root"])),
@@ -344,20 +349,23 @@ class Kernel:
             no("CAP.STALE", "the proposal was approved under another root or law: propose again")
         if c.s["anchor_at"] < p["not_before"]:
             no("CAP.DELAY", f"the proposal activates at {p['not_before']} of witnessed time")
-        pb = p["body"]
-        if p["kind"] == "law":
+        if p["kind"] == "unfreeze" and c.s["frozen"].get(p["body"]["scope"]) != p["freeze"]:
+            no("CAP.STALE", "the scope was frozen again since: propose again")
+        self._enact(c, d, p["kind"], p["body"])
+        d.append(("drop", "proposals", p["id"]))
+
+    def _enact(self, c: _Ctx, d: list, kind: str, pb: dict) -> None:
+        """What a widening changes, at once or on activation."""
+        if kind == "law":
             d.append(("set", "law", {"digest": self.load(pb["client"]).digest, "client": pb["client"]}))
-        elif p["kind"] == "rotate":
+        elif kind == "rotate":
             d += [("set", "root", pb["root"]), ("set", "root_digest", digest(pb["root"]))]
-        elif p["kind"] == "grant":
+        elif kind == "grant":
             if pb["not_after"] < c.at:
                 no("CAP.EXPIRED", "the proposed grant has already ended")
             d.append(("put", "grants", pb["id"], self._grant_record(c.law, pb, "root", c.at)))
         else:
-            if c.s["frozen"].get(pb["scope"]) != p["freeze"]:
-                no("CAP.STALE", "the scope was frozen again since: propose again")
             d.append(("drop", "frozen", pb["scope"]))
-        d.append(("drop", "proposals", p["id"]))
 
     # ---- attenuate --------------------------------------------------------------------------------------------------
     def _scope(self, c: _Ctx) -> None:
@@ -424,18 +432,8 @@ class Kernel:
         d.append(("put", "revoked", gid, c.at))
 
     def _freeze(self, c: _Ctx, d: list) -> None:
+        """A human's "no": nothing acts on the scope until a widening lifts it."""
         d.append(("put", "frozen", c.body["scope"], c.body["id"]))
-
-    def _flag(self, c: _Ctx, d: list) -> None:
-        if c.body["intent"] not in c.s["intents"]:
-            no("CAP.FLAG", "a flag names an intent")
-        d.append(("put", "flags", c.body["intent"], c.body["id"]))
-
-    def _heartbeat(self, c: _Ctx, d: list) -> None:
-        """A sentinel's signal only restores the law's default; its silence tightens."""
-        if c.body["seen"] > c.s["size"]:
-            no("CAP.HEARTBEAT", "a heartbeat is about what exists")
-        d.append(("put", "heartbeats", c.body["author"], c.at))
 
     def _invalidate(self, c: _Ctx, d: list) -> None:
         found = [o for o in c.s["observations"].values() if o["id"] == c.body["evidence"]]
@@ -484,6 +482,15 @@ class Kernel:
                     if not self._evaluate(c.law.conditions[x], facts):
                         no("CAP.CONDITION", f"a condition of {g['id']} does not hold")
         return chain, sorted(label)
+
+    def _route(self, c: _Ctx, op: str, resource: str, stmt: dict, label) -> str:
+        """F0-12: the effect proceeds only while one route of its op holds, the first by name."""
+        routes = c.law.ops[op]["routes"]
+        facts = self._facts(c, resource, stmt, set(label), tuple(a for r in routes.values() for a in r))
+        for name in sorted(routes):
+            if self._evaluate(routes[name], facts):
+                return name
+        no("CAP.ROUTE", f"no route of {op} holds on {resource}: {', '.join(sorted(routes))}")
 
     @staticmethod
     def _evaluate(atoms, facts) -> bool:
@@ -589,6 +596,7 @@ class Kernel:
             no("TYPE.ARGS", "the arguments do not yield an exact resource")
         stmt = {**b, "resource": resource}
         _, label = self._authorize(c, b["author"], b["under"], "effect:" + b["op"], resource, stmt)
+        self._route(c, b["op"], resource, stmt, label)
         self._unfrozen(c, resource)
         prior = b.get("retry_of")
         if prior is not None:
@@ -599,7 +607,7 @@ class Kernel:
                 no("OBL.BLOCKED", "the earlier intent is unresolved: reconcile it first")
         d.append(("put", "intents", b["id"], {
             "id": b["id"], "op": b["op"], "resource": resource, "args": b["args"], "author": b["author"],
-            "under": b["under"], "label": label, "stmt": stmt, "contract": digest(op)}))
+            "under": b["under"], "label": label, "stmt": stmt, "contract": op["contract"]}))
         self._line(c, d, "intent", None, b["id"])
         self._open(c, d, f"pending:{b['id']}", "pending", b["id"], b["author"])
 
@@ -611,25 +619,13 @@ class Kernel:
         return any(n in s["obligations"] and not lapsed(s["obligations"][n], at) for n in names)
 
     def _reauthorize(self, c: _Ctx, it: dict) -> list:
-        if it["contract"] != digest(c.law.ops.get(it["op"])):
+        """Every stage of the line judges again: the capability, the route (its facts still fresh) and no freeze."""
+        if it["op"] not in c.law.ops or it["contract"] != c.law.ops[it["op"]]["contract"]:
             no("CAP.STALE", "the operation contract changed: a new intent is required")
-        chain, _ = self._authorize(c, it["author"], it["under"], "effect:" + it["op"], it["resource"], it["stmt"])
+        chain, label = self._authorize(c, it["author"], it["under"], "effect:" + it["op"], it["resource"], it["stmt"])
+        self._route(c, it["op"], it["resource"], it["stmt"], label)
         self._unfrozen(c, it["resource"])
         return chain
-
-    def _profile(self, c: _Ctx, it: dict, approvers, root_digest: str) -> None:
-        approved = set(approvers) & humans(c.s["root"]) if root_digest == c.s["root_digest"] else set()
-        if c.law.ops[it["op"]]["profile"] == "human_quorum" and len(approved) < c.s["root"]["threshold"]:
-            no("CAP.PROFILE", "this operation needs a human quorum of the current root")
-        if (self._prudent(c) or it["id"] in c.s["flags"]) and not approved:
-            no("CAP.PRUDENT", "a human of the current root must co-sign this effect")
-
-    @staticmethod
-    def _prudent(c: _Ctx) -> bool:
-        if not c.law.heartbeat_ms:
-            return False
-        sentinels = [i for i, x in c.s["root"]["identities"].items() if x["kind"] == "sentinel"]
-        return any(c.at - c.s["heartbeats"].get(i, -10 ** 15) > c.law.heartbeat_ms for i in sentinels)
 
     def _token(self, c: _Ctx, d: list) -> None:
         b = c.body
@@ -643,11 +639,8 @@ class Kernel:
         chain = self._reauthorize(c, it)
         if b["args_digest"] != digest(it["args"]):
             no("OBL.MISMATCH", "the token binds other arguments than the intent")
-        self._profile(c, it, c.signers, c.s["root_digest"])
         self._spend(c, chain, d)
-        d += [("put", "tokens", b["id"], {"intent": b["intent"], "guard": b["author"],
-                                         "humans": sorted(c.signers & humans(c.s["root"])),
-                                         "root_digest": c.s["root_digest"]}),
+        d += [("put", "tokens", b["id"], {"intent": b["intent"], "guard": b["author"]}),
               ("put", "token_of", b["intent"], b["id"])]
         self._open(c, d, f"unredeemed:{b['id']}", "unredeemed", b["intent"], b["author"])
 
@@ -660,7 +653,6 @@ class Kernel:
         self._consume(c, d, f"unredeemed:{b['token']}")
         self._line(c, d, "reservation", None, tok["intent"])
         self._reauthorize(c, it)
-        self._profile(c, it, tok["humans"], tok["root_digest"])
         d.append(("put", "reserved", b["token"], b["id"]))
         self._open(c, d, f"reconcile:{tok['intent']}", "reconcile", tok["intent"], b["author"])
 
@@ -679,7 +671,6 @@ class Kernel:
         it = s["intents"][tok["intent"]]
         c = _Ctx(s, law, "dispatch", {"at": now, "author": guard, "id": token_id}, set(), s["root"])
         self._reauthorize(c, it)
-        self._profile(c, it, tok["humans"], tok["root_digest"])
         return copy.deepcopy(it)
 
     def _execution(self, c: _Ctx, d: list) -> None:
