@@ -238,8 +238,8 @@ class HealthFold(unittest.TestCase):
             def __init__(self, L):
                 self.kernel, self.L = L.kernel, L
 
-            def entries(self):
-                return list(self.L.entries)
+            def entries(self, start=0):
+                return list(self.L.entries[start:])
         L = Ledger()
         for _ in range(40):
             L.checkpoint()
@@ -330,6 +330,47 @@ class Instruments(unittest.TestCase):
         base = self.export(repository({"a.py": key}))
         head = self.export(repository({"a.py": b"# moved\n" + key}))
         self.assertEqual(probes.regressions(base, head, {"secrets": {"expect": "none"}}, {})[0], "none")
+
+
+class WriteCost(unittest.TestCase):
+    """Review, medium 14: every read and write deep-copied every statement (10 ms -> 55 ms per write at 4,000)."""
+
+    def test_a_snapshot_shares_immutable_records_and_stays_detached(self):
+        from bt.journal import detached
+        L = Ledger()
+        for _ in range(5):
+            L.checkpoint()
+        view = detached(L.state)
+        some = next(iter(L.state["statements"]))
+        self.assertIs(view["statements"][some], L.state["statements"][some])      # shared, not copied
+        view["statements"]["x"] = {}
+        view["frozen"]["y:*"] = "z"
+        self.assertNotIn("x", L.state["statements"])
+        self.assertNotIn("y:*", L.state["frozen"])
+        L.checkpoint()
+        self.assertNotEqual(view["size"], L.state["size"])                         # later admissions do not leak
+
+
+class WitnessConfiguration(unittest.TestCase):
+    """§20.1: the operator only accepted the local demo clock; production now configures witnesses."""
+
+    def test_witnesses_are_configured_over_https_and_local_time_is_demo_only(self):
+        import base64
+        import types
+        from bt.clock import WitnessClock
+        from standard.runtime.daemon import Installation
+        fake = types.SimpleNamespace(demo=False, config={"ledger": {"genesis": "g"}}, path=Path("/tmp/standard.toml"))
+        key = base64.b64encode(b"k" * 32).decode()
+        with self.assertRaises(ValueError):
+            Installation._clock(fake, {"kind": "local"})
+        with self.assertRaises(ValueError):
+            Installation._clock(fake, {"kind": "witnesses", "witnesses": {"w1": {"public": key, "url": "http://a"},
+                                                                          "w2": {"public": key, "url": "http://b"}}})
+        clock = Installation._clock(fake, {"kind": "witnesses", "tolerance_ms": 20,
+                                           "witnesses": {"w1": {"public": key, "url": "https://a"},
+                                                         "w2": {"public": key, "url": "https://b"}}})
+        self.assertIsInstance(clock, WitnessClock)
+        self.assertEqual(clock.tolerance, 20)
 
 
 if __name__ == "__main__":

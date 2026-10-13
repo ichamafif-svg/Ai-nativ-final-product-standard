@@ -91,7 +91,7 @@ install_lab() {
   git_source archive "$commit" | tar -x -C "$CODE"
   printf '%s\n' "$commit" > "$CODE/LAB_COMMIT"
   python3 -m venv "$CODE/venv"
-  "$PY" -m pip install -q -r "$CODE/requirements.txt"
+  "$PY" -m pip install -q --require-hashes -r "$CODE/requirements.hashes"   # the reviewed closure, nothing newer
   chown -R root:root "$CODE"
   chmod -R a+rX,go-w "$CODE"
 

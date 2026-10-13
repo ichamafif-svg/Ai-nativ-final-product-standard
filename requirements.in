@@ -1,0 +1,10 @@
+# Direct dependencies of Standard (intent). The installed closure is requirements.txt (exact pins, what
+# Standard's own floors measure) and requirements.hashes (the same closure with hashes, what installations use).
+# Regenerate both with: make lock
+cryptography>=42
+packaging>=23
+pytest>=8
+# instruments (T06) and the agent's own checks (U)
+bandit>=1.7
+ruff>=0.5
+mypy>=1.10

@@ -362,7 +362,8 @@ La forme retenue prend C **avec un seul moteur** : les contraintes portent sur l
 - **Désaccord** : arrêt persistant de la frontière touchée. L'arrêt est local et n'est pas une mutation non signée du journal (F0-2).
 - **Matrice de couverture** : pour chaque règle critique, elle distingue calcul indépendant, dépendance commune et règle à juge unique (profil prudent, flags, expirations, destination physique inclus). La tolérance à une faute est promise **uniquement** dans cette matrice. Aucun « un bug seul ne suffit pas » universel n'est revendiqué.
 - **Dépendances communes déclarées** : spécification, parsing canonique, cryptographie, runtime, état réduit, stockage, OS.
-- **Différentiel** : un test aléatoire vérifie en continu que les deux juges ne divergent jamais sur les entrées admises [V6-causes-4].
+- **Différentiel** : `tests/test_differential.py` rejoue des historiques aléatoires (graine fixe, 12 en `make check`, 200 en CI) à travers les deux juges : toute entrée admise par le noyau doit passer le second juge inchangée, et chaque delta altéré après admission (opération retirée, valeur changée, écriture ajoutée) doit être refusé [V6-causes-4, D47]. C'est une campagne bornée, pas une preuve d'équivalence.
+- **Composition recontrôlée** : le second juge vérifie lui-même que la loi effective contient chaque floor de la release, lié aux identités du client et seulement durci (G03 sur deux juges, D47). Il restate aussi `HIST.AHEAD`, `retry_of` et les `when` des obligations de niveau `refuse`.
 - **Isolation physique** : K/T tournent dans un processus opérateur distinct de U, avec comptes OS distincts. Le démarrage vérifie le manifeste de code **avant import et avant tout accès aux secrets** ; le bytecode est ignoré [R04].
 
 ### 6.5 Langage d'implémentation
@@ -640,7 +641,7 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 | T | Où | Ce qui est tenu |
 |---|---|---|
 | T04, T05 | `bt/journal.py`, `bt/checker.py` | Journal SQLite append-only, pins sur un autre volume ; second juge qui reformule chaque admission |
-| T06 | `bt/isolation.py`, `bt/host.py` | Les programmes épinglés tournent sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire. **Frontière incomplète :** les suites et l'installation des dépendances candidates ne sont pas confinées côté système de fichiers ; l'hôte refuse donc les jobs candidats avant leur exécution et la sonde T06 échoue. Le précontrôle U possède un jail distinct, qui ne répare pas T06. |
+| T06 | `bt/isolation.py`, `bt/host.py` | Les programmes épinglés tournent sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire. **Échec fermé (D46) :** sans `runner_user`, aucun code candidat ne tourne ; seule une démo peut l'accepter explicitement (`[tests] unconfined = true`, refusé hors `demo`), et `qualify.py` le signale. **Frontière incomplète :** les suites et l'installation des dépendances candidates ne sont pas confinées côté système de fichiers ; l'hôte refuse donc les jobs candidats avant leur exécution et la sonde T06 échoue. Le précontrôle U possède un jail distinct, qui ne répare pas T06. |
 | T06, T07, T08 | `bt/transactions.py`, `host.py`, `register.py`, `adapters.py`,  `guard.py` ; `instruments/` et `tools/replay.py` hors T | Toute entrée et toute sortie sont des **transactions de frontière** (§10.1) |
 | T09 | `bt/delivery.py` | Outbox et livraison ; **non branchée** sur e-mail ni messagerie (les alertes ne sont que dans l'interface) |
 
@@ -800,7 +801,7 @@ Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes
 | **Contributions** | Construction | La boîte de dépôt et les faits mesurés (tests, régressions, revue), avec la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`) |
 | **Revues, Preuves, Réglages** | Commun | File des transitions à signer avec dossier et différences ; preuves et loi en vigueur ; import de la clé de la personne |
 
-Ce que l'interface ne fait pas : elle ne détient aucune clé et ne décide rien. Elle lit par la passerelle (la vue, qui publie aussi les faits sur les transitions exactes) et ce qui est publié pour les personnes (constats, notes de l'agent, dépôts en lecture), et transmet au noyau les enveloppes signées. **La signature se fait dans le navigateur** : la clé est importée dans WebCrypto, non exportable, gardée dans IndexedDB ; le navigateur construit lui-même l'énoncé canonique, le PAE et l'enveloppe à partir du corps qu'il affiche (`standard/surface/static/sign.js`, identique octet pour octet à `bt/signing.py`, vérifié par un test). Un serveur web compromis peut mentir sur ce qu'il affiche, pas faire signer autre chose que ce que le navigateur montre. En production, une passkey : le noyau vérifie déjà les assertions WebAuthn ES256, il reste à les enrôler par une rotation de racine. **Limite :** la lecture n'est pas authentifiée ; l'interface écoute localhost et compte sur le tunnel ou le proxy devant elle.
+Ce que l'interface ne fait pas : elle ne détient aucune clé et ne décide rien. Elle lit par la passerelle (la vue, qui publie aussi les faits sur les transitions exactes) et ce qui est publié pour les personnes (constats, notes de l'agent, dépôts en lecture), et transmet au noyau les enveloppes signées. **La signature se fait dans le navigateur** : la clé est importée dans WebCrypto, non exportable, gardée dans IndexedDB ; le navigateur construit lui-même l'énoncé canonique, le PAE et l'enveloppe à partir du corps qu'il affiche (`standard/surface/static/sign.js`, identique octet pour octet à `bt/signing.py`, vérifié par un test). **Correction (revue d'octobre 2026) :** l'affirmation antérieure selon laquelle un serveur web compromis ne pouvait pas faire signer autre chose que ce que le navigateur montre est fausse. Le serveur sert lui-même `sign.js` et `app.js` : compromis, il peut servir un script qui signe n'importe quel corps avec la clé non exportable, ou capter le fichier de clé au moment de l'import. La clé non exportable empêche seulement sa copie. Tant que les scripts de signature ne viennent pas d'une origine distincte et épinglée (ou d'un authentificateur qui affiche ce qu'il signe), `standard-web` est dans la confiance des personnes qui y signent. Les requêtes adressées à un autre nom d'hôte que `localhost` (ou un nom déclaré par `--allow-host`) sont refusées, ce qui ferme la lecture et l'écriture par DNS rebinding. En production, une passkey : le noyau vérifie déjà les assertions WebAuthn ES256, il reste à les enrôler par une rotation de racine. **Limite :** la lecture n'est pas authentifiée ; l'interface écoute localhost et compte sur le tunnel ou le proxy devant elle.
 
 ## 12. Floors de la release
 
@@ -833,12 +834,14 @@ Les floors portent la direction (autonomie, sécurité, conformité) dans le **m
 
 | Opération | Ressource | Condition |
 |---|---|---|
-| `remediate` | `repo:{area}:{item}/{base}/{head}` | `tests = green` et (`reproduced = yes` **ou** `review = approved`) |
+| `remediate` | `repo:{area}:{item}/{base}/{head}` | `tests = green` et (`reproduced = yes` **ou** (`regressions = none` et `review = approved` signé par un humain)) |
 | `integrate` | `repo:contrib:{contributeur}/{base}/{head}` | `tests = green`, `regressions = none`, `review = approved` |
 | `implement` (D34) | `repo:feature:{request}/{base}/{head}` | `acceptance = green`, `tests = green`, `regressions = none`, `review = approved` |
 | `configure` (D35) | `repo:config:rules/{base}/{head}` | `configured = yes` (le commit contient exactement les règles signées par un ingénieur), `tests = green`, `regressions = none` |
 
 **Demandes (D34).** Ressource typée `request` (`build:request/<rid>`, champs `title`, `spec`, `contract` en digests) : `proposed → contracted` exige `contract = red` (les tests d'acceptation échouent sur main : la demande demande du nouveau), `contracted → delivered` exige `accepted = yes` (main passe le contrat), `withdraw` depuis les deux premiers états. Enregistrer et contracter : le rôle produit (`register:request`, `transition:request:contract`).
+
+**Décisions humaines (D46).** `review`, `approved` et `requested` ne comptent que signés par une identité de genre `human` de la racine en vigueur (atome `observed` à quatre arguments). Un instrument, l'oracle ou toute identité machine qui détient `observe` sur la ressource ne remplace pas une personne. Le langage reste positif : un `changes_requested` n'annule pas l'`approved` d'un autre humain ; un refus se dit par un `flag`, un gel ou une révocation.
 
 **Production (D30–D36)** — cibles observées par `@scanner`, fraîcheur 15 min :
 
@@ -1114,6 +1117,30 @@ Chaque constat est **fermé par une règle** de ce document et doit avoir un tes
 |---|---|---|
 | HK-1 | La passerelle coupait la connexion quand la réponse n'était pas sérialisable (`GATEWAY.RESPONSE`), et `make check` échouait alors que le registre affichait PASS | §11.6 ; un registre de validation est régénéré à chaque commit, jamais recopié |
 
+### 17.6 Revue de code d'octobre 2026
+
+Chaque constat a un falsificateur dans `tests/test_review.py` (ou le fichier cité).
+
+| # | Constat | Règle |
+|---|---|---|
+| RV-1 | Sans `runner_user`, le code candidat tournait sous l'opérateur, avec ses clés | Échec fermé ; `unconfined` explicite et démo seulement (D46) |
+| RV-2 | Une identité machine signait `review = approved` et ouvrait la route revue | Auteur humain exigé dans la loi (D46) |
+| RV-3 | La recette `vulns` prenait le plus petit correctif de toutes les branches : rétrogradation autonome | En avant, même version majeure, sinon pas de recette |
+| RV-4 | Jeton d'écriture GitHub dans argv, lisible dans `/proc` | Passé par l'environnement |
+| RV-5 | Lecture et écriture de l'interface par DNS rebinding ; signature navigateur surévaluée | Contrôle de `Host` ; §11.9 corrigé |
+| RV-6 | Base64 non canonique et ECDSA high-S : deux enveloppes, deux têtes pour un énoncé | Encodages canoniques, DER strict, s bas (D47) |
+| RV-7 | Composition de la loi, `HIST.AHEAD`, `retry_of`, `when` sur un seul juge ; différentiel annoncé absent | Recalculés par le second juge ; différentiel aléatoire (D47) |
+| RV-8 | Une mesure plus ancienne remplaçait une plus récente | Refus `PROV.STALE` |
+| RV-9 | Une violation de niveau `escalate` restait ESCALATED pour toujours | Close par un humain (`resolved`), jamais par une machine |
+| RV-10 | Non-régression par compte de constats, aveugle quand la base était non couverte, absente de `remediate-reviewed` | Comparaison de mesures ; exigée en revue (D48) |
+| RV-11 | Registres non durables ; clé enregistrée lue `ok` sans mouvement | fsync ; achèvement sous verrou ou `unknown` (D48) |
+| RV-12 | Pli de redevabilité muté par deux threads | Verrou ; pli à moitié appliqué jamais réutilisé |
+| RV-13 | Le rejeu comparait l'enregistrement à lui-même, pas au statut signé | Le fait du journal doit figurer dans l'enregistrement |
+| RV-14 | Écriture O(n) : 10 → 55 ms par entrée à 4 000 | Copies détachées sans copie profonde des énoncés (D49) |
+| RV-15 | Témoins à la milliseconde près ; monotonie perdue au redémarrage ; démarrage sans témoins | Écart borné, valeur prudente, état persisté, configuration `[clock]` (D50) |
+| RV-16 | Dépendances de la TCB non épinglées, hors empreinte | Clôture épinglée par hash, dans l'empreinte d'installation (D49) |
+| RV-17 | `git archive` appliquait les `.gitattributes` du sujet (export-ignore) aux instruments | Export des blobs depuis la base d'objets (D48) |
+
 ---
 
 ## 18. Décisions
@@ -1168,6 +1195,12 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | D44 | **Frontières U et release.** Python 3.11+ permet `tomllib` sans shim local. Chaque source Python de l'assemblage privilégié fait varier le digest ; les programmes de mesure restent épinglés séparément par `PROGRAMS`. Le précontrôle refuse l'exécution si son jail réseau/fichiers est indisponible ; les dépendances exactes sont téléchargées comme roues, puis installées et démarrées dans le jail. Une nouvelle genèse est requise pour une nouvelle release ; aucun journal ancien n'est réinterprété. Limite : l'isolation physique doit être qualifiée sur Linux et l'empreinte calculée après import ne prouve pas le code effectivement chargé. |
 | D45 | **Portée conformité et progrès non souverains.** Les portées ISO/DORA/NIS2 sont des déclarations `coarse` épinglées dans les floors, hors loi effective ; leur lecture ne peut pas produire `satisfied` ni certifier un contrôle. OWASP reste sans mapping. Le Work Engine conserve les issues et raisons des tentatives ; PF ne compte que l'abandon d'une réparation encore ouverte avec route disponible. Ces lectures n'ouvrent aucun droit. |
 
+| D46 | **Personnes et code candidat, fermés par défaut.** (1) Une décision gardée pour les personnes (`review`, `approved`, `requested`) ne compte que signée par un humain de la racine en vigueur : l'atome `observed` accepte un quatrième argument, le genre de l'auteur du fait, tiré de la liste fermée de FLOOR-0 ; noyau et second juge le calculent chacun. (2) Sans exécutant isolé, aucun code candidat ne tourne ; une démo peut l'accepter explicitement (`[tests] unconfined`), jamais une installation de production | Falsificateurs : un `review = approved` signé par le scanner ouvrait `remediate-reviewed` ; une installation sans `runner_user` exécutait une contribution sous l'opérateur. Impact confiance : la loi exprime enfin la promesse D16 ; T06 échoue fermé. Nouvelle genèse requise (floors et noyau changent) |
+| D47 | **Second juge plus indépendant, une seule enveloppe par énoncé.** Le second juge reçoit les floors de la release et vérifie la contenance de chaque loi effective ; il restate `HIST.AHEAD`, `retry_of`, `when`. Base64 canonique, DER strict et s bas pour ECDSA. Une mesure plus ancienne ne remplace jamais une plus récente. Une violation `escalate` se ferme par un humain. Différentiel aléatoire en CI | Falsificateurs : loi effective affaiblie acceptée par le second juge ; même énoncé, deux têtes ; lecture ancienne gagnante. Limite : le différentiel est une campagne bornée, pas une équivalence prouvée |
+| D48 | **Instruments que le sujet ne pilote pas, effets durables.** Exports par objets (pas `git archive`), non-régression par comparaison de mesures, `regressions` exigé en revue, liens symboliques déclarés, verrou exempt de dépendance mesuré, registres fsync, rejeu comparé au journal | Falsificateurs : `export-ignore` cachait un fichier ; un constat échangé contre un autre passait ; un crash entre historique et registre laissait un `ok` sans mouvement |
+| D49 | **Clôture de release et coût constant.** Les dépendances sont épinglées par hash (`requirements.hashes`) et entrent dans l'empreinte d'installation ; installations et CI installent avec `--require-hashes`. Les lectures et écritures du journal ne copient plus profondément les énoncés : 6 à 8 ms par écriture de 0 à 20 000 entrées mesurés, au lieu de 10 → 55 ms à 4 000 | Limite : la clôture est calculée pour Linux x86_64 et Python 3.11+ ; une autre plateforme régénère le verrou (`make lock`) et le relit |
+| D50 | **Témoins configurables.** `[clock] kind = "witnesses"` assemble `WitnessClock` (HTTPS, quorum, `tolerance_ms` borné à 5 s, état persisté). La lecture retourne la cotation la plus tardive : prudente pour toutes ses utilisations (fenêtre de départ, expirations, horizon), les délais d'élargissement restant sur les checkpoints témoignés | Limite : l'indépendance réelle des témoins reste une propriété à qualifier |
+
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
 
@@ -1201,7 +1234,8 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 |---|---|---|
 | `[run]` | `metrics` (URLs Prometheus), `slo`, `base_url`, `interval`, `store` | Sources de la production ; objectif par défaut ; stockage de télémétrie de l'interface |
 | `[deploy]` | `root`, `runner_metrics`, `restart` | Répertoire des releases que seule la garde bascule ; métriques du lanceur pour l'analyse canary ; commande de redémarrage. Sans `[deploy]`, Standard n'agit pas en production |
-| `[tests]` | `install`, `runner_user` | Installer les dépendances de test (wheels seulement) ; utilisateur isolé qui exécute le code des contributions |
+| `[tests]` | `install`, `runner_user`, `unconfined` | Installer les dépendances de test (wheels seulement) ; utilisateur isolé qui exécute le code des contributions ; sans `runner_user`, aucun code candidat ne tourne, sauf `unconfined = true` en démo (D46) |
+| `[clock]` | `kind`, `quorum`, `tolerance_ms`, `state`, `[clock.witnesses.<nom>] public, url` | `local` en démo seulement ; `witnesses` en production : cotations signées sur HTTPS, écart borné, état persisté (D50) |
 | `[build]` | `store` | Magasin des demandes et contrats, par digest (défaut `requests/`) |
 | `[hosting]` | `config`, `gate_user` | Hébergement des dépôts clients, vérifié par `qualify.py` |
 | `[llm.small]`, `[llm.frontier]` | `kind`, `model`, `key_file` | Porte LLM de l'agent |
@@ -1285,14 +1319,14 @@ Tout le code hors démonstration appartient à Standard. Aucun produit métier c
 | Plafonds exactement atteints imposant un relèvement pour une modification ordinaire | Plafonds retirés ; contrôles de couches et de provenance conservés |
 | Deux jugements avec code similaire | Conservés séparément : leur duplication est un contrôle indépendant, pas un fichier inutile |
 | Redevabilité située dans K mais hors admission | Conservée, pure et rejouable ; elle n'autorise aucune action et n'est pas déplacée dans l'agent |
-| Démarrage réel non configuré pour les témoins (`standard/runtime/daemon.py`, `_clock`) | Ouvert : le port `WitnessClock` existe, mais le démarrage actuel accepte seulement l'horloge locale de démo |
+| Démarrage réel non configuré pour les témoins (`standard/runtime/daemon.py`, `_clock`) | Fait (D50) : `[clock] kind = "witnesses"` ; l'horloge locale reste réservée aux démos. Indépendance des témoins à qualifier |
 | Livraison T09 disponible mais non assemblée dans le runtime | Ouvert : aucun transport e-mail/messagerie ; la livraison n'est pas encore une BT |
 | Index JSONL des BT, écrit après les échanges, sans transaction commune avec le journal | Limite existante : enregistrement d'audit distinct, pas une atomicité durable de bout en bout ; liens `answers` non alimentés dans ces parcours |
 | Rejeu de mesure pouvant reproduire une erreur du programme ou des données de la source | Limite conservée : reproductibilité ≠ vérité ; une affirmation attestée/composite garde sa dépendance explicite |
-| `RegisterEffect.satisfied` tolère une version servie inconnue et l'interface lit encore le canary avec `readlink` | Standard à compléter : preuve de service à rendre stricte et lecture de registre à unifier ; aucune correction fonctionnelle incluse ici |
+| `RegisterEffect.satisfied` tolère une version servie inconnue | Standard à compléter : preuve de service à rendre stricte. L'interface lit désormais le registre `canary` comme un fichier |
 | Console de télémétrie collectant ses propres séries à côté des captures des instruments | Standard à compléter : deux collectes / projections, sans autorité supplémentaire accordée à la console |
 | Empreinte calculée après import ; vérification pré-import annoncée dans l'architecture | Ouvert : le calcul d'une empreinte ne démontre pas ce que le processus a chargé |
-| Exécution des suites T sous utilisateur distinct et réseau coupé, mais sans jail de fichiers ; dépendances candidates installées avec réseau | Ouvert bloquant T06 : la sonde de qualification échoue explicitement. Le jail du précontrôle U ne couvre pas ce chemin. |
+| Exécution des suites T sous utilisateur distinct et réseau coupé, mais sans jail de fichiers ; dépendances candidates installées avec réseau | Ouvert bloquant T06 : la sonde de qualification échoue explicitement. Le jail du précontrôle U ne couvre pas ce chemin. Sans `runner_user`, l'hôte refuse aussi (D46) : plus aucun repli sous l'opérateur |
 | Deux tests créant des commits temporaires sans identité Git dans un environnement vierge | La commande `make test` fournit une identité de test uniquement au processus de vérification ; assertions et runtime inchangés |
 | Ancien parseur TOML partiel et shim à la racine | Supprimés : Python 3.11+ et `tomllib` seul ; une chaîne valide contenant `#` reste entière |
 | BUILD/RUN web reconstruisant leurs listes depuis `view` et `findings` | `standard/surface/read_views.py` projette depuis un `ReadModel` commun ; le serveur garde lecture des fichiers, Git et HTTP. Les vues de télémétrie/production gardent leurs propres entrées, sans nouvelle autorité. |
@@ -1432,7 +1466,7 @@ Chacun rapporte le domaine observé, la propriété affirmée, l'instrument et l
 
 - **Composant** : types et version, invariant testable, erreur fail-closed, contre-exemple négatif, preuve de non-contournement, métrique de ressources, propriétaire, aucun raccourci `allow`.
 - **K** : un jugement complet ; loi, racines, autorité, preuve, obligation, effet gouvernés ; delta vérifiable ; aucune branche métier cachée ; différentiel contre la référence sans aucun `mismatch`.
-  - Références connues (exploratoires, à re-mesurer) : jugement + second contrôle ≈ 0,29 ms médiane ; écriture durable SQLite ≈ 1,5 ms médiane ; coût d'écriture constant sur un journal de plus de 2 000 entrées ; différentiel du prototype hybride : 4 994 admissions et 353 refus identiques, 0 divergence.
+  - Références connues (exploratoires, à re-mesurer) : jugement + second contrôle ≈ 0,29 ms médiane ; écriture durable SQLite ≈ 1,5 ms médiane ; coût d'écriture : 6 à 8 ms par entrée de 0 à 20 000 entrées depuis D49 (il croissait de 10 à 55 ms à 4 000 avant) ; différentiel du prototype hybride : 4 994 admissions et 353 refus identiques, 0 divergence.
 - **T** : chaque contrat déployé, indépendance et chemins physiques audités, aucun T simulé silencieusement ; reprise, révocation et effets concurrents testés.
 - **Standard** : BUILD/RUN fonctionnels, Work Engine non souverain, maintenance continue sur obligations, rapport de qualification fidèle aux preuves obtenues.
 
@@ -1475,9 +1509,9 @@ Les états ci-dessous consignent les jalons ciblés et démonstrations du labora
 | Production réduite à la mesure (D36) | Fait et testé (bout en bout, dont un retour arrière refusé par le noyau sur une consommation de 9,5) : budget production 1 205 → 791 lignes. Démontré en direct : canary promu après 10 min de cuisson, sans redémarrage |
 | Hôte générique (D37) | Fait, testé et démontré en direct : 2 039 lignes de T (3 149 avant), 1 278 lignes de programmes hors T ; mise en production par registres, lanceur qui exporte lui-même, mesures rejouées (`qualify` : PASS) ; un enregistrement falsifié est détecté. En direct, le rejeu des enregistrements a montré que l'analyse canary retirait des versions saines sur du bruit (1,5 point d'écart sur 300 requêtes, produit à 2 % d'erreurs) : la retenue de l'agent compare désormais l'écart à deux erreurs-types, changement fait dans un programme et dans U, sans toucher T |
 | Transactions de frontière (D38) | Fait et testé : un job de production qui dit `tests = green` est refusé par T et par le noyau ; une opération sans adaptateur du bon profil ne part pas ; un redémarrage demandé n'est jamais `not_applied` ; chaque observation, chaque effet et chaque relecture laisse une BT ; le rejeu suit les BT. Sonde `qualify` des privilèges : FAIL sur la démo (le produit est dans le groupe de la garde pour lire le dépôt), dit tel quel |
-| Tests | Contrats de régression des frontières, du contexte commun, des vues BUILD/RUN, des rapports de tests, de la CI main, de la recherche sans autorité et de la qualification liée à la genèse. Un test vert local n'établit aucune propriété physique sur un déploiement. |
+| Tests | Contrats de régression des frontières, du contexte commun, des vues BUILD/RUN, des rapports de tests, de la CI main, de la recherche sans autorité et de la qualification liée à la genèse ; falsificateurs de la revue (`tests/test_review.py`) et différentiel aléatoire des deux juges (`tests/test_differential.py`). Un test vert local n'établit aucune propriété physique sur un déploiement. |
 | Pas encore là | Exécution bout en bout démontrée avec un vrai modèle ; bindings loi-code précis validés durablement ; snapshot atomique journal/Git/findings ; authentification et quota de la patrouille web ; mapping contrôle par contrôle ISO/NIS2/DORA/OWASP ; adaptateurs Kubernetes et Prometheus managé ; livraison des alertes hors interface. Les étiquettes de conformité actuelles sont des projections grossières, pas une certification. |
-| Revue indépendante du code | **Non faite** : les tests sont ceux de l'auteur |
+| Revue indépendante du code | Une revue de code complète (octobre 2026, §17.6) a été faite par un modèle, pas par un évaluateur indépendant humain : ses constats sont corrigés et testés, la revue indépendante reste à faire |
 
 ---
 

@@ -129,19 +129,24 @@ class TrustedService:
             return self._health(required_at)
 
     def _health(self, required_at) -> dict:
-        kernel, entries = self.journal.kernel, self.journal.entries()
+        kernel = self.journal.kernel
         a, ks, n = getattr(self, "_fold", (None, None, 0))
-        if a is None or n > len(entries) or (n and digest(entries[n - 1]) != ks["head"]):
-            a, ks, n = accountability_empty(), empty(), 0
+        tail = self.journal.entries(max(n - 1, 0)) if a is not None else []
+        if a is None or (n and (not tail or digest(tail[0]) != ks["head"])):
+            a, ks, n = accountability_empty(), empty(), 0       # the journal no longer extends the fold
+            tail = self.journal.entries()
+        else:
+            tail = tail[1:] if n else tail
+        entries_len = n + len(tail)
         try:
-            for entry in entries[n:]:
+            for entry in tail:
                 record, delta = kernel.decide(ks, entry)
                 apply(ks, delta)
                 self.accountability.feed(a, ks, record)
         except BaseException:
             self._fold = (None, None, 0)                    # a half-applied fold is never reused
             raise
-        self._fold = (a, ks, len(entries))
+        self._fold = (a, ks, entries_len)
         verdict = self.accountability.health(a, ks, required_at=required_at)
         return {**verdict, "head": ks["head"], "size": ks["size"]}
 

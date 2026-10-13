@@ -122,11 +122,38 @@ class Installation:
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):
-        if spec.get("kind", "local") == "local":
+        """[clock] kind = "local" (demo only) or "witnesses":
+            quorum = 2, tolerance_ms = 0, state = "clock.json",
+            [clock.witnesses.<name>] public = "<base64 Ed25519>", url = "https://..."   (one per witness)
+        Each reading asks every witness for a signed quote of a fresh nonce (bt.clock.WitnessClock)."""
+        kind = spec.get("kind", "local")
+        if kind == "local":
             if not self.demo:
                 raise ValueError("a local clock is only acceptable in a demo installation (T03 unqualified)")
             return now_ms
-        raise ValueError("configure a witness clock (bt.clock.WitnessClock) for production")
+        if kind != "witnesses":
+            raise ValueError("[clock] kind is local (demo) or witnesses")
+        from bt.clock import WitnessClock
+        witnesses = spec.get("witnesses", {})
+        urls = {name: w["url"] for name, w in witnesses.items()}
+        if any(not str(u).startswith("https://") for u in urls.values()):
+            raise ValueError("witnesses are reached over https")
+
+        def fetch(nonce: str) -> list:
+            import urllib.parse
+            import urllib.request
+            quotes = []
+            for url in urls.values():
+                query = urllib.parse.urlencode({"nonce": nonce})
+                with urllib.request.urlopen(f"{url}?{query}", timeout=5) as r:
+                    quotes.append(json.loads(r.read(65_536)))
+            return quotes
+        state = spec.get("state")
+        return WitnessClock(genesis=self.config["ledger"]["genesis"],
+                            public_keys={n: base64.b64decode(w["public"]) for n, w in witnesses.items()},
+                            quorum=int(spec.get("quorum", 2)), fetch=fetch,
+                            tolerance_ms=int(spec.get("tolerance_ms", 0)),
+                            state=(self.path.parent / state) if state else None)
 
     def witness(self) -> None:
         """Demo only: the operator's witnesses anchor the current head. Production witnesses run elsewhere."""

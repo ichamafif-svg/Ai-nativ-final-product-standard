@@ -7,6 +7,7 @@ import socket
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 
 from fixture import CODE, HOUR, Keys, Ledger, client_law
 
@@ -263,6 +264,23 @@ class Clock(unittest.TestCase):
         self.at = {"w1": 50, "w2": 50}
         with self.assertRaises(ClockError):
             clock()
+
+    def test_a_bounded_spread_gives_the_latest_quote_and_restarts_never_go_back(self):
+        """Review, medium 15: exact agreement of independent clocks, and monotonicity lost at every restart."""
+        state = Path(tempfile.mkdtemp()) / "clock.json"
+        keys = {w: raw_public(k) for w, k in self.keys.items()}
+        clock = WitnessClock(genesis="g", public_keys=keys, quorum=2, fetch=self.fetch, tolerance_ms=50, state=state)
+        self.at = {"w1": 100, "w2": 130}
+        self.assertEqual(clock(), 130)
+        self.at = {"w1": 100, "w2": 300}
+        with self.assertRaises(ClockError):
+            clock()                                                       # spread beyond the tolerance
+        again = WitnessClock(genesis="g", public_keys=keys, quorum=2, fetch=self.fetch, tolerance_ms=50, state=state)
+        self.at = {"w1": 120, "w2": 125}
+        with self.assertRaises(ClockError):
+            again()                                                       # below what was already returned
+        with self.assertRaises(ClockError):
+            WitnessClock(genesis="g", public_keys=keys, quorum=2, fetch=self.fetch, tolerance_ms=60_000)
 
 
 class Delivery(unittest.TestCase):

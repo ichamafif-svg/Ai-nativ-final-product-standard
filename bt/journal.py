@@ -25,6 +25,17 @@ from .checker import Checker, Disagreement
 DIGEST_PREFIX = "sha256:"
 
 
+APPEND_ONLY = ("statements", "uses")   # grow with the ledger; the kernel only adds or replaces their values (apply)
+
+
+def detached(state: dict) -> dict:
+    """A copy of the verified state that later admissions do not change. The append-only maps are copied one level
+    deep only: `apply` never mutates a value in place (put replaces, push builds a new list), so their values are
+    shared, read-only by contract. Everything else is deep-copied. This keeps a read or a write independent of the
+    ledger's length (review, medium 14), where a deep copy of every statement made each write O(n)."""
+    return {k: (dict(v) if k in APPEND_ONLY else copy.deepcopy(v)) for k, v in state.items()}
+
+
 class Halted(Exception):
     """A persistent stop: two independent mechanisms disagreed. Only an operator clears it, outside the system."""
 
@@ -189,11 +200,17 @@ class Journal:
                 self._sync(db)
             finally:
                 db.rollback()
-            return copy.deepcopy(self.state)
+            return detached(self.state)
 
-    def entries(self) -> list:
+    def entries(self, start: int = 0) -> list:
+        """The admitted entries from position `start` on (all by default), parsed."""
         with closing(self._db()) as db:
-            return [parse(bytes(raw)) for (raw,) in db.execute("SELECT raw FROM entries ORDER BY seq")]
+            return [parse(bytes(raw)) for (raw,) in db.execute("SELECT raw FROM entries WHERE seq >= ? ORDER BY seq",
+                                                               (start,))]
+
+    def size(self) -> int:
+        with closing(self._db()) as db:
+            return db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
 
     # ---- writes -----------------------------------------------------------------------------------------------------
     def transact(self, builder) -> tuple[dict, dict]:
@@ -202,7 +219,7 @@ class Journal:
             db.execute("BEGIN IMMEDIATE")
             try:
                 self._sync(db)
-                entry = builder(copy.deepcopy(self.state))
+                entry = builder(detached(self.state))
                 record, delta = self._judge(entry)
                 raw = canon(entry)
                 genesis = self.state["domain"] or next(op[2] for op in delta if op[:2] == ("set", "domain"))
@@ -233,7 +250,7 @@ class Journal:
             db.execute("BEGIN IMMEDIATE")
             try:
                 self._sync(db)
-                yield copy.deepcopy(self.state)
+                yield detached(self.state)
             finally:
                 db.rollback()
 
@@ -259,4 +276,4 @@ class Journal:
                 raise
             apply(self.state, delta)
             self.heads.append(self.state["head"])
-            return copy.deepcopy(self.state)
+            return detached(self.state)
