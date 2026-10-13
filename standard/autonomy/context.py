@@ -5,7 +5,7 @@ import json
 from typing import Optional
 
 from .concepts import AUTHORITY
-from .read_model import ReadModel
+from .read_model import ReadModel, human_target
 
 
 def _matching_conditions(law: dict, op_name: Optional[str]) -> dict:
@@ -50,7 +50,7 @@ def _proof_plan(conditions: dict, target: Optional[dict], facts: list, finding: 
 
 def _autonomy(task: dict, target: Optional[dict], operation: Optional[dict]) -> dict:
     op = task.get("op") or (target or {}).get("repair")
-    human = bool((target or {}).get("human")) or str(task.get("resource", "")).startswith("org:")
+    human = human_target(target or {})
     if task.get("need") == "investigate":
         mode = "research_only"
         can = ["read and search a pinned snapshot", "propose a tool or an instrument for review"]
@@ -79,7 +79,7 @@ def _decision(task: dict, target: Optional[dict], operation: Optional[dict], con
         status, reason = "blocked", "no matching law target or operation"
     elif task.get("need") == "investigate":
         status, reason = "research_only", "this task explores a missing route and cannot submit a repair"
-    elif (target or {}).get("human"):
+    elif human_target(target or {}):
         status, reason = "needs_human", "the target is marked as requiring a person"
     elif task.get("state") in ("NO_ROUTE", "TRUST_BLOCKED"):
         status, reason = "needs_route", "the projected work has no qualified route"
@@ -97,6 +97,7 @@ def _decision(task: dict, target: Optional[dict], operation: Optional[dict], con
 
 def task_context(view: dict, task: dict, findings=None, settings=None, *, model: ReadModel | None = None) -> dict:
     model = model or ReadModel(view, findings, settings=settings)
+    model.assert_view(view)
     law = model.law
     target = next((t for t in law.get("targets", []) if t["id"] == task.get("target")), None)
     op_name = task.get("op") or (target or {}).get("repair")
@@ -105,12 +106,14 @@ def task_context(view: dict, task: dict, findings=None, settings=None, *, model:
     conditions = _matching_conditions(law, op_name)
     resource = task["resource"]
     fact_resource = resource if not target else target["resource"]
-    facts = [f for f in view.get("facts", []) if f.get("resource") in (resource, fact_resource)]
-    finding = model.findings.get(f"{fact_resource}|{(target or {}).get('property')}", {})
+    facts = model.facts_for(resource)
+    if fact_resource != resource:
+        facts += model.facts_for(fact_resource)
+    finding = model.finding(fact_resource, target["property"]) if target else {}
     proof = _proof_plan(conditions, target, facts, finding)
     context = {"basis": view["prefix"], "law_digest": view["law"].get("digest"), "task": task,
             "requirement": target, "operation": operation, "effective_law": law,
-            "assessment": view.get("assessment"), "entity": view.get("entities", {}).get(task["resource"]),
+            "assessment": view.get("assessment"), "entity": model.entity(task["resource"]),
             "grants": grants, "facts": facts, "findings": finding,
             "system_settings": model.settings,
             "law_trace": {"target": target, "operation_name": op_name, "operation": operation,

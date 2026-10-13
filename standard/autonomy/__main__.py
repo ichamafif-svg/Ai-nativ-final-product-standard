@@ -13,7 +13,7 @@ import json
 import subprocess
 import sys
 import time
-import toml_compat as tomllib
+import tomllib
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

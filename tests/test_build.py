@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 from tools import ceremony  # noqa: E402
 from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
+from local_sandbox import LocalSandbox  # noqa: E402
 
 import standard.autonomy.__main__ as agent_process  # noqa: E402
 import standard.runtime.daemon as daemon  # noqa: E402
@@ -113,7 +114,7 @@ class Construction(unittest.TestCase):
             builder = Builder(cycle.service, cycle.agent.signer,
                               {k: grants[k] for k in ("agent_implement", "agent_deliver")}, cycle.agent.store, store,
                               main=lambda: git("rev-parse", "main", cwd=repo), clock=clock,
-                              notes=root / "requests.json", llm=gate, backoff_ms=0)
+                              notes=root / "requests.json", llm=gate, backoff_ms=0, sandbox=LocalSandbox())
             main = git("rev-parse", "main", cwd=repo)
             refresh()
             with self.assertRaises(AgentError):                                 # a test is out of its reach

@@ -50,20 +50,26 @@ class Cycle:
         except (OSError, ValueError):
             return {}
 
+    def _record(self, basis: dict, mode: str, task: dict, main: str, outcome: str, reason: str, detail: str = ""):
+        record = getattr(self.engine, "record", None)
+        if callable(record):
+            record(at=self.clock(), mode=mode, task=task, basis=basis, main=main,
+                   outcome=outcome, reason_code=reason, detail=detail)
+
     def run(self, mode: str = "RUN") -> dict:
         view = self.service.view()
         findings, settings = self._findings(), self.settings()
-        model = ReadModel(view, findings, self.routes, self.service.qualify, settings=settings, main=self.main())
-        plan = model.plan(mode)
+        main = self.main()
+        model = ReadModel(view, findings, self.routes, self.service.qualify, settings=settings, main=main)
+        plan = {**model.plan(mode), "basis": model.basis}
         self.engine.sync(plan)
-        law = view["law"]["effective"]
-        targets = {t["id"]: t for t in law["targets"]}
+        targets = {row["target"]["id"]: row["target"] for row in model.targets()}
         proposals, report = self._proposals(), {"state": plan["state"], "crafted": {}, "submitted": {}, "research": {}}
         now = self.clock()
         while (task := self.engine.claim(mode=mode, now=now, needs=("repair", "investigate"))) is not None:
             tid = task["target"]
             if task.get("need") == "investigate":
-                base = self.main()
+                base = main
                 memory_key = f"research:{task['id']}:{view['law'].get('digest')}"
                 try:
                     if self.memory.exhausted(memory_key, base):
@@ -75,24 +81,35 @@ class Cycle:
                 except (AgentError, OSError, ValueError) as exc:
                     report["research"][task["id"]] = {"blocked": str(exc)}
                     self.memory.record(memory_key, at=now, base=base, outcome="research", why=str(exc))
+                self._record(model.basis, mode, task, base, "research",
+                             "research_blocked" if "blocked" in report["research"][task["id"]] else "proposal_only")
                 self.engine.complete_attempt(mode=mode, task_id=task["id"], lease_until=task["lease_until"],
                                              next_at=now + self.backoff_ms + 1)
                 continue
             target = targets[tid]
             _, area, item = target["resource"].split(":", 2)
-            base = self.main()
+            base = main
+            if getattr(getattr(self.agent, "sandbox", None), "isolated", None) is False:
+                report["submitted"][tid] = "trust blocked: candidate jail unavailable"
+                self._record(model.basis, mode, task, base, "trust_blocked", "candidate_jail_unavailable")
+                self.engine.complete_attempt(mode=mode, task_id=task["id"], lease_until=task["lease_until"],
+                                             next_at=now + self.backoff_ms + 1)
+                continue
             key = f"{tid}@{base}"
+            outcome, reason = "attempted", "candidate"
             try:
                 if self.memory.abandoned(tid, base) is not None:
                     report["submitted"][tid] = "abandoned: waiting for people"
+                    outcome, reason = "progress_failure", "budget_exhausted"
                 elif key not in proposals and self.memory.exhausted(tid, base):
                     self.memory.abandon(tid, base, f"{self.memory.budget} attempts on {base} did not pass:\n"
                                                    f"{self.memory.lessons(tid)}")
                     report["submitted"][tid] = "abandoned: waiting for people"
+                    outcome, reason = "progress_failure", "budget_exhausted"
                 else:
                     if key not in proposals:
                         head, route = self.agent.craft(tid, base, targets=targets, lessons=self.memory.lessons(tid),
-                                                       finding=findings.get(f"{target['resource']}|{target['property']}"),
+                                                       finding=model.finding(target["resource"], target["property"]),
                                                        law_text=model_packet(task_context(view, {**task,
                                                            "need": task.get("need", "repair"),
                                                            "resource": target["resource"]}, findings,
@@ -103,9 +120,13 @@ class Cycle:
                     p = proposals[key]
                     if not p["submitted"]:
                         self._submit(view, now, p, findings, proposals, key, report)
+                        outcome, reason = (("admitted", "admitted") if p["submitted"] else
+                                           ("refused", "admission_refused"))
             except AgentError as exc:
                 self.memory.record(tid, at=now, base=base, outcome="agent", why=str(exc))
                 report["submitted"][tid] = f"agent: {exc}"
+                outcome, reason = "attempt_failed", "agent_error"
+            self._record(model.basis, mode, task, base, outcome, reason, report["submitted"].get(tid, ""))
             self.engine.complete_attempt(mode=mode, task_id=task["id"], lease_until=task["lease_until"],
                                          next_at=now + self.backoff_ms + 1)   # never twice in one pass
         self._remember(proposals)

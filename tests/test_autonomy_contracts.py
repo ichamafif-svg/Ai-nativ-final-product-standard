@@ -18,9 +18,11 @@ from standard.autonomy.agent import Agent, AgentError, in_scope
 from standard.autonomy.build import Builder
 from standard.autonomy.context import render_context, task_context
 from standard.autonomy.cycle import Cycle
-from standard.autonomy.drift import gap_dossiers, patrol_context, propose_patrol, propose_reading
-from standard.autonomy.drift_map import target_state
-from standard.autonomy.law_surface import law_surface_map, projection_labels
+from standard.autonomy.drift_map import gap_dossiers
+from standard.autonomy.patrol import patrol_context
+from standard.autonomy.advisory_llm import propose_patrol, propose_reading
+from standard.autonomy.read_model import target_state, projection_labels
+from standard.autonomy.law_surface import law_surface_map
 from standard.autonomy.llm import Gate, Provider
 from standard.autonomy.patrol import run_patrol
 from standard.autonomy.read_model import ReadModel
@@ -184,6 +186,38 @@ class ContextAndRoutes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different journal prefixes'):
             ReadModel(view)
 
+    def test_read_model_queries_share_one_basis_across_consumers(self):
+        from standard.surface.read_views import run
+
+        view = self.view(self.target())
+        view['entities'] = {'build:request/r1': {'type': 'request'}}
+        view['transitions'] = {'repo:feature:r1/base/head': {'tests': 'green'}}
+        view['facts'] = [{'id': 'f1', 'resource': 'repo:feature:r1/base/head', 'property': 'tests',
+                          'status': 'green', 'author': 'scanner', 'at': 2}]
+        findings = {'repo:client:custom|status': {'status': 'red', 'details': [],
+                                                  'input_main': 'older-commit'}}
+        model = ReadModel(view, findings, installed_routes(), lambda needs: None, main='current-commit')
+        self.assertEqual(model.entities('request')[0][0], 'build:request/r1')
+        self.assertEqual(model.transition('repo:feature:r1/base/head')['tests'], 'green')
+        self.assertEqual(model.facts_for('repo:feature:r1/base/head', 'tests')[0]['id'], 'f1')
+        self.assertEqual(run(model, {}, {})['gaps'][0]['diagnostic_alignment'], 'stale')
+        changed = {**view, 'prefix': {**view['prefix'], 'head': 'other'}}
+        with self.assertRaisesRegex(ValueError, 'different journal or law basis'):
+            task_context(changed, {'id': 't', 'resource': 'repo:client:custom', 'need': 'repair'}, model=model)
+
+    def test_read_model_captures_inputs_once(self):
+        view = self.view(self.target())
+        findings = {'repo:client:custom|status': {'status': 'red'}}
+        settings = {'global': {'objective': 99.9}}
+        model = ReadModel(view, findings, settings=settings, main='main-1')
+        captured = model.basis['inputs']
+        view['law']['effective']['targets'].clear()
+        findings['repo:client:custom|status']['status'] = 'green'
+        settings['global']['objective'] = 50
+        self.assertEqual(model.target('client-specific')['finding']['status'], 'red')
+        self.assertEqual(model.settings['global']['objective'], 99.9)
+        self.assertEqual(captured, model.basis['inputs'])
+
     def test_read_model_links_transitions_entities_and_constitutional_proof(self):
         view = self.view(self.target())
         view['transitions'] = {'repo:feature:r1/base/head': {'tests': 'green'}}
@@ -263,6 +297,10 @@ class ContextAndRoutes(unittest.TestCase):
         view['health']['open'] = []
         view['health']['proven'] = [{'target': target['id']}]
         self.assertEqual(Installation.__new__(Installation).requirements(view, finding)[0]['state'], 'held')
+
+    def test_open_human_debt_waits_for_attestation_not_a_machine_measure(self):
+        target = next(t for t in FLOORS['targets'] if t['id'] == 'isms')
+        self.assertEqual(target_state(target, {}, [{'state': 'open'}], False), 'attestation_due')
 
     def test_drift_controller_maps_gap_to_law_route_and_proof_without_authority(self):
         view = self.view(self.target())
@@ -471,7 +509,7 @@ class ResearchTools(unittest.TestCase):
 
     def test_experiment_never_falls_back_to_the_agent_account(self):
         research, tree, _ = self.setup_research([])
-        with patch('standard.autonomy.research.shutil.which', return_value=None), \
+        with patch('standard.autonomy.sandbox._can_isolate', return_value=False), \
              patch('standard.autonomy.research.subprocess.run') as run:
             with self.assertRaises(ResearchError):
                 research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
@@ -488,7 +526,8 @@ class ResearchTools(unittest.TestCase):
             seen.append((args, kwargs['env']))
             kwargs['stdout'].write(b'experiment output')
             return type('Done', (), {'returncode': 0})()
-        with patch('standard.autonomy.research.subprocess.run', side_effect=run):
+        with patch('standard.autonomy.sandbox._can_isolate', return_value=True), \
+             patch('standard.autonomy.sandbox.subprocess.run', side_effect=run):
             result = research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
         self.assertTrue(result.ok)
         args, env = seen[0]
@@ -497,7 +536,7 @@ class ResearchTools(unittest.TestCase):
         self.assertNotIn(str(source_repo), args)
         self.assertNotIn('/home', args)
         self.assertNotIn('/srv', args)
-        self.assertEqual(set(env), {'PATH', 'HOME', 'LANG'})
+        self.assertEqual(set(env), {'PATH', 'HOME', 'LANG', 'PYTHONDONTWRITEBYTECODE'})
         self.assertIn('--fsize=1048576', args)
 
     def test_fetch_uses_only_the_configured_source_and_bounded_content(self):

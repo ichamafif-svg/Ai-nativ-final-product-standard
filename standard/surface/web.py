@@ -15,37 +15,29 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
-import toml_compat as tomllib
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from standard.autonomy.projection import installed_routes
+import tomllib
+from bt.gateway import GatewayClient
 from standard.autonomy.context import task_context
 from standard.autonomy.drift_map import gap_dossiers
-from standard.autonomy.read_model import ReadModel
 from standard.autonomy.law_surface import law_surface_map
+from standard.autonomy.projection import installed_routes
+from standard.autonomy.read_model import ReadModel
+from standard.autonomy.work import WorkEngine
+from standard.surface import read_views
 from standard.surface.contexts import agent_context as build_agent_context
-from instruments.data import EMPTY
-from bt.gateway import GatewayClient
-from instruments.recipes import recipes_for
+from standard.surface.read_views import git
 
 STATIC = Path(__file__).with_name("static")
 SHA = re.compile(r"[0-9a-f]{40}")
-BRANCH = re.compile(r"([0-9a-f]{40})\trefs/heads/([a-z0-9][a-z0-9_-]{0,63})/(\S+)")
 HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1", "product": "h1"}           # the demo ceremony's grants to people (tools/ceremony.py)
 MAX_BODY = 1 << 20
-
-
-def git(repo, *args, check=True) -> str:
-    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=60)
-    if check and r.returncode != 0:
-        raise RuntimeError(r.stderr.strip()[:300])
-    return r.stdout
 
 
 def _toml(path) -> dict:
@@ -77,6 +69,7 @@ class Installation:
         self.inbox = resolve(repo["inbox"]) if repo.get("inbox") else None
         agent = resolve(c.get("agent", {}).get("store", "agent/store")).parent
         self.findings, self.memory, self.proposals = base / "findings.json", agent / "memory.json", agent / "proposals.json"
+        self.work_db = agent / "work.db"
         self.grants = {name: {"id": gid, "holder": HOLDERS.get(name)} for name, gid in c["grants"].items()
                        if name in HOLDERS}
         self.product = self.repo.name.removesuffix(".git")
@@ -96,26 +89,9 @@ class Installation:
 
     # ---- the product, whatever it is: requirements by domain and their state ---------------------------------
     def requirements(self, view: dict, findings: dict, model: ReadModel | None = None) -> list:
-        """One line per requirement of the effective law. held: proven or measured as expected; gap: measured off;
-        unmeasured: no instrument could cover it here; attest: waits for a person's attestation; escalated: past due."""
         model = model or ReadModel(view, findings)
-        autonomous = set(recipes_for(EMPTY))
-        out = []
-        for row in model.targets():
-            t, f = row["target"], row["finding"]
-            status = f.get("status")
-            constitutional = row["state"]
-            state = {"attestation_due": "attest", "unknown": "pending", "open": "pending"}.get(
-                constitutional, constitutional)
-            who = ("people" if t.get("human") or t["resource"].startswith("org:") else
-                   "agent" if t["id"] in autonomous else "review" if t.get("repair") == "remediate" else "agent")
-            out.append({"id": t["id"], "domain": t["resource"].split(":")[1], "resource": t["resource"],
-                        "property": t["property"], "expect": t["expect"], "measured": status, "state": state,
-                        "diagnostic_conflict": row["diagnostic_conflict"],
-                        "diagnostic_alignment": row["diagnostic_alignment"],
-                        "projections": row["projections"],
-                        "who": who, "where": [d.splitlines()[0][:200] for d in (f or {}).get("details", [])[:8]]})
-        return out
+        model.assert_view(view)
+        return read_views.requirements(model)
 
     # ---- RUN: the product in production, maintained -----------------------------------------------------------
     def context(self, task_id: str) -> dict:
@@ -156,99 +132,19 @@ class Installation:
 
     def run(self, view: dict, findings: dict, model: ReadModel | None = None) -> dict:
         model = model or ReadModel(view, findings, self.routes, self.client.qualify)
-        plan = model.plan()
-        targets = {t["id"]: t for t in view["law"]["effective"]["targets"]}
-        repairs = []
-        for p in _json(self.proposals).values():
-            t = targets.get(p["target"], {})
-            transition = f"repo:{p['area']}:{p['item']}/{p['base']}/{p['head']}"
-            facts = view["transitions"].get(transition, {})
-            repairs.append({**p, "requirement": f"{t.get('property')} = {t.get('expect')}", "facts": facts,
-                            "resource": transition, "kind": "repair",
-                            "awaiting_review": p["route"] == "review" and facts.get("tests") == "green"
-                            and facts.get("review") != "approved"})
-        gaps = []
-        for row in model.targets():
-            t, f = row["target"], row["finding"]
-            if f and f.get("status") != t["expect"]:
-                gaps.append({"kind": "diagnostic_candidate", "source": "published_findings",
-                             "authority": "informational; constitutional health decides debt and proof",
-                             "target": t["id"], "resource": t["resource"], "expect": t["expect"],
-                             "status": f["status"], "diagnostic_alignment": row["diagnostic_alignment"],
-                             "where": [d.splitlines()[0][:200] for d in f.get("details", [])[:8]],
-                             "autonomous": t.get("repair") == "remediate" and t["id"] in ("sbom", "vulns", "actions"),
-                             "human": bool(t.get("human"))})
-        abandoned = [{"target": k, "dossier": v["abandoned"]["dossier"], "base": v["abandoned"]["base"]}
-                     for k, v in _json(self.memory).items() if v.get("abandoned")]
-        return {"tasks": plan["tasks"], "state": plan["state"], "gaps": sorted(gaps, key=lambda g: g["target"]),
-                "repairs": repairs, "abandoned": abandoned}
+        model.assert_view(view)
+        return read_views.run(model, _json(self.proposals), _json(self.memory))
 
     # ---- BUILD: the product being built ----------------------------------------------------------------------
-    def build(self, view: dict, findings: dict, main: str) -> dict:
-        contributions = []
-        if self.inbox:
-            for line in git(self.repo, "ls-remote", str(self.inbox), "refs/heads/*", check=False).splitlines():
-                m = BRANCH.fullmatch(line)
-                if not m:
-                    continue
-                head, author, branch = m.groups()
-                facts = next((f for r, f in view["transitions"].items()
-                              if r.startswith(f"repo:contrib:{author}/") and r.endswith(f"/{head}")), {})
-                resource = next((r for r in view["transitions"] if r.startswith(f"repo:contrib:{author}/")
-                                 and r.endswith(f"/{head}")), f"repo:contrib:{author}/{main}/{head}")
-                base = resource.split("/")[1]
-                landed = subprocess.run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", head, "main"],
-                                        capture_output=True, timeout=60).returncode == 0
-                blocked = [p for p, bad in (("tests", facts.get("tests") not in (None, "green")),
-                                            ("regressions", facts.get("regressions") not in (None, "none"))) if bad]
-                contributions.append({
-                    "author": author, "branch": branch, "head": head, "base": base, "resource": resource,
-                    "facts": facts, "kind": "contribution", "landed": landed, "stale": base != main and not landed,
-                    "blocked": blocked,
-                    "why": [d.splitlines()[0][:200] for p in blocked
-                            for d in findings.get(f"{resource}|{p}", {}).get("details", [])[:5]],
-                    "awaiting_review": not landed and not blocked and facts.get("tests") == "green"
-                    and facts.get("regressions") == "none" and facts.get("review") != "approved"})
-        for item in contributions:                              # D34: a contribution may answer a request
-            from instruments.suite import claimed
-            item["request"] = claimed(git(self.repo, "log", "-1", "--format=%B", item["head"], check=False)) \
-                if not item["landed"] else None
-            item["facts"].setdefault("acceptance", None)
-        return {"contributions": contributions, "requests": self.requests_of(view, findings, main)}
+    def build(self, view: dict, findings: dict, main: str, model: ReadModel | None = None) -> dict:
+        model = model or ReadModel(view, findings, main=main)
+        model.assert_view(view)
+        return read_views.build(model, self.repo, self.inbox, self.requests, _json(self.request_notes), main)
 
-    def requests_of(self, view: dict, findings: dict, main: str) -> list:
-        """Every request: its state, what the scanner says of its contract, its candidate implementations."""
-        from instruments.suite import contract_path, load
-        notes = _json(self.request_notes)
-        out = []
-        for resource, e in sorted(view.get("entities", {}).items(), key=lambda kv: -kv[1].get("created", 0)):
-            if e.get("type") != "request":
-                continue
-            rid = resource.split("/", 1)[1]
-            spec, contract = (load(self.requests, e["fields"][k]) for k in ("spec", "contract"))
-            facts = view["transitions"].get(resource, {})
-            features = []
-            for r, f in view["transitions"].items():
-                if r.startswith(f"repo:feature:{rid}/"):
-                    base, head = r.split("/")[1:3]
-                    landed = subprocess.run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", head, "main"],
-                                            capture_output=True, timeout=60).returncode == 0
-                    features.append({"resource": r, "base": base, "head": head, "facts": f, "kind": "feature",
-                                     "request": rid, "title": e["fields"]["title"], "landed": landed,
-                                     "stale": base != main and not landed,
-                                     "why": [d.splitlines()[0][:200] for p in ("acceptance", "tests", "regressions")
-                                             for d in findings.get(f"{r}|{p}", {}).get("details", [])[:3]],
-                                     "awaiting_review": not landed and base == main and f.get("acceptance") == "green"
-                                     and f.get("tests") == "green" and f.get("regressions") == "none"
-                                     and f.get("review") != "approved"})
-            out.append({"id": rid, "resource": resource, "title": e["fields"]["title"], "state": e["state"],
-                        "owner": e.get("owner"), "created": e.get("created"), "expected": e["expected"],
-                        "facts": facts, "path": contract_path(rid),
-                        "contract_details": findings.get(f"{resource}|contract", {}).get("details", []),
-                        "spec": spec.decode(errors="replace") if spec else None,
-                        "contract": contract.decode(errors="replace") if contract else None,
-                        "agent": notes.get(rid, {}).get("state"), "features": features})
-        return out
+    def requests_of(self, view: dict, findings: dict, main: str, model: ReadModel | None = None) -> list:
+        model = model or ReadModel(view, findings, main=main)
+        model.assert_view(view)
+        return read_views.requests_of(model, self.repo, self.requests, _json(self.request_notes), main)
 
     def store_rules(self, body: dict) -> dict:
         """D35: keep a new standard/rules.json by digest, as the bytes the agent will commit; the engineer signs it."""
@@ -303,7 +199,8 @@ class Installation:
             "autonomy": self.autonomy(reqs),
             "drift": gap_dossiers(view, model=model),
             "law_surface": law_surface_map(view, model=model)["summary"],
-            "run": self.run(view, findings, model), "build": self.build(view, findings, main),
+            "run": self.run(view, findings, model), "build": self.build(view, findings, main, model),
+            "progress": WorkEngine.read_progress(self.work_db),
             "law": {"targets": [{k: t.get(k) for k in ("id", "resource", "property", "expect", "coverage", "repair",
                                                         "human", "due_ms")} for t in law["targets"]],
                     "conditions": law["conditions"], "ops": sorted(law["ops"])},
@@ -654,7 +551,7 @@ def handler(inst: Installation):
             try:
                 if route in ("/", "/index.html"):
                     return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-                if route in ("/sign.js", "/app.js"):
+                if route in ("/sign.js", "/app.js", "/objectives.js"):
                     return self._send(200, (STATIC / route[1:]).read_bytes(), "text/javascript; charset=utf-8")
                 if route == "/app.css":
                     return self._send(200, (STATIC / "app.css").read_bytes(), "text/css; charset=utf-8")

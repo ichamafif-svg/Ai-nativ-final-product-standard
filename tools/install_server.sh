@@ -25,6 +25,7 @@ phase1() {
   say "system packages"
   apt-get update -q
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip ufw util-linux apparmor bubblewrap >/dev/null
+  python3 -c 'import sys; assert sys.version_info >= (3, 11), "Standard requires Python 3.11 or newer"'
 
   say "code in $CODE, its own Python environment"
   if [ "$SRC" != "$CODE" ]; then rm -rf "$CODE"; mkdir -p "$CODE"; cp -a "$SRC"/. "$CODE"/; fi

@@ -1,15 +1,66 @@
 """Refactoring must keep trust boundaries enforced and pin privileged product assembly."""
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
 
 from bt.release import code_digest as core_digest
 from standard.runtime import SOURCES, code_digest as installation_digest
 from tools.check_layers import ALLOWED, imports, violations
 from tools.coverage import inventory
+from standard.autonomy.read_model import compliance_reading, human_target, work_role
+from standard.autonomy.work import WorkEngine
+from tomllib import loads as parse_toml
 
 
 class Structure(unittest.TestCase):
+    def test_progress_failures_exclude_required_stops_and_closed_debt(self):
+        with tempfile.TemporaryDirectory() as root:
+            engine = WorkEngine(Path(root) / "work.db")
+            task = {"id": "o:repair", "obligation": "o", "need": "repair", "resource": "repo:code:x",
+                    "due": 5, "state": "AVAILABLE", "routes": [{"route": "agent", "state": "AVAILABLE"}]}
+            projection = {"mode": "RUN", "basis": {"head": "h"}, "tasks": [task]}
+            engine.sync(projection)
+            engine.record(at=6, mode="RUN", task=task, basis=projection["basis"], main="m",
+                          outcome="progress_failure", reason_code="budget_exhausted")
+            self.assertEqual(WorkEngine.read_progress(engine.path)["pf"], 1)
+            engine.sync({**projection, "tasks": [{**task, "state": "TRUST_BLOCKED"}]})
+            self.assertEqual(engine.progress()["pf"], 0)
+            self.assertEqual(len(engine.progress()["waiting"]), 1)
+            engine.sync({**projection, "tasks": []})
+            self.assertEqual(engine.progress()["pf"], 0)
+
+    def test_new_basis_releases_old_retry_and_lease(self):
+        with tempfile.TemporaryDirectory() as root:
+            engine = WorkEngine(Path(root) / "work.db")
+            task = {"id": "o:repair", "obligation": "o", "need": "repair", "resource": "repo:code:x",
+                    "due": 5, "state": "AVAILABLE", "routes": []}
+            projection = {"mode": "RUN", "basis": {"head": "old"}, "tasks": [task]}
+            engine.sync(projection)
+            claimed = engine.claim(mode="RUN", now=10)
+            engine.complete_attempt(mode="RUN", task_id=task["id"], lease_until=claimed["lease_until"],
+                                    next_at=999)
+            self.assertIsNone(engine.claim(mode="RUN", now=11))
+            engine.sync({**projection, "basis": {"head": "new"}})
+            self.assertEqual(engine.claim(mode="RUN", now=11)["attempt"], 1)
+
+    def test_human_work_is_declared_not_inferred_from_resource_prefix(self):
+        target = {"id": "client-org", "resource": "org:client:custom", "repair": "remediate"}
+        self.assertFalse(human_target(target))
+        self.assertEqual(work_role(target)["level"], "supervised")
+        self.assertTrue(human_target({**target, "human": True}))
+
+    def test_coarse_compliance_never_claims_satisfaction(self):
+        target = {"id": "isms", "resource": "org:isms:policy"}
+        held = compliance_reading(target, "held", "HEALTHY")
+        self.assertTrue(held)
+        self.assertTrue(all(row["status"] == "partial" and not row["certifies"] for row in held))
+        self.assertTrue(all(row["status"] == "fault" for row in compliance_reading(target, "held", "FAULT")))
+
+    def test_installation_toml_uses_a_complete_parser(self):
+        self.assertEqual(parse_toml('name = "a#b"\n[agent]\nscopes = ["code", "tests"]'),
+                         {"name": "a#b", "agent": {"scopes": ["code", "tests"]}})
+
     def test_coverage_does_not_invent_an_instrument_for_a_declared_target(self):
         rows = {r["target"]: r for r in inventory()}
         self.assertEqual(rows["ci"]["measurement"], "REGISTERED")
@@ -88,6 +139,25 @@ class Structure(unittest.TestCase):
         (self.root / "standard/floors.py").unlink()
         with self.assertRaises(FileNotFoundError):
             installation_digest(self.root)
+
+    def test_every_privileged_source_changes_the_release_digest(self):
+        for source in SOURCES:
+            source_path = Path(__file__).resolve().parents[1] / source
+            path = self.root / source
+            if source_path.is_file():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, path)
+            else:
+                shutil.copytree(source_path, path, dirs_exist_ok=True)
+        original = installation_digest(self.root)
+        for source in SOURCES:
+            path = self.root / source
+            files = [path] if path.is_file() else sorted(path.rglob("*.py"))
+            for file in files:
+                previous = file.read_text()
+                file.write_text(previous + "y = 2\n")
+                self.assertNotEqual(installation_digest(self.root), original, file)
+                file.write_text(previous)
 
 
 if __name__ == "__main__":

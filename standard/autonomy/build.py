@@ -47,7 +47,8 @@ class Builder:
         from .sandbox import Sandbox
         self.service, self.signer, self.grants, self.store = service, signer, grants, Path(store)
         self.requests, self.main, self.clock, self.notes = Path(requests), main, clock, Path(notes)
-        self.llm, self.sandbox, self.data = llm, sandbox or Sandbox(), data or EMPTY
+        self.llm, self.sandbox, self.data = llm, sandbox or Sandbox(
+            cache_roots=(self.store.parent / "venvs",)), data or EMPTY
         self.iterations, self.backoff_ms = iterations, backoff_ms
         self.settings = settings
         self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources)
@@ -63,7 +64,7 @@ class Builder:
         with self.sandbox.checkout(self.store, head) as code, tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "acceptance.xml"
             r = self.sandbox.python_module("pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={report}",
-                                           contract_path(rid), cwd=code, pythonpath=code)
+                                           contract_path(rid), cwd=code, pythonpath=code, writable=(Path(tmp),))
             try:
                 status = verdict("green", report_measure(report, r.code))
             except Exception as exc:
@@ -138,13 +139,13 @@ class Builder:
         view, now, base = self.service.view(), self.clock(), self.main()
         model = ReadModel(view, settings=self.settings(), main=base)
         notes = json.loads(self.notes.read_text()) if self.notes.exists() else {}
-        targets = {t["id"]: t for t in view["law"]["effective"]["targets"]}
+        targets = {row["target"]["id"]: row["target"] for row in model.targets()}
         report = {}
-        for resource, e in sorted(view.get("entities", {}).items()):
-            if e["type"] != "request" or e["state"] != "contracted":
+        for resource, e in sorted(model.entities("request")):
+            if e["state"] != "contracted":
                 continue
             rid, note = resource.split("/", 1)[1], notes.setdefault(resource.split("/", 1)[1], {})
-            if view["transitions"].get(resource, {}).get("accepted") == "yes" and "agent_deliver" in self.grants:
+            if model.transition(resource).get("accepted") == "yes" and "agent_deliver" in self.grants:
                 outcome = self._admit(view, "transition", {
                     "under": self.grants["agent_deliver"], "resource": resource, "operation": "deliver",
                     "expected": e["expected"], "changes": {}})

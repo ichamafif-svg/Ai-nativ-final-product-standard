@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from fixture import Ledger, client_law
+from local_sandbox import LocalSandbox
 
 from standard.autonomy import Agent, Cycle, Route, WorkEngine
 from bt import Journal, PinStore, Signer, TrustedService
@@ -116,7 +117,8 @@ class Stand(unittest.TestCase):
         routes = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
                   Route("scanner", "RUN", "repo:*", frozenset({"observe", "cover", "prove"}))]
         self.cycle = Cycle(self.service, WorkEngine(root / "work.db"), Agent(signer("agent"), {"recipe": self.agent_cap, "review": self.review_cap},
-                                 self.store, data=self.data, api_key="test" if self.ASK else None, ask=self.ASK),
+                                 self.store, data=self.data, api_key="test" if self.ASK else None, ask=self.ASK,
+                                 sandbox=LocalSandbox()),
                            routes, clock=clock, main=lambda: sh(self.repo, "git", "rev-parse", "main"),
                            state_path=root / "proposals.json", backoff_ms=0)
 

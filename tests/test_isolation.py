@@ -35,6 +35,7 @@ class Isolated(unittest.TestCase):
         self.assertIn("-i", cmd)                                         # nothing of the guard's environment
         self.assertNotIn("unshare", Isolation("runner").command(["pip"], {}, network=True))
         self.assertFalse(Isolation().isolated)
+        self.assertFalse(Isolation("runner").candidate_fs_confined)
 
     @unittest.skipUnless(can_run_as_runner(), "no runner account on this host")
     def test_a_hostile_contribution_cannot_reach_a_secret_nor_the_network(self):

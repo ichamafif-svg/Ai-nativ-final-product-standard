@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from urllib.parse import quote
 from contextlib import closing
 from pathlib import Path
 
@@ -25,6 +26,10 @@ class WorkEngine:
                 resource TEXT NOT NULL, due INTEGER NOT NULL, state TEXT NOT NULL, task TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0,
                 lease_until INTEGER NOT NULL DEFAULT 0, basis TEXT NOT NULL, PRIMARY KEY (mode, id))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY, at INTEGER NOT NULL, mode TEXT NOT NULL, task_id TEXT NOT NULL,
+                obligation TEXT NOT NULL, basis TEXT NOT NULL, main TEXT, attempt INTEGER NOT NULL,
+                route TEXT, outcome TEXT NOT NULL, reason_code TEXT NOT NULL, detail TEXT NOT NULL)""")
 
     def _db(self):
         db = sqlite3.connect(self.path, isolation_level=None, timeout=15)
@@ -43,7 +48,10 @@ class WorkEngine:
                     due = min(old[0], t["due"]) if old else t["due"]
                     db.execute("""INSERT INTO tasks (mode, id, obligation, need, resource, due, state, task, basis)
                         VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (mode, id) DO UPDATE SET due=excluded.due,
-                        state=excluded.state, task=excluded.task, basis=excluded.basis""",
+                        state=excluded.state, task=excluded.task, basis=excluded.basis,
+                        attempts=CASE WHEN tasks.basis=excluded.basis THEN tasks.attempts ELSE 0 END,
+                        next_at=CASE WHEN tasks.basis=excluded.basis THEN tasks.next_at ELSE 0 END,
+                        lease_until=CASE WHEN tasks.basis=excluded.basis THEN tasks.lease_until ELSE 0 END""",
                                (mode, t["id"], t["obligation"], t["need"], t["resource"], due, t["state"],
                                 json.dumps(t, sort_keys=True), basis))
                 for (ident,) in db.execute("SELECT id FROM tasks WHERE mode=?", (mode,)).fetchall():
@@ -84,3 +92,50 @@ class WorkEngine:
         with closing(self._db()) as db:
             return [{**json.loads(task), "attempts": attempts, "due": due} for task, attempts, due in
                     db.execute("SELECT task, attempts, due FROM tasks WHERE mode=? ORDER BY due, id", (mode,))]
+
+    def record(self, *, at: int, mode: str, task: dict, basis: dict, main: str | None,
+               outcome: str, reason_code: str, detail: str = "") -> None:
+        with closing(self._db()) as db:
+            db.execute("""INSERT INTO events
+                (at, mode, task_id, obligation, basis, main, attempt, route, outcome, reason_code, detail)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                       (at, mode, task["id"], task["obligation"], json.dumps(basis, sort_keys=True), main,
+                        task.get("attempt", 0), next((r["route"] for r in task.get("routes", [])
+                                                       if r["state"] == "AVAILABLE"), None),
+                        outcome, reason_code, detail[:2000]))
+
+    def progress(self, mode: str = "RUN") -> dict:
+        """Only a current, available obligation abandoned by U is a confirmed progress failure."""
+        with closing(self._db()) as db:
+            rows = self._progress_rows(db, mode)
+        return self._progress_report(rows, mode)
+
+    @staticmethod
+    def read_progress(path, mode: str = "RUN") -> dict:
+        path = Path(path)
+        if not path.exists():
+            return {"schema": "standard-progress/v1", "mode": mode, "status": "unavailable"}
+        try:
+            with closing(sqlite3.connect(f"file:{quote(str(path.resolve()))}?mode=ro", uri=True)) as db:
+                rows = WorkEngine._progress_rows(db, mode)
+        except sqlite3.DatabaseError:
+            return {"schema": "standard-progress/v1", "mode": mode, "status": "unavailable"}
+        return WorkEngine._progress_report(rows, mode)
+
+    @staticmethod
+    def _progress_rows(db, mode):
+        return db.execute("""SELECT t.id, t.obligation, t.need, t.state, e.outcome, e.reason_code
+                FROM tasks t LEFT JOIN events e ON e.id = (
+                    SELECT MAX(id) FROM events WHERE mode=t.mode AND task_id=t.id AND basis=t.basis)
+                WHERE t.mode=? ORDER BY t.due, t.id""", (mode,)).fetchall()
+
+    @staticmethod
+    def _progress_report(rows, mode):
+        failures = [{"task": ident, "obligation": obligation, "reason": reason}
+                    for ident, obligation, need, state, outcome, reason in rows
+                    if need == "repair" and state == "AVAILABLE" and outcome == "progress_failure"]
+        waiting = [{"task": ident, "obligation": obligation, "state": state}
+                   for ident, obligation, need, state, _, _ in rows if state != "AVAILABLE"]
+        return {"schema": "standard-progress/v1", "mode": mode, "pf": len(failures),
+                "failures": failures, "waiting": waiting, "active": len(rows),
+                "authority": "U scheduling only; current constitutional debt remains in the journal"}

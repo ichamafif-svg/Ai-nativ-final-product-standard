@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 import time
 import sys
-import toml_compat as tomllib
+import tomllib
 from pathlib import Path
 from contextlib import closing
 
@@ -27,6 +27,7 @@ from kernel import Kernel, empty  # noqa: E402
 from kernel.canon import parse  # noqa: E402
 from bt.assessment import SignedAssessment  # noqa: E402
 from bt.signing import Signer  # noqa: E402
+from bt.isolation import Isolation  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
 def probe(name, ok, observed, proves, does_not_prove):
@@ -121,10 +122,11 @@ def qualify(config_path) -> list:
             clean = run.returncode == 0
     except (KeyError, OSError, subprocess.SubprocessError):
         entry, clean, groups = None, False, []
-    out.append(probe("T06 contributors' code runs isolated", bool(clean),
-                     f"runner {runner}, groups {groups}" if runner else "no [tests] runner_user: it runs as the guard",
-                     "the code a contribution brings runs as an account without the guard's keys, without network",
-                     "that the kernel's user namespaces and sudo are themselves sound"))
+    out.append(probe("T06 contributors' code runs isolated", bool(clean and Isolation(runner).candidate_fs_confined),
+                     {"runner": runner, "groups": groups, "identity_and_network": bool(clean),
+                      "filesystem": "not confined by the trusted suite runner"},
+                     "the code a contribution brings runs without keys, network or access to unrelated files",
+                     "that the kernel's namespaces and sudo are themselves sound"))
     try:                                                    # D37: the signed measures replay from their records
         from tools import replay
         results = [replay.replay(replay.host_for(path), r) for r in replay.records(path, 5)]
@@ -185,7 +187,7 @@ def qualify(config_path) -> list:
                          "root, sudo rules that let someone become the guard, and the guard process itself"))
     if "hosting" in c:                                     # D23: clients reach repositories only through the gate
         import pwd
-        import toml_compat as toml
+        import tomllib as toml
         gate, guard = pwd.getpwnam(c["hosting"]["gate_user"]), pwd.getpwnam(sep["guard_user"]) if sep else None
         hosted = toml.loads(Path(c["hosting"]["config"]).read_text())["repositories"]
         bad = [n for n, r in hosted.items() if guard is None or Path(r["inbox"]).stat().st_uid == guard.pw_uid

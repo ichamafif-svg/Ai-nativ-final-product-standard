@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from .concepts import AUTHORITY
 from .drift_map import gap_dossiers
-from .read_model import ReadModel, projection_labels
+from .read_model import ReadModel, human_target
 
 
 def law_surface_map(view: dict, findings=None, routes=(), qualify=None, *, settings=None, focus=None,
                     mode: str = "RUN", inputs=None, model: ReadModel | None = None) -> dict:
     model = model or ReadModel(view, findings, routes, qualify, settings=settings, inputs=inputs)
+    model.assert_view(view)
     dossiers = {d["id"]: d for d in gap_dossiers(view, model=model, mode=mode)}
     entries = []
     for row in model.targets():
@@ -34,7 +35,7 @@ def law_surface_map(view: dict, findings=None, routes=(), qualify=None, *, setti
             unknowns.append("proof is in constitutional health but its observation is outside the bounded public fact view")
         if row["state"] != "held" and dossier["route"]["state"] in ("NO_ROUTE", "TRUST_BLOCKED"):
             unknowns.append("no available route can currently turn the obligation into admitted work")
-        if target.get("human") or resource.startswith("org:"):
+        if human_target(target):
             unknowns.append("requires human attestation; repository inspection cannot certify it")
         entries.append({
             "id": target["id"],
@@ -55,8 +56,7 @@ def law_surface_map(view: dict, findings=None, routes=(), qualify=None, *, setti
                          "proof_to_close": dossier["proof_to_close"]},
             "route": dossier["route"], "autonomy": dossier["autonomy"], "state": row["state"],
             "unknowns": unknowns,
-            "compliance_projection": [{"framework": name, "authority": "projection_only", "certifies": False}
-                                      for name in row["projections"]],
+            "compliance_projection": row["compliance"],
             "human_validation": {"status": "not_recorded", "recording_available": False,
                                  "effect": "review is not persisted; the kernel still decides from signed facts"},
         })

@@ -7,8 +7,9 @@ account with no key, no group of the guard, nothing writable but its scratch dir
 memory limit and a deadline. The tree it runs on is a fresh copy, world-readable, and its only writable place is the
 output directory. Installing dependencies is a separate step, as the same user, with network, from wheels only.
 
-Without a runner user the code runs as the guard: `isolated` is False, the qualification fails (T06) and the
-interface says so. A demo may run that way; a client installation may not.
+This boundary does not yet confine the runner's filesystem, and installation of candidate dependencies is a
+separate networked step. `isolated` means user separation only; it is not a complete candidate-code jail.
+Qualification must not report T06 as complete on this implementation.
 """
 from __future__ import annotations
 
@@ -24,6 +25,10 @@ class Isolation:
     @property
     def isolated(self) -> bool:
         return bool(self.user)
+
+    @property
+    def candidate_fs_confined(self) -> bool:
+        return False
 
     def open_to_runner(self, *paths) -> None:
         """Make the copies the runner reads world-readable (code is not secret), and give it one writable place."""

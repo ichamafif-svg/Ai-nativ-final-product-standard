@@ -144,7 +144,7 @@ class Agent:
             transport = (lambda p, prompt: json.dumps(ask(prompt, api_key))) if ask else None
             llm = Gate({"frontier": Provider("anthropic", "anthropic", MODEL, api_key)},
                        self.store.parent / "egress.log", transport=transport)
-        self.llm, self.sandbox = llm, sandbox or Sandbox()
+        self.llm, self.sandbox = llm, sandbox or Sandbox(cache_roots=(self.store.parent / "venvs",))
         self.scopes = dict(scopes or {})
         if any(not isinstance(patterns, list) or not patterns or any(not relative_path(p) for p in patterns)
                for patterns in self.scopes.values()):

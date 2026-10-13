@@ -3,13 +3,14 @@
 Time is simulated so that FLOOR-0's one-hour delay passes in the test; nothing else is stubbed.
 """
 import argparse
-import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from test_maintenance import FILES, demo_repository
+from local_sandbox import LocalSandbox
 
 
 from tools import ceremony  # noqa: E402
@@ -44,7 +45,8 @@ class Installation(unittest.TestCase):
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            cycle, refresh = agent_process.build(root / "install" / "standard.toml")
+            with patch("standard.autonomy.sandbox.Sandbox", LocalSandbox):
+                cycle, refresh = agent_process.build(root / "install" / "standard.toml")
             cycle.clock, cycle.backoff_ms = clock, 0
             for _ in range(3):
                 operator.tick()
@@ -72,7 +74,7 @@ class Installation(unittest.TestCase):
         failed = {name for name, p in report.items() if p["result"] == "FAIL"}
         self.assertTrue({"T04 pins apart from the journal", "T02 humans hold their own keys",
                          "T03 witnesses apart from the operator", "independent assessment",
-                         "T07 only the guard moves main"} <= failed)
+                         "T06 contributors' code runs isolated", "T07 only the guard moves main"} <= failed)
         self.assertTrue(all(p["does_not_prove"] for p in report.values()))
 
 

@@ -7,14 +7,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .sandbox import Result
+from .sandbox import Result, Sandbox
 
 
 class ResearchError(ValueError):
@@ -79,11 +78,8 @@ class Research:
                 or any(not relative_path(p) or not isinstance(c, str) for p, c in files.items())
                 or sum(len(c.encode()) for c in files.values()) > 100000):
             raise ResearchError("invalid experiment files or script")
-        jail = shutil.which("bwrap")
-        if (jail is None and type(subprocess.run).__module__.startswith("unittest.mock")
-                and not type(shutil.which).__module__.startswith("unittest.mock")):
-            jail = "/usr/bin/bwrap"
-        if not jail or not Path("/usr/bin/python3").is_file():
+        box = Sandbox(timeout=self.timeout, memory_mb=512, file_limit=1_048_576)
+        if not box.isolated or not Path("/usr/bin/python3").is_file():
             raise ResearchError("isolated experiments require bubblewrap and /usr/bin/python3")
         with tempfile.TemporaryDirectory(prefix="standard-research-") as tmp:
             root = Path(tmp)
@@ -102,31 +98,7 @@ class Research:
                 dest = root / path
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(content)
-            args = ["prlimit", "--as=536870912", "--nproc=64", "--fsize=1048576", "--", jail,
-                    "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
-                    "--dir", "/usr"]
-            for path in ("/usr/bin", "/usr/lib", "/usr/lib64"):
-                if Path(path).exists():
-                    args += ["--ro-bind", path, path]
-            for path in ("/bin", "/lib", "/lib64"):
-                if Path(path).is_symlink():
-                    args += ["--symlink", str(Path(path).readlink()), path]
-                elif Path(path).exists():
-                    args += ["--ro-bind", path, path]
-            args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind", str(root), "/work",
-                     "--chdir", "/work", "/usr/bin/python3", "-I", script]
-            try:
-                with tempfile.TemporaryFile() as output:
-                    run = subprocess.run(args, env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8"},
-                                         stdout=output, stderr=subprocess.STDOUT, timeout=self.timeout)
-                    output.seek(0, 2)
-                    output.seek(max(0, output.tell() - 20000))
-                    text = output.read().decode(errors="replace")
-            except subprocess.TimeoutExpired:
-                return Result(124, "isolated experiment timed out")
-            except OSError as exc:
-                raise ResearchError(f"cannot start isolated experiment: {exc}") from exc
-            return Result(run.returncode, text)
+            return box.run(["/usr/bin/python3", "-I", script], root, writable=(root,))
 
     def act(self, tree, reply):
         action = reply.get("action")

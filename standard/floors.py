@@ -55,6 +55,22 @@ ORGANISATIONAL = (
     ("monitoring", "org:ops:monitoring", 180), ("threat", "org:threat:intel", 180),
 )
 
+# Release-pinned reading scope, not law: these historical labels are not control-by-control compliance mappings.
+COMPLIANCE_SCOPES = (
+    {"framework": "ISO 27001", "scope": "historical target-family projection", "clause": None,
+     "targets": tuple(sorted({"vulns", "secrets", "sast", "access", "suppliers", "incident", "backup",
+                              "crypto", "monitoring", *(t[0] for t in ORGANISATIONAL)})),
+     "source": "Standard D41 projection", "granularity": "coarse"},
+    {"framework": "DORA", "scope": "historical target-family projection", "clause": None,
+     "targets": ("continuity", "backup", "incident", "resilience", "suppliers", "monitoring",
+                 "run-sources", "run-slo", "run-live"),
+     "source": "Standard D41 projection", "granularity": "coarse"},
+    {"framework": "NIS2", "scope": "historical target-family projection", "clause": None,
+     "targets": ("vulns", "secrets", "sast", "deps-age", "incident", "continuity", "suppliers",
+                 "access", "crypto", "threat"),
+     "source": "Standard D41 projection", "granularity": "coarse"},
+)
+
 
 # D33: the facts that open a right are measurements of a pinned instrument. The kernel admits them only from the
 # scanner, with this method and coverage, fresh; anyone else (a reviewer, an engineer) cannot sign them, so a person

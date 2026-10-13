@@ -15,8 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools import ceremony  # noqa: E402
-from kernel.canon import canon  # noqa: E402
-from kernel.identity import open_envelope, statement, verify  # noqa: E402
+from kernel.identity import open_envelope, verify  # noqa: E402
 from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
@@ -86,6 +85,7 @@ class Server(unittest.TestCase):
             self.assertIn("sbom", [g["target"] for g in state["run"]["gaps"]])
             self.assertEqual(state["signing"]["grants"]["reviewer"]["holder"], "h3")
             self.assertEqual(state["product"], "repo")
+            self.assertEqual(state["progress"]["schema"], "standard-progress/v1")
             states = {r["id"]: r["state"] for r in state["requirements"]}
             self.assertEqual(states["sbom"], "gap")                     # the product's state, whatever the product
             self.assertEqual(states["isms"], "attest")
@@ -136,7 +136,7 @@ class Server(unittest.TestCase):
             inst.telemetry.track()
             alerts = json.loads(urllib.request.urlopen(f"{url}/api/alerts").read())
             self.assertFalse([a for a in alerts["alerts"] if a["source"] == "run" and a["closed_at"] is None])  # closed
-            for asset in ("/app.css", "/sign.js", "/app.js"):
+            for asset in ("/app.css", "/sign.js", "/objectives.js", "/app.js"):
                 self.assertEqual(urllib.request.urlopen(f"{url}{asset}").status, 200)
             main = state["main"]
             self.assertIn("initial", json.loads(urllib.request.urlopen(f"{url}/api/dossier/{main}").read())["message"])
@@ -170,7 +170,7 @@ class Telemetry(unittest.TestCase):
             labels = f'http_request_method="GET",http_route="/users/{{id}}",http_response_status_code="{status}"'
             out += [f'{name}_bucket{{{labels},le="0.1"}} {under}', f'{name}_bucket{{{labels},le="1"}} {n}',
                     f'{name}_bucket{{{labels},le="+Inf"}} {n}', f"{name}_count{{{labels}}} {n}"]
-        return "\n".join(out) + f"\nsome_other_metric 3\n"
+        return "\n".join(out) + "\nsome_other_metric 3\n"
 
     def test_rates_errors_quantiles_budget_and_restarts(self):
         from standard.surface.telemetry import Telemetry as T, declared_routes, quantile

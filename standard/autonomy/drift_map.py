@@ -7,12 +7,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from instruments.data import EMPTY
-from instruments.recipes import recipes_for
 
 from .concepts import AUTHORITY
 from .context import task_context
-from .read_model import ReadModel, target_state
+from .read_model import ReadModel
 
 
 def _task_for(tasks: list, target_id: str) -> Optional[dict]:
@@ -20,8 +18,8 @@ def _task_for(tasks: list, target_id: str) -> Optional[dict]:
                 next((t for t in tasks if t.get("target") == target_id), None))
 
 
-def _action(target: dict, task: Optional[dict], recipes: set) -> dict:
-    if target.get("human") or target.get("resource", "").startswith("org:"):
+def _action(target: dict, task: Optional[dict], role: dict) -> dict:
+    if role["level"] == "human":
         return {"owner": "human", "method": "attestation", "can_repair": False,
                 "why": "the target is organisational or explicitly human"}
     if not target.get("repair"):
@@ -30,7 +28,7 @@ def _action(target: dict, task: Optional[dict], recipes: set) -> dict:
     if task is None:
         return {"owner": "unknown", "method": "missing_task", "can_repair": False,
                 "why": "no projected task exists at this prefix"}
-    if target["id"] in recipes:
+    if role["method"] == "recipe":
         return {"owner": "agent", "method": "recipe", "can_repair": task.get("state") == "AVAILABLE",
                 "why": "a trusted recipe can be independently reproduced"}
     if task.get("state") == "HUMAN_REVIEW":
@@ -44,8 +42,8 @@ def gap_dossiers(view: dict, findings=None, routes=(), qualify=None, *, settings
                  model: ReadModel | None = None) -> list:
     """Return one deterministic dossier per target of the effective law."""
     model = model or ReadModel(view, findings, routes, qualify, settings=settings)
+    model.assert_view(view)
     tasks = model.plan(mode)["tasks"]
-    recipes = set(recipes_for(EMPTY))
     out = []
     for row in model.targets():
         target, finding = row["target"], row["finding"]
@@ -53,7 +51,7 @@ def gap_dossiers(view: dict, findings=None, routes=(), qualify=None, *, settings
         ctx_task = task or {"id": f"target:{target['id']}", "need": "repair" if target.get("repair") else "attest",
                             "op": target.get("repair"), "resource": target["resource"], "target": target["id"],
                             "opened": None, "due": None}
-        context = task_context(view, ctx_task, model.findings, settings=model.settings)
+        context = task_context(view, ctx_task, model=model)
         status = row["state"]
         out.append({"id": target["id"], "state": status,
                     "law": {k: target.get(k) for k in ("id", "resource", "property", "expect", "repair", "human",
@@ -63,11 +61,11 @@ def gap_dossiers(view: dict, findings=None, routes=(), qualify=None, *, settings
                     "obligations": row["debt"],
                     "route": {"task": task, "state": task and task.get("state"),
                               "choices": (task or {}).get("routes", [])},
-                    "action": _action(target, task, recipes),
+                    "action": _action(target, task, row["role"]),
                     "proof_to_close": context["proof_plan"],
                     "decision": context["decision"],
                     "autonomy": context["autonomy"],
-                    "methods": ["deterministic", "instrument"] + (["recipe"] if target["id"] in recipes else [])
+                    "methods": ["deterministic", "instrument"] + (["recipe"] if row["role"]["method"] == "recipe" else [])
                                + ["llm_reading"],
                     "authority": AUTHORITY["dossier"]})
     return out

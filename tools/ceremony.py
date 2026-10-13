@@ -184,7 +184,7 @@ store = "agent/store"
 
 def activate(args) -> None:
     d = Path(args.dir).resolve()
-    import toml_compat as tomllib
+    import tomllib
     c = tomllib.loads((d / "standard.toml").read_text())
     kernel = Kernel(RELEASE, code_digest())
     journal = Journal(d / c["ledger"]["journal"], kernel, PinStore(Path(c["ledger"]["pins"])), c["ledger"]["genesis"])
@@ -208,7 +208,7 @@ def separate(args) -> None:
     every key but the agent's; the agent owns only DIR/agent and reads the rest. The kernel of the host enforces it."""
     import grp
     import pwd
-    import toml_compat as tomllib
+    import tomllib
     d = Path(args.dir).resolve()
     c = tomllib.loads((d / "standard.toml").read_text())
     guard, agent = pwd.getpwnam(args.guard_user), pwd.getpwnam(args.agent_user)

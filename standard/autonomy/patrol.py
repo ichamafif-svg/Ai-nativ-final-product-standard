@@ -23,13 +23,14 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, settin
     """Context for a repo-wide or targeted law patrol."""
     model = model or ReadModel(view, findings, routes, qualify,
                                settings=settings if settings is not None else rules)
+    model.assert_view(view)
     law, findings, settings = model.law, model.findings, model.settings
     dossiers = gap_dossiers(view, model=model, mode=mode)
     selected = dossiers
     if focus:
         text = str(focus)
         selected = [d for d in dossiers if text in (d["id"], d["law"]["resource"]) or text in json.dumps(d["law"])]
-    weak = [d for d in selected if d["state"] in ("unknown", "unmeasured", "open")
+    weak = [d for d in selected if d["state"] in ("unknown", "unmeasured", "open", "attestation_due")
             or d["route"]["state"] in (None, "NO_ROUTE", "TRUST_BLOCKED")
             or d["action"]["method"] in ("missing_task", "llm_or_configured_scope")]
     return {"kind": "law-patrol", "mode": "targeted" if focus else "wide", "focus": focus,
@@ -37,7 +38,8 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, settin
             "read_model": {"basis": model.basis, "authority": model.graph()["authority"]},
             "effective_law": law, "system_settings": settings,
             "known_findings": findings,
-            "known_gaps": [d for d in selected if d["state"] in ("gap", "open", "escalated", "unmeasured")],
+            "known_gaps": [d for d in selected if d["state"] in ("gap", "open", "escalated", "unmeasured",
+                                                           "attestation_due")],
             "weak_spots": weak,
             "instruments": law.get("instruments", {}),
             "operations": law.get("ops", {}),

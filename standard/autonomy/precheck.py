@@ -40,29 +40,53 @@ def measure(tree, targets: dict, data) -> dict:
     return out
 
 
-def environment(requirements: Path, cache) -> str:
-    """A Python with the candidate's pinned dependencies, built outside the sandbox (it needs the index), from wheels
-    only so that no package's build code runs, and reused for the same requirements."""
+def environment(sandbox: Sandbox, requirements: Path, cache) -> str:
+    """Fetch inert wheels by exact name/version; install and start candidate dependencies only inside the jail."""
     import hashlib
     import subprocess
     import sys
+    from packaging.requirements import Requirement
+    test_environment = getattr(sandbox, "prepare_environment", None)
+    if callable(test_environment):
+        return test_environment(requirements, cache)
     if not requirements.exists() or cache is None:
         return sys.executable
+    if not sandbox.isolated:
+        raise RuntimeError("candidate dependency installation requires the network and filesystem jail")
+    packages = []
+    for line in requirements.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        req = Requirement(line)
+        specs = list(req.specifier)
+        if req.url or len(specs) != 1 or specs[0].operator != "==" or "*" in specs[0].version:
+            raise ValueError("candidate requirements must be exact package pins")
+        if req.marker is None or req.marker.evaluate():
+            packages.append(f"{req.name}{req.specifier}")
     venv = Path(cache) / hashlib.sha256(requirements.read_bytes()).hexdigest()[:16]
     python = venv / "bin" / "python"
     if not python.exists():
-        subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True, timeout=300)
-        r = subprocess.run([str(python), "-m", "pip", "install", "-q", "--only-binary=:all:", "-r", str(requirements)],
-                           capture_output=True, timeout=1800)
-        if r.returncode != 0:
-            import shutil
-            shutil.rmtree(venv, ignore_errors=True)
-            return sys.executable
-        probe = subprocess.run([str(python), "-m", "pytest", "--version"], capture_output=True, timeout=60)
-        if probe.returncode != 0:
-            import shutil
-            shutil.rmtree(venv, ignore_errors=True)
-            return sys.executable
+        Path(cache).mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="standard-wheels-") as wheels:
+            if packages:
+                download = subprocess.run([sys.executable, "-m", "pip", "download", "--isolated", "--only-binary=:all:",
+                                           "--dest", wheels, *packages], capture_output=True, timeout=1800)
+                if download.returncode:
+                    raise RuntimeError("candidate wheels unavailable: " + download.stderr.decode(errors="replace")[-300:])
+            created = sandbox.run([sys.executable, "-m", "venv", "--system-site-packages", str(venv)],
+                                  Path(cache), writable=(Path(cache),))
+            if not created.ok:
+                raise RuntimeError("candidate venv could not be isolated: " + created.out[-300:])
+            installed = sandbox.run([str(python), "-m", "pip", "install", "--isolated", "--no-index",
+                                     "--find-links", wheels, *packages], Path(cache), readable=(Path(wheels),),
+                                    writable=(Path(cache),)) if packages else None
+            if installed is not None and not installed.ok:
+                raise RuntimeError("candidate dependencies could not be isolated: " + installed.out[-300:])
+            probe = sandbox.run([str(python), "-m", "pytest", "--version"], Path(cache),
+                                writable=(Path(cache),))
+            if not probe.ok:
+                raise RuntimeError("candidate Python failed inside jail: " + probe.out[-300:])
     return str(python)
 
 
@@ -72,13 +96,14 @@ def suite(sandbox: Sandbox, store, base: str, head: str, cache=None) -> tuple[st
         if not (main_tree / "tests").is_dir():
             return "uncovered", ["main has no tests/"]
         try:
-            python = environment(code / "requirements.txt", cache)
+            python = environment(sandbox, code / "requirements.txt", cache)
         except Exception as exc:
             return "uncovered", [str(exc)]
         report = Path(tempfile.mkdtemp()) / "report.xml"
         (report.parent / "pytest.ini").write_text("[pytest]\n")
         result = sandbox.run([python, "-m", "pytest", "-c", report.parent / "pytest.ini", "--rootdir", code, "-p",
-                     "no:cacheprovider", "-q", f"--junitxml={report}", main_tree / "tests"], code, pythonpath=code)
+                     "no:cacheprovider", "-q", f"--junitxml={report}", main_tree / "tests"], code, pythonpath=code,
+                             readable=(main_tree, *([Path(cache)] if cache else [])), writable=(report.parent,))
         if not report.exists():
             return "uncovered", ["the suite produced no report"]
         try:

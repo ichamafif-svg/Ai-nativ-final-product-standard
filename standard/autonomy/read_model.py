@@ -6,17 +6,18 @@ The journal, Git and instrument records remain the sources of truth; this model 
 from __future__ import annotations
 
 import re
+import copy
+import hashlib
+import json
 
 from instruments.probes import PROBES
+from instruments.data import EMPTY
+from instruments.recipes import recipes_for
 from kernel.floor0 import FLOOR0, floor0_digest
+from standard.floors import COMPLIANCE_SCOPES
 
 from .projection import project
 
-PROJECTIONS = {
-    "ISO 27001": {"vulns", "secrets", "sast", "access", "suppliers", "incident", "backup", "crypto", "monitoring"},
-    "DORA": {"continuity", "backup", "incident", "resilience", "suppliers", "monitoring"},
-    "NIS2": {"vulns", "secrets", "sast", "deps-age", "incident", "continuity", "suppliers", "access", "crypto", "threat"},
-}
 EXTERNAL_REFERENCES = {
     "OWASP Agentic Top 10 2026": "https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/",
     "OWASP Agent Control Standard": "https://genai.owasp.org/resource/agent-control-standard-acs/",
@@ -37,10 +38,30 @@ def locations(details: list) -> list:
 
 
 def projection_labels(target: dict) -> list:
-    resource, ident = target["resource"], target["id"]
-    return [name for name, ids in PROJECTIONS.items()
-            if ident in ids or (name == "ISO 27001" and resource.startswith("org:"))
-            or (name == "DORA" and resource.startswith("run:"))]
+    return [scope["framework"] for scope in COMPLIANCE_SCOPES if target["id"] in scope["targets"]]
+
+
+def human_target(target: dict) -> bool:
+    return target.get("human") is True
+
+
+def work_role(target: dict) -> dict:
+    if human_target(target):
+        return {"actor": "people", "level": "human", "method": "attestation"}
+    if target["id"] in recipes_for(EMPTY) and target.get("repair"):
+        return {"actor": "agent", "level": "autonomous", "method": "recipe"}
+    if target.get("repair"):
+        return {"actor": "review", "level": "supervised", "method": "review"}
+    return {"actor": "agent", "level": "observed", "method": "observation"}
+
+
+def compliance_reading(target: dict, state: str, health_state: str) -> list[dict]:
+    """Coarse scope is informative even when the target is proven; it never certifies a control."""
+    status = "fault" if health_state == "FAULT" else "partial" if state == "held" else "missing"
+    return [{"framework": scope["framework"], "scope": scope["scope"], "clause": scope["clause"],
+             "source": scope["source"], "granularity": scope["granularity"], "status": status,
+             "authority": "projection_only", "certifies": False}
+            for scope in COMPLIANCE_SCOPES if target["id"] in scope["targets"]]
 
 
 def measurement_for(target: dict, law: dict) -> dict:
@@ -58,7 +79,7 @@ def measurement_for(target: dict, law: dict) -> dict:
         return {"kind": "conditional_program", "method": "instruments.production.measure", "declared": declared}
     if declared:
         return {"kind": "law_declared_instrument", "method": declared["method"], "declared": declared}
-    if target.get("human") or target["resource"].startswith("org:"):
+    if human_target(target):
         return {"kind": "manual", "method": "signed human attestation", "declared": None}
     return {"kind": "unmapped", "method": None, "declared": None}
 
@@ -68,6 +89,8 @@ def target_state(target: dict, finding: dict, debt: list, proven: bool) -> str:
     if any(item["state"] == "escalated" for item in debt):
         return "escalated"
     if debt:
+        if human_target(target):
+            return "attestation_due"
         status = finding.get("status")
         if status and str(status).startswith("uncovered"):
             return "unmeasured"
@@ -76,7 +99,7 @@ def target_state(target: dict, finding: dict, debt: list, proven: bool) -> str:
         return "open"
     if proven:
         return "held"
-    if target.get("human") or target["resource"].startswith("org:"):
+    if human_target(target):
         return "attestation_due"
     return "unknown"
 
@@ -86,19 +109,60 @@ class ReadModel:
 
     def __init__(self, view: dict, findings=None, routes=(), qualify=None, *, settings=None, main=None, inputs=None,
                  code_index=None):
-        self.view, self.law = view, view["law"]["effective"]
-        self.findings, self.settings = findings or {}, settings or {}
+        self.view = copy.deepcopy(view)
+        self.law = self.view["law"]["effective"]
+        self.findings, self.settings = copy.deepcopy(findings or {}), copy.deepcopy(settings or {})
         self.routes, self.qualify = tuple(routes), qualify or (lambda contracts: None)
-        self.basis = {"prefix": view["prefix"], "law_digest": view["law"]["digest"],
-                      "main": main, "inputs": inputs or {}}
+        captured = copy.deepcopy(inputs or {})
+        for name, document in (("findings", self.findings), ("settings", self.settings)):
+            encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), default=str).encode()
+            captured.setdefault(name, {})["digest"] = "sha256:" + hashlib.sha256(encoded).hexdigest()
+        self.basis = {"prefix": copy.deepcopy(view["prefix"]), "law_digest": view["law"]["digest"],
+                      "main": main, "inputs": captured}
         self.code_index = code_index
-        health = view["health"]
+        health = self.view["health"]
         if all(k in health for k in ("head", "size")) and (
                 health["head"], health["size"]) != (view["prefix"]["head"], view["prefix"]["size"]):
             raise ValueError("read model: health and law are from different journal prefixes")
         self._plans = {}
         self._targets = None
         self._graph = None
+
+    def assert_view(self, view: dict) -> None:
+        if (view["prefix"] != self.basis["prefix"] or view["law"]["digest"] != self.basis["law_digest"]):
+            raise ValueError("read model: consumer supplied a different journal or law basis")
+
+    def entity(self, resource: str) -> dict | None:
+        return self.view.get("entities", {}).get(resource)
+
+    def entities(self, kind: str | None = None) -> list[tuple[str, dict]]:
+        return [(resource, entity) for resource, entity in self.view.get("entities", {}).items()
+                if kind is None or entity.get("type") == kind]
+
+    def transition(self, resource: str) -> dict:
+        return self.view.get("transitions", {}).get(resource, {})
+
+    def transitions(self, prefix: str = "") -> list[tuple[str, dict]]:
+        return [(resource, properties) for resource, properties in self.view.get("transitions", {}).items()
+                if resource.startswith(prefix)]
+
+    def finding(self, resource: str, prop: str) -> dict:
+        return self.findings.get(f"{resource}|{prop}", {})
+
+    def facts_for(self, resource: str, prop: str | None = None) -> list[dict]:
+        return [fact for fact in self.view.get("facts", []) if fact.get("resource") == resource
+                and (prop is None or fact.get("property") == prop)]
+
+    def diagnostic_alignment(self, finding: dict) -> str:
+        main_at_measure = finding.get("input_main")
+        law_at_measure = finding.get("law_digest_at_read")
+        if ((self.basis["main"] and main_at_measure and main_at_measure != self.basis["main"])
+                or (law_at_measure and law_at_measure != self.basis["law_digest"])):
+            return "stale"
+        if (finding.get("measure_ref") and self.basis["main"] and main_at_measure == self.basis["main"]
+                and law_at_measure == self.basis["law_digest"]):
+            return "same_declared_inputs"
+        return "recorded_unbound" if finding.get("measure_ref") else "unverified"
 
     def plan(self, mode="RUN") -> dict:
         if mode not in self._plans:
@@ -120,21 +184,10 @@ class ReadModel:
             facts.setdefault((fact.get("resource"), fact.get("property")), []).append(fact)
         rows = []
         for target in self.law.get("targets", []):
-            finding = self.findings.get(f"{target['resource']}|{target['property']}", {})
+            finding = self.finding(target["resource"], target["property"])
             measure = measurement_for(target, self.law)
             diagnostic = finding.get("status")
-            main_at_measure = finding.get("input_main")
-            law_at_measure = finding.get("law_digest_at_read")
-            if ((self.basis["main"] and main_at_measure and main_at_measure != self.basis["main"])
-                    or (law_at_measure and law_at_measure != self.basis["law_digest"])):
-                aligned = "stale"
-            elif (finding.get("measure_ref") and self.basis["main"] and main_at_measure == self.basis["main"]
-                  and law_at_measure == self.basis["law_digest"]):
-                aligned = "same_declared_inputs"
-            elif finding.get("measure_ref"):
-                aligned = "recorded_unbound"
-            else:
-                aligned = "unverified"
+            aligned = self.diagnostic_alignment(finding)
             status = target_state(target, {} if aligned == "stale" else finding,
                                   debt.get(target["id"], []), target["id"] in proof)
             conflict = bool(aligned != "stale" and finding and not str(diagnostic).startswith("uncovered")
@@ -143,7 +196,9 @@ class ReadModel:
                          "proof": proof.get(target["id"]),
                          "facts": facts.get((target["resource"], target["property"]), []),
                          "measurement": measure, "locations": locations(finding.get("details", [])),
-                         "projections": projection_labels(target), "state": status,
+                         "projections": projection_labels(target),
+                         "compliance": compliance_reading(target, status, health.get("state", "unknown")),
+                         "role": work_role(target), "state": status,
                          "diagnostic_conflict": conflict, "diagnostic_alignment": aligned})
         self._targets = rows
         return rows
@@ -193,7 +248,7 @@ class ReadModel:
                 edge(f"code:{self.basis['main']}", "contains", f"code:{path}", "git_ast_index")
                 for imported in sorted(self.code_index.imports[path]):
                     edge(f"code:{path}", "imports", imported, "git_ast_index", "syntactic")
-        for label in PROJECTIONS:
+        for label in (scope["framework"] for scope in COMPLIANCE_SCOPES):
             node(f"external:{label}", "external_reference", {"mapping": "coarse_projection_only"},
                  "local_projection")
         for label, url in EXTERNAL_REFERENCES.items():

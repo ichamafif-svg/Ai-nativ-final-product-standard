@@ -18,6 +18,7 @@ from standard.autonomy.memory import Memory  # noqa: E402
 from standard.autonomy.precheck import precheck  # noqa: E402
 from standard.autonomy.repomap import RepoMap  # noqa: E402
 from standard.autonomy.sandbox import Sandbox  # noqa: E402
+from local_sandbox import LocalSandbox  # noqa: E402
 from standard.floors import FLOORS  # noqa: E402
 from instruments import probes as instruments  # noqa: E402
 from instruments.data import EMPTY  # noqa: E402
@@ -71,24 +72,49 @@ class Findings(unittest.TestCase):
 
 
 class SandboxIsolation(unittest.TestCase):
+    def test_unconfigured_cache_is_not_mounted_by_name(self):
+        box = Sandbox(timeout=5)
+        box.isolated = True
+        cache = ROOT / "venvs"
+        self.assertEqual(box.run(["true"], cache).code, 126)
+        self.assertIn("outside scratch", box.run(["true"], cache).out)
+
     def test_no_network_no_inherited_secret_and_a_deadline(self):
         box = Sandbox(timeout=5)
+        work = tempfile.mkdtemp()
+        if not box.isolated:
+            self.assertEqual(box.run([sys.executable, "-c", "print('unsafe')"], work).code, 126)
+            return
         os.environ["STANDARD_TEST_SECRET"] = "s3cr3t"
         try:
-            env = box.run([sys.executable, "-c", "import os; print(os.environ.get('STANDARD_TEST_SECRET'))"], "/")
+            env = box.run([sys.executable, "-c", "import os; print(os.environ.get('STANDARD_TEST_SECRET'))"], work)
             self.assertEqual(env.out.strip(), "None")
         finally:
             del os.environ["STANDARD_TEST_SECRET"]
-        if box.isolated:
-            net = box.run([sys.executable, "-c", "import socket; socket.create_connection(('1.1.1.1', 80), 2)"], "/")
-            self.assertFalse(net.ok)
-        self.assertEqual(box.run(["sleep", "30"], "/").code, 124)
+        net = box.run([sys.executable, "-c", "import socket; socket.create_connection(('1.1.1.1', 80), 2)"], work)
+        self.assertFalse(net.ok)
+        self.assertEqual(box.run(["sleep", "30"], work).code, 124)
+
+    def test_a_candidate_cannot_read_a_sibling_key(self):
+        box = Sandbox(timeout=5)
+        if not box.isolated:
+            self.skipTest("candidate jail unavailable on this host")
+        root = Path(tempfile.mkdtemp())
+        work = root / "work"
+        work.mkdir()
+        key = root / "agent.key"
+        key.write_text("PRIVATE")
+        result = box.run([sys.executable, "-c", f"open({str(key)!r}).read()"], work)
+        self.assertNotEqual(result.code, 0)
+        self.assertNotIn("PRIVATE", result.out)
 
 
 class WholeLaw(unittest.TestCase):
     def setUp(self):
         self.store, self.base = store_with()
         self.box = Sandbox()
+        if not self.box.isolated:
+            self.skipTest("candidate jail unavailable on this host")
 
     def candidate(self, files):
         from standard.autonomy.agent import commit_files
@@ -133,7 +159,7 @@ class Model(unittest.TestCase):
             return json.dumps(replies.pop(0))
         log = store.parent / "egress.log"
         agent = Agent(Signer(), "cap", store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")}, log,
-                                                       transport=transport))
+                                                       transport=transport), sandbox=LocalSandbox())
         finding = {"status": "found:1", "details": ["app.py:1:secret-rule-0"]}
         head, route = agent.craft("secrets", base, targets=TARGETS, finding=finding)
         self.assertEqual(route, "review")
@@ -191,6 +217,7 @@ class Memory_(unittest.TestCase):
         class Engine:
             def __init__(self):
                 self.claims = 0
+                self.records = []
 
             def sync(self, plan):
                 pass
@@ -201,6 +228,9 @@ class Memory_(unittest.TestCase):
 
             def complete_attempt(self, **kw):
                 pass
+
+            def record(self, **kw):
+                self.records.append(kw)
 
         class Failing:
             def craft(self, *a, **kw):
@@ -214,9 +244,13 @@ class Memory_(unittest.TestCase):
         cycle = Cycle(Service(), Engine(), Failing(), [], clock=lambda: 1, main=lambda: "b1",
                       state_path=root / "proposals.json", memory=Memory(root / "memory.json", budget=2))
         self.assertEqual(cycle.run()["submitted"]["ci"], "agent: nothing passes")
+        self.assertEqual(cycle.engine.records[0]["basis"]["main"], "b1")
         cycle.run()
         self.assertEqual(cycle.run()["submitted"]["ci"], "abandoned: waiting for people")
         self.assertIn("nothing passes", Memory(root / "memory.json").abandoned("ci", "b1"))
+        cycle.agent.sandbox = type("Unavailable", (), {"isolated": False})()
+        self.assertEqual(cycle.run()["submitted"]["ci"], "trust blocked: candidate jail unavailable")
+        self.assertEqual(cycle.engine.records[-1]["reason_code"], "candidate_jail_unavailable")
 
 
 class Map(unittest.TestCase):

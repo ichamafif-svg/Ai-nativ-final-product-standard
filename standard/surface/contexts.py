@@ -20,11 +20,12 @@ def common_context(view: dict, settings: dict) -> dict:
 
 def target_context(view: dict, findings: dict, settings: dict, routes, qualify, ident: str,
                    model: ReadModel | None = None) -> dict:
-    law = view["law"]["effective"]
-    target = next((t for t in law["targets"] if t["id"] == ident), None)
-    if target is None:
-        raise ValueError("unknown target")
     model = model or ReadModel(view, findings, routes, qualify, settings=settings)
+    model.assert_view(view)
+    row = model.target(ident)
+    if row is None:
+        raise ValueError("unknown target")
+    target = row["target"]
     plan = model.plan()
     tasks = [t for t in plan["tasks"] if t.get("target") == ident]
     task = next((t for t in tasks if t["need"] in ("repair", "review")),
@@ -46,14 +47,14 @@ def target_context(view: dict, findings: dict, settings: dict, routes, qualify, 
 
 def request_context(view: dict, findings: dict, settings: dict, requests, ident: str, main: str,
                     model: ReadModel | None = None) -> dict:
-    law = view["law"]["effective"]
+    model = model or ReadModel(view, findings, settings=settings, main=main)
+    model.assert_view(view)
     resource = f"build:request/{ident}"
-    entity = view.get("entities", {}).get(resource)
+    entity = model.entity(resource)
     if not entity or entity.get("type") != "request":
         raise ValueError("unknown request")
     spec, contract = (load(requests, entity["fields"][k]) for k in ("spec", "contract"))
-    features = [{"resource": r, "facts": facts} for r, facts in view.get("transitions", {}).items()
-                if r.startswith(f"repo:feature:{ident}/")]
+    features = [{"resource": r, "facts": facts} for r, facts in model.transitions(f"repo:feature:{ident}/")]
     ctx = task_context(view, {"id": f"request:{ident}", "need": "implement", "op": "implement",
                               "resource": resource, "target": None, "opened": entity.get("created"),
                               "due": None}, findings, settings=settings, model=model)
@@ -62,7 +63,7 @@ def request_context(view: dict, findings: dict, settings: dict, requests, ident:
                         "main": main, "contract_path": contract_path(ident), "decision": ctx["decision"]},
             "request": {"spec": spec.decode(errors="replace") if spec else None,
                         "contract": contract.decode(errors="replace") if contract else None,
-                        "facts": view["transitions"].get(resource, {})},
+                        "facts": model.transition(resource)},
             "law": ctx["law_trace"],
             "proof": {**ctx["proof_plan"], "features": features, "delivery": ["accepted = yes for delivery"]},
             "agent": {**ctx["autonomy"],
