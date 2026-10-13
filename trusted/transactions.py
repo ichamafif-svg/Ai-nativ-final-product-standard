@@ -51,6 +51,8 @@ class Boundary:
         self.evidence, self.index, self.contracts = evidence, Path(index), contracts
         self.programs, self.clock, self.ledger = programs, clock, ledger
         self.jobs = {job: name for name, c in contracts["observe"].items() for job in c["jobs"]}
+        if any(profile not in PROFILES for profile in contracts["effect"].values()):
+            raise ValueError(f"an effect contract names a profile outside {PROFILES}")
 
     def record(self, kind: str, identity: str, subject, authority, contract, material, outcome, answers=()) -> str:
         bt = {"bt": kind, "id": f"bt-{uuid.uuid4().hex}", "at": self.clock(), "identity": identity, "subject": subject,
@@ -59,11 +61,18 @@ class Boundary:
         ref = self.evidence.put(json.dumps(bt, sort_keys=True).encode())
         with open(self.index, "a") as f:
             f.write(json.dumps({"at": bt["at"], "bt": kind, "ref": ref, "subject": subject if isinstance(subject, str)
-                                else subject.get("job"), "outcome": outcome}) + "\n")
+                                else subject.get("job"), "key": authority.get("key"), "outcome": outcome}) + "\n")
         return ref
 
+    def effect_of(self, key: str) -> list:
+        """The effect transactions a reservation produced, for RESOLVE to answer."""
+        if not key or not self.index.exists():
+            return []
+        rows = (json.loads(line) for line in self.index.read_text().splitlines() if line.strip())
+        return [r["ref"] for r in rows if r["bt"] == "effect" and r.get("key") == key]
+
     # ---- OBSERVE --------------------------------------------------------------------------------------------------
-    def observe(self, host, identity: str, job: str, inputs: dict, *, network=False, cache=True) -> dict:
+    def observe(self, host, identity: str, job: str, inputs: dict, *, network=False, cache=True, answers=()) -> dict:
         """Run one job through the host; keep what its contract lets it say. -> {"facts": [(resource, property,
         status, details)], "method", "ref", "refused", "extra"} or {"error"}."""
         name = self.jobs.get(job)
@@ -81,7 +90,7 @@ class Boundary:
         ref = self.record("observe", identity, {"job": job, "resources": sorted({f[0] for f in kept})},
                           {"contract": name or "plan"},
                           {"form": c["form"], "attested": c.get("attested", [])},
-                          {"run": run, "programs": host.method}, "refused" if refused else "established")
+                          {"run": run, "programs": host.method}, "refused" if refused else "established", answers)
         return {"facts": kept, "refused": refused, "method": f"{self.programs}/{name}", "ref": ref,
                 "extra": out.get("extra", {}), "jobs": out.get("jobs")}
 
@@ -94,17 +103,10 @@ class Boundary:
                                                      ["capture"]["attested"]},
                            {"points": [list(p) for p in points]}, "established")
 
-    # ---- EFFECT ---------------------------------------------------------------------------------------------------
-    def port(self, adapters: dict) -> EffectPort:
-        """The guard's port: each operation reaches only an adapter whose profile is the contract's."""
-        return BoundaryPort(self, adapters)
-
-    # ---- RESOLVE --------------------------------------------------------------------------------------------------
-    def resolver(self, adapters: dict, signer: Signer, capability: str):
-        return Resolve(self, adapters, signer, capability)
-
 
 class BoundaryPort(EffectPort):
+    """EFFECT: the guard's port; each operation reaches only an adapter whose profile is the contract's."""
+
     def __init__(self, boundary: Boundary, adapters: dict):
         super().__init__({op: a.perform for op, a in adapters.items()})
         self.boundary, self.adapters = boundary, dict(adapters)
@@ -124,7 +126,7 @@ class BoundaryPort(EffectPort):
 
 
 class Resolve:
-    """T08 and the proof of application (D38 RESOLVE), for the oracle's identity."""
+    """RESOLVE: T08 and the proof of application, for the oracle's identity."""
 
     def __init__(self, boundary: Boundary, adapters: dict, signer: Signer, capability: str):
         self.boundary, self.adapters, self.signer, self.capability = boundary, adapters, signer, capability
@@ -148,7 +150,8 @@ class Resolve:
             seen = "not_applied"                            # nothing left the guard for this reservation
         outcome = seen if seen in ("applied", "not_applied") else "unknown"
         self.boundary.record("resolve", self.signer.identity, it["resource"], {"key": key, "intent": intent_id},
-                             {"profile": getattr(adapter, "profile", None)}, {"read": seen}, outcome)
+                             {"profile": getattr(adapter, "profile", None)}, {"read": seen}, outcome,
+                             self.boundary.effect_of(key))
         if outcome == "unknown":
             return None
         body = {"id": f"rec-{uuid.uuid4().hex}", "at": max(self.boundary.clock(), state["last_at"] + 1),

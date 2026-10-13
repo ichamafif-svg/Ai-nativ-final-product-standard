@@ -107,7 +107,7 @@ class Instruments:
 
     def measure(self) -> dict:
         me = self.instrument.signer.identity
-        self.boundary.capture(me, self.host.observe(self.sources, self.fetch))
+        captured = self.boundary.capture(me, self.host.observe(self.sources, self.fetch))
         view = self.service.view()
         domain, law = view["prefix"]["genesis"], view["law"]["effective"]
         plan = self.boundary.observe(self.host, me, "plan", {"subjects": {"value": self.subjects()}}, cache=False)
@@ -117,7 +117,7 @@ class Instruments:
         for job in plan["jobs"]:
             live = job["job"] == "production"
             out = self.boundary.observe(self.host, me, job["job"], job["inputs"], network=job.get("network", False),
-                                        cache=not live)
+                                        cache=not live, answers=[captured] if live and captured else [])
             if "error" in out:
                 errors[job["job"]] = out["error"]
                 continue

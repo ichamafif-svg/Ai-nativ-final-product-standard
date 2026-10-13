@@ -36,7 +36,7 @@ from .register import Registers
 from .release import code_digest
 from .service import TrustedService
 from .signing import Signer, entry
-from .transactions import Boundary, ledger_of
+from .transactions import Boundary, BoundaryPort, Resolve, ledger_of
 
 
 def key(keys_dir: Path, identity: str) -> Signer:
@@ -94,10 +94,10 @@ class Installation:
         self.boundary = Boundary(evidence, self.path.parent / "transactions.jsonl", CONTRACTS, PROGRAMS, self.clock,
                                  ledger=lambda: ledger_of(self.journal))
         effects = {op: self.repository for op in MAIN_OPS} | (self.releases.effects() if self.releases else {})
-        self.resolve = self.boundary.resolver(effects, key(self.keys, "oracle"), grants["oracle"])
+        self.resolve = Resolve(self.boundary, effects, key(self.keys, "oracle"), grants["oracle"])
         self.service = TrustedService(
             self.journal, boundary=SignedAssessment(assessment, assessors), clock=self.clock,
-            guard_signer=key(self.keys, "guard"), effect_port=self.boundary.port(effects), reconciliation=self.resolve)
+            guard_signer=key(self.keys, "guard"), effect_port=BoundaryPort(self.boundary, effects), reconciliation=self.resolve)
         names = {gid: name for name, gid in grants.items()}
         self.instruments = Instruments(
             self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock), self.host, self.boundary,

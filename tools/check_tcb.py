@@ -13,7 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUDGETS = json.loads((ROOT / "tcb-budget.json").read_text())
-EXTERNAL = {"cryptography"}
 STANDARD = {"kernel", "trusted", "floors", "instruments", "autonomy", "surface", "compliance", "tools", "tests"}
 ALLOWED = {
     "kernel": {"kernel"},

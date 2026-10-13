@@ -27,7 +27,7 @@ from .data import EMPTY, TrustedData
 from .recipes import recipes_for
 from .tree import DirTree, Measure, verdict
 
-RULES, RULES_TRAILER = "standard/rules.json", re.compile(r"(?m)^Standard-Rules: (sha256:[0-9a-f]{64})$")
+RULES, RULES_TRAILER = production.RULES, re.compile(r"(?m)^Standard-Rules: (sha256:[0-9a-f]{64})$")
 TARGET_TRAILER = re.compile(r"(?m)^Standard-Target: ([a-z-]+)$")
 AUTHOR = re.compile(r"refs/heads/([a-z0-9][a-z0-9_-]{0,63})/[^\s]+")
 

@@ -3,19 +3,17 @@ import base64
 import copy
 import json
 import os
-import socket
 import tempfile
 import threading
 import unittest
 
-from fixture import CODE, HOUR, Keys, Ledger, client_law
+from fixture import CODE, Ledger
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from floors import RELEASE
 from kernel import Kernel, Refused, canon, digest
-from kernel.floor0 import DISPATCH_MS
 from trusted import (AdmissionGateway, Checker, ClockError, Disagreement, EffectPort, EscalationOutbox,
                      GatewayClient, Halted, Journal, PinStore, SignedAssessment, Signer, TrustUnavailable,
                      TrustedService, WitnessClock, required_for)

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -81,7 +80,6 @@ class Installation:
                                    run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100,
                                    interval=float(run.get("interval", 15)))
         self.rollback = bool(c.get("deploy")) and "agent_rollback" in c["grants"]     # D30: can act in production
-        self.slo_db = base / "slo.db"
         self.requests = resolve(c.get("build", {}).get("store", "requests"))          # D34: specs and contracts
         self.request_notes = agent / "requests.json"                                                   # D32: the operator's SLO data
         self.telemetry.extra = self.burning
@@ -490,8 +488,10 @@ class Installation:
         if not self.deploy_root:
             return None
         try:
-            release = Path(os.readlink(self.deploy_root / "canary")).name
+            release = (self.deploy_root / "canary").read_text().strip()   # a register the guard writes (D37)
         except OSError:
+            return None
+        if not release:
             return None
         start = next((h for h in reversed(history) if h.get("op") == "canary" and h.get("to") == release), {})
         return {"release": release, "since": start.get("at"), "percent": start.get("percent")}

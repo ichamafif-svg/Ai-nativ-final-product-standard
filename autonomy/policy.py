@@ -10,7 +10,7 @@ holds the floors' bounds (the least evidence on which the agent may act alone in
 revocation or a freeze apply at once, widening waits for the witnessed delay); inside them, a setting applies as soon
 as main carries it. A setting that asks for less than the law (a lower burn threshold, a longer horizon) changes
 nothing the agent may do: the kernel refuses, and the interface says so. The scanner reads from the same file only
-what to measure (trusted/runtime.py `measures`).
+what to measure (instruments/production.py `measures`).
 
     global   health rules       objective (%), failing (%), p99_ms, window_s, late_periods
              alerting           burn_fast, burn_slow (multiples of the budget rate; the classic 14.4 and 6)

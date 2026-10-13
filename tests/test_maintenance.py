@@ -15,7 +15,7 @@ from fixture import Ledger, client_law
 from autonomy import Agent, Cycle, Route, WorkEngine
 from trusted import Journal, PinStore, Signer, TrustedService
 from trusted.adapters import GitRepository
-from trusted.transactions import Boundary, ledger_of
+from trusted.transactions import Boundary, BoundaryPort, Resolve, ledger_of
 from instruments.data import TrustedData
 from trusted.host import Evidence, Host
 from trusted.operator import Instrument, Instruments, Prover
@@ -105,10 +105,10 @@ class Stand(unittest.TestCase):
         self.boundary = Boundary(self.host.evidence, root / "transactions.jsonl", CONTRACTS, PROGRAMS, clock,
                                  ledger=lambda: ledger_of(self.journal))
         effects = {"remediate": git_repo}
-        resolve = self.boundary.resolver(effects, signer("oracle"), self.oracle_cap)
+        resolve = Resolve(self.boundary, effects, signer("oracle"), self.oracle_cap)
         self.service = TrustedService(
             self.journal, boundary=Verified(), clock=clock, guard_signer=signer("guard"),
-            effect_port=self.boundary.port(effects), reconciliation=resolve)
+            effect_port=BoundaryPort(self.boundary, effects), reconciliation=resolve)
         self.instruments = Instruments(self.service, Instrument(signer("scanner"), self.scanner_cap, clock),
                                        self.host, self.boundary, self.repo, self.store)
         self.signer = signer

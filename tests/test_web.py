@@ -16,8 +16,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
 import ceremony  # noqa: E402
-from kernel.canon import canon  # noqa: E402
-from kernel.identity import open_envelope, statement, verify  # noqa: E402
+from kernel.identity import open_envelope, verify  # noqa: E402
 from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
@@ -171,7 +170,7 @@ class Telemetry(unittest.TestCase):
             labels = f'http_request_method="GET",http_route="/users/{{id}}",http_response_status_code="{status}"'
             out += [f'{name}_bucket{{{labels},le="0.1"}} {under}', f'{name}_bucket{{{labels},le="1"}} {n}',
                     f'{name}_bucket{{{labels},le="+Inf"}} {n}', f"{name}_count{{{labels}}} {n}"]
-        return "\n".join(out) + f"\nsome_other_metric 3\n"
+        return "\n".join(out) + "\nsome_other_metric 3\n"
 
     def test_rates_errors_quantiles_budget_and_restarts(self):
         from surface.telemetry import Telemetry as T, declared_routes, quantile

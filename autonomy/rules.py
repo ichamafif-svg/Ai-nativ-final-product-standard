@@ -12,12 +12,12 @@ import json
 import uuid
 from pathlib import Path
 
+from instruments.production import RULES
 from instruments.suite import load
 from trusted.signing import Signer, envelope
 
 from .agent import AgentError, commit_files
 
-RULES = "standard/rules.json"
 
 
 class Configurer:

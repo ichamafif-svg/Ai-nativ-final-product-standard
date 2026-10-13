@@ -9,12 +9,9 @@ Each register is a small file in a directory the guard owns, replaced atomically
 appended to history.jsonl with its reservation key, then made. The guard never builds or exports a release: the
 product's runner reads the commit from the canonical repository by its hash (tools/run_release.py).
 
-D38, as boundary transactions: deploy, rollback, canary and abort are `cas` effects on the registers themselves:
-applied when this key's move is in the history and the registers show it; not_applied when the key never reached the
-history (the move runs to completion under the lock, nothing can still land). A restart is `observable`: the guard
-only writes the request; the runner restarts; it is applied when the production program sees a process of that
-release started after the request, never not_applied once the request was written. Serving the release is the
-purpose, proven separately (`satisfied`): the version the product reports is the one switched to.
+D38: deploy, rollback, canary and abort are `cas` effects (applied: this key's move is in the history and shown;
+not_applied: the key never reached the history); a restart is `observable` (applied once a process of that release
+started after the request; never not_applied once written). Serving the release is the purpose, proven apart.
 """
 from __future__ import annotations
 

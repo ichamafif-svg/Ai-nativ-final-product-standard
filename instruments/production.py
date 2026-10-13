@@ -19,10 +19,24 @@ import hashlib
 import math
 import re
 
+
+FAILING, FAST = 0.05, 14.4      # what breaks run:service:all slo (the target; rights are the law's bounds)
+KINDS = ("api", "worker", "job", "database", "dependency", "process", "probe")
+OUTSIDE = ("dependency",)   # an external service's own failures are shown, not counted against the product's objective
+BUCKETS = ("0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10", "+Inf")
+SPANS = {"5m": 5, "30m": 30, "1h": 60, "6h": 360}
+MIN_EVENTS = 20
+PREMISES = ("candidate", "previous", "proven", "live", "running", "good")
+RULES = "standard/rules.json"      # D35: the engineers' rules, in the product's repository
+PROBE = re.compile(r"(GET|HEAD|POST) (/[A-Za-z0-9._~/?=&%-]{0,200}) ([1-5][0-9][0-9])")
+SELECTOR = re.compile(r"counted|all|kind:(api|worker|job|database|dependency|probe)|c-[0-9a-f]{12}(,c-[0-9a-f]{12}){0,31}")
+MIGRATION = re.compile(r"migrations/(\d+)[^/]*\.sql")
 LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+([-+0-9.eE]+|NaN|\+Inf|-Inf)(?:\s+-?\d+)?$')
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
-FAILING, FAST = 0.05, 14.4      # what breaks run:service:all slo (the target; rights are the law's bounds)
+RELEASE_LINE = re.compile(r'^standard_release_(requests_total|duration_seconds_bucket)\{(.*)\}\s+([-+0-9.eE]+)$')
 
+
+# ---- reading metrics (Prometheus text, OpenTelemetry conventions) ----------------------------------------------------
 
 def _pick(labels: dict, *keys, default=None):
     return next((labels[k] for k in keys if labels.get(k)), default)
@@ -42,6 +56,8 @@ HISTOGRAMS = {   # family -> (kind, labels -> (operation, name))
     "http_client_request_duration_seconds": ("dependency", lambda l: (
         _pick(l, "http_request_method", "method", default="GET").upper(), _pick(l, "server_address", "net_peer_name"))),
 }
+
+
 GAUGES = {       # family -> (kind, field, labels naming the row)
     "messaging_queue_depth": ("worker", "backlog", ("messaging_destination_name", "queue")),
     "job_last_success_timestamp_seconds": ("job", "last_success", ("job", "job_name")),
@@ -53,8 +69,6 @@ GAUGES = {       # family -> (kind, field, labels naming the row)
     "process_start_time_seconds": ("process", "started", ("job", "service_name")),
     "build_info": ("release", "info", ("version", "service_version")),   # which release answers (D31)
 }
-KINDS = ("api", "worker", "job", "database", "dependency", "process", "probe")
-OUTSIDE = ("dependency",)   # an external service's own failures are shown, not counted against the product's objective
 
 
 def _failed(labels: dict) -> bool:
@@ -135,10 +149,35 @@ def stats(ds: list, seconds: float, slo: float) -> dict:
             "p50": ms(0.5), "p95": ms(0.95), "p99": ms(0.99)}
 
 
-RULES = "standard/rules.json"      # D35: the engineers' rules, in the product's repository
-PROBE = re.compile(r"(GET|HEAD|POST) (/[A-Za-z0-9._~/?=&%-]{0,200}) ([1-5][0-9][0-9])")
-SELECTOR = re.compile(r"counted|all|kind:(api|worker|job|database|dependency|probe)|c-[0-9a-f]{12}(,c-[0-9a-f]{12}){0,31}")
+def parse_releases(text: str) -> dict:
+    """{release: {"count", "errors", "buckets"}} from the runner's own measures (tools/run_release.py): what each
+    release answered, seen from in front of it."""
+    out = {}
+    for raw in text.splitlines():
+        m = RELEASE_LINE.match(raw.strip())
+        if not m:
+            continue
+        labels, value = dict(LABEL.findall(m[2])), float(m[3])
+        e = out.setdefault(labels.get("release", "?"), {"count": 0.0, "errors": 0.0, "buckets": {}})
+        if m[1] == "requests_total":
+            e["count"] += value
+            e["errors"] += value if labels.get("outcome") == "error" else 0.0
+        else:
+            e["buckets"][labels["le"]] = e["buckets"].get(labels["le"], 0.0) + value
+    return out
 
+
+def release_stats(points: list, release: str, since: int) -> dict | None:
+    """Requests, error rate and p99 the runner saw for one release since a moment (canary analysis)."""
+    window = [(at, per.get(release)) for at, per in points if at >= since and per.get(release)]
+    if len(window) < 2:
+        return None
+    (_, a), (_, b) = window[0], window[-1]
+    s = stats(deltas([(0, a["count"], a["errors"], a["buckets"]), (1, b["count"], b["errors"], b["buckets"])]), 1, 0.999)
+    return {"requests": s["requests"], "error_rate": s["error_rate"], "p99": s["p99"]}
+
+
+# ---- what to measure: the rules file on main (D35) -------------------------------------------------------------------
 
 def component_id(kind: str, operation: str, name: str) -> str:
     return "c-" + hashlib.sha256(f"{kind}|{operation or ''}|{name}".encode()).hexdigest()[:12]
@@ -179,40 +218,7 @@ def measures(doc) -> dict:
             "slos": {k: v for k, v in slos.items() if v["state"] == "on" and (v["sli"] != "latency" or v["threshold_ms"])}}
 
 
-RELEASE_LINE = re.compile(r'^standard_release_(requests_total|duration_seconds_bucket)\{(.*)\}\s+([-+0-9.eE]+)$')
-
-
-def parse_releases(text: str) -> dict:
-    """{release: {"count", "errors", "buckets"}} from the runner's own measures (tools/run_release.py): what each
-    release answered, seen from in front of it."""
-    out = {}
-    for raw in text.splitlines():
-        m = RELEASE_LINE.match(raw.strip())
-        if not m:
-            continue
-        labels, value = dict(LABEL.findall(m[2])), float(m[3])
-        e = out.setdefault(labels.get("release", "?"), {"count": 0.0, "errors": 0.0, "buckets": {}})
-        if m[1] == "requests_total":
-            e["count"] += value
-            e["errors"] += value if labels.get("outcome") == "error" else 0.0
-        else:
-            e["buckets"][labels["le"]] = e["buckets"].get(labels["le"], 0.0) + value
-    return out
-
-
-BUCKETS = ("0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10", "+Inf")
-
-
-def _n(x) -> str:
-    """A number the law can compare: a bounded decimal string, never a float."""
-    return f"{max(-1e11, min(1e11, x or 0)):.3f}"
-
-
-
-
-SPANS = {"5m": 5, "30m": 30, "1h": 60, "6h": 360}
-MIN_EVENTS = 20
-
+# ---- SLOs: error budgets and burn rates (D32) ------------------------------------------------------------------------
 
 def matches(selector: str, cid: str, kind: str, counted) -> bool:
     if selector == "all":
@@ -259,64 +265,7 @@ def evaluate(rows: list, slos: dict, now_minute: int, *, counted) -> dict:
     return out
 
 
-def release_facts(live: str | None, main: str, history: list, good: set, now_ms: int, numbers: dict, *,
-                  served: str | None = None, crossed=lambda live, prev: 0, canary: str | None = None,
-                  canary_stats=lambda release, since: None) -> list:
-    """What is, on each exact switch, as (resource, property, status):
-
-    run:release:all/{live}/{main}     candidate  main moved and its head was never stepped back from; budget_pct; and
-                                                 when main runs as the canary, its numbers against the live release
-    run:canary:all/{live}/{main}      candidate  the same, beside a live release and no canary yet
-    run:canary:abort/{live}/{canary}  running    a canary runs
-    run:service:all/{live}/{prev}     previous   prev is what live replaced, never stepped back from, and its code runs
-                                                 on live's schema; proven when it met the objective (or still answers);
-                                                 switched_min, unanswered_s, migrations_crossed, burn_fast, failing_pct
-    run:process:all/{live}/{n}        live       the n-th restart of the live release; restarts_last_hour, the rest"""
-    stepped = {h["from"] for h in history if h.get("op") == "rollback"} | {
-        h["to"] for h in history if h.get("op") == "abort"}
-    live_name, now = live or "none", [(k, _n(numbers.get(k))) for k in ("burn_fast", "failing_pct")]
-    facts = [("run:release:all", "lag", "none" if (served or live) == main and live == main else "behind")]
-    if live != main and main not in stepped:
-        r = f"run:release:all/{live_name}/{main}"
-        facts += [(r, "candidate", "yes"), (r, "budget_pct", _n(100 if numbers.get("budget_pct") is None else numbers["budget_pct"]))]
-        if live and canary is None:
-            facts.append((f"run:canary:all/{live}/{main}", "candidate", "yes"))
-        if live and canary == main:
-            started = next((h["at"] for h in reversed(history) if h.get("op") == "canary" and h.get("to") == main), now_ms)
-            c, s = canary_stats(main, started // 1000) or {}, canary_stats(live, started // 1000) or {}
-            facts += [(r, "canary_error_delta", _n(((c.get("error_rate") or 0) - (s.get("error_rate") or 0)) * 100)),
-                      (r, "canary_requests", str(int(c.get("requests", 0)))),
-                      (r, "canary_baked_min", str((now_ms - started) // 60_000)),
-                      (r, "canary_p99_ms", _n(c.get("p99"))), (r, "live_p99_ms", _n(s.get("p99"))),
-                      (r, "canary_error_pct", _n((c.get("error_rate") or 0) * 100)),
-                      (r, "live_error_pct", _n((s.get("error_rate") or 0) * 100)),
-                      (r, "live_requests", str(int(s.get("requests", 0))))]
-    if canary is not None:
-        facts.append((f"run:canary:abort/{live_name}/{canary}", "running", "yes"))
-    switch = next((h for h in reversed(history) if h.get("to") == live and h.get("op") != "restart"), None)
-    age = now_ms - switch["at"] if switch else 10 ** 9
-    prev = switch["from"] if switch else "none"
-    if live and prev != "none" and prev not in stepped and (n := crossed(live, prev)) is not None:
-        r = f"run:service:all/{live}/{prev}"
-        unanswered = age // 1000 if served is not None and served != live else 0
-        facts += [(r, "previous", "yes"), (r, "switched_min", str(age // 60_000)), (r, "unanswered_s", str(unanswered)),
-                  (r, "migrations_crossed", str(n)), *((r, k, v) for k, v in now)]
-        if prev in good or served == prev:
-            facts.append((r, "proven", "yes"))
-    if live:
-        restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == live]
-        r = f"run:process:all/{live}/{len(restarts) + 1}"
-        facts += [(r, "live", "yes"), (r, "switched_min", str(age // 60_000)), *((r, k, v) for k, v in now),
-                  (r, "restarts_last_hour", str(sum(now_ms - h["at"] < 3_600_000 for h in restarts)))]
-    return facts
-
-
-
-
-FAILING, FAST = 0.05, 14.4      # what breaks run:service:all slo (the target; rights are the law's bounds)
-PREMISES = ("candidate", "previous", "proven", "live", "running", "good")
-START_GRACE_S = 90
-
+# ---- the service now: coverage, components, the slo summary, the numbers ---------------------------------------------
 
 def _rows(points: list) -> list:
     """Per-minute (minute, cid, kind, total, bad, buckets) from consecutive scrapes of one source."""
@@ -396,14 +345,11 @@ def assess(sources: dict, answers: list, m: dict, now: int, since: int) -> dict:
             "budget_pct": min(budgets) * 100 if budgets else None}
 
 
-def release_stats(points: list, release: str, since: int) -> dict | None:
-    """Requests, error rate and p99 the runner saw for one release since a moment (canary analysis)."""
-    window = [(at, per.get(release)) for at, per in points if at >= since and per.get(release)]
-    if len(window) < 2:
-        return None
-    (_, a), (_, b) = window[0], window[-1]
-    s = stats(deltas([(0, a["count"], a["errors"], a["buckets"]), (1, b["count"], b["errors"], b["buckets"])]), 1, 0.999)
-    return {"requests": s["requests"], "error_rate": s["error_rate"], "p99": s["p99"]}
+# ---- releases: what is on each exact switch (D36) --------------------------------------------------------------------
+
+def _n(x) -> str:
+    """A number the law can compare: a bounded decimal string, never a float."""
+    return f"{max(-1e11, min(1e11, x or 0)):.3f}"
 
 
 def crossed(live: dict | None, prev: dict | None) -> int | None:
@@ -414,8 +360,59 @@ def crossed(live: dict | None, prev: dict | None) -> int | None:
     return None if any(not path.endswith(".compatible.sql") for _, path in added) else len(added)
 
 
-MIGRATION = re.compile(r"migrations/(\d+)[^/]*\.sql")
+def release_facts(live: str | None, main: str, history: list, good: set, now_ms: int, numbers: dict, *,
+                  served: str | None = None, crossed=lambda live, prev: 0, canary: str | None = None,
+                  canary_stats=lambda release, since: None) -> list:
+    """What is, on each exact switch, as (resource, property, status):
 
+    run:release:all/{live}/{main}     candidate  main moved and its head was never stepped back from; budget_pct; and
+                                                 when main runs as the canary, its numbers against the live release
+    run:canary:all/{live}/{main}      candidate  the same, beside a live release and no canary yet
+    run:canary:abort/{live}/{canary}  running    a canary runs
+    run:service:all/{live}/{prev}     previous   prev is what live replaced, never stepped back from, and its code runs
+                                                 on live's schema; proven when it met the objective (or still answers);
+                                                 switched_min, unanswered_s, migrations_crossed, burn_fast, failing_pct
+    run:process:all/{live}/{n}        live       the n-th restart of the live release; restarts_last_hour, the rest"""
+    stepped = {h["from"] for h in history if h.get("op") == "rollback"} | {
+        h["to"] for h in history if h.get("op") == "abort"}
+    live_name, now = live or "none", [(k, _n(numbers.get(k))) for k in ("burn_fast", "failing_pct")]
+    facts = [("run:release:all", "lag", "none" if (served or live) == main and live == main else "behind")]
+    if live != main and main not in stepped:
+        r = f"run:release:all/{live_name}/{main}"
+        facts += [(r, "candidate", "yes"), (r, "budget_pct", _n(100 if numbers.get("budget_pct") is None else numbers["budget_pct"]))]
+        if live and canary is None:
+            facts.append((f"run:canary:all/{live}/{main}", "candidate", "yes"))
+        if live and canary == main:
+            started = next((h["at"] for h in reversed(history) if h.get("op") == "canary" and h.get("to") == main), now_ms)
+            c, s = canary_stats(main, started // 1000) or {}, canary_stats(live, started // 1000) or {}
+            facts += [(r, "canary_error_delta", _n(((c.get("error_rate") or 0) - (s.get("error_rate") or 0)) * 100)),
+                      (r, "canary_requests", str(int(c.get("requests", 0)))),
+                      (r, "canary_baked_min", str((now_ms - started) // 60_000)),
+                      (r, "canary_p99_ms", _n(c.get("p99"))), (r, "live_p99_ms", _n(s.get("p99"))),
+                      (r, "canary_error_pct", _n((c.get("error_rate") or 0) * 100)),
+                      (r, "live_error_pct", _n((s.get("error_rate") or 0) * 100)),
+                      (r, "live_requests", str(int(s.get("requests", 0))))]
+    if canary is not None:
+        facts.append((f"run:canary:abort/{live_name}/{canary}", "running", "yes"))
+    switch = next((h for h in reversed(history) if h.get("to") == live and h.get("op") != "restart"), None)
+    age = now_ms - switch["at"] if switch else 10 ** 9
+    prev = switch["from"] if switch else "none"
+    if live and prev != "none" and prev not in stepped and (n := crossed(live, prev)) is not None:
+        r = f"run:service:all/{live}/{prev}"
+        unanswered = age // 1000 if served is not None and served != live else 0
+        facts += [(r, "previous", "yes"), (r, "switched_min", str(age // 60_000)), (r, "unanswered_s", str(unanswered)),
+                  (r, "migrations_crossed", str(n)), *((r, k, v) for k, v in now)]
+        if prev in good or served == prev:
+            facts.append((r, "proven", "yes"))
+    if live:
+        restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == live]
+        r = f"run:process:all/{live}/{len(restarts) + 1}"
+        facts += [(r, "live", "yes"), (r, "switched_min", str(age // 60_000)), *((r, k, v) for k, v in now),
+                  (r, "restarts_last_hour", str(sum(now_ms - h["at"] < 3_600_000 for h in restarts)))]
+    return facts
+
+
+# ---- the job ---------------------------------------------------------------------------------------------------------
 
 def measure(inp: dict) -> dict:
     """The production job: inputs as the host materialised them; facts and what the console shows."""

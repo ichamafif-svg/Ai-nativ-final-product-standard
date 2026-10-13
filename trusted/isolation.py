@@ -29,7 +29,7 @@ class Isolation:
         if not self.user:
             return
         for root in paths:
-            for dirpath, dirs, files in os.walk(root):
+            for dirpath, _, files in os.walk(root):
                 os.chmod(dirpath, 0o755)
                 for name in files:
                     p = Path(dirpath, name)

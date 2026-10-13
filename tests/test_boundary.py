@@ -15,7 +15,7 @@ from floors import CONTRACTS, INSTRUMENTS, PROGRAMS  # noqa: E402
 from kernel import canon  # noqa: E402
 from trusted.guard import NotDispatched  # noqa: E402
 from trusted.host import Evidence  # noqa: E402
-from trusted.transactions import Boundary  # noqa: E402
+from trusted.transactions import Boundary, BoundaryPort, Resolve  # noqa: E402
 
 A, B = "a" * 40, "b" * 40
 
@@ -89,17 +89,17 @@ class Effect(unittest.TestCase):
         root = Path(tempfile.mkdtemp())
         b = boundary(root)
         liar = Adapter("cas")                                         # a restart is not a compare-and-swap
-        port = b.port({"restart": liar})
+        port = BoundaryPort(b, {"restart": liar})
         with self.assertRaises(NotDispatched):
             port.perform(*self.judged("restart"), "k")
         self.assertEqual(liar.sent, [])
         honest = Adapter("observable")
-        self.assertEqual(b.port({"restart": honest}).perform(*self.judged("restart"), "k"), "ok")
+        self.assertEqual(BoundaryPort(b, {"restart": honest}).perform(*self.judged("restart"), "k"), "ok")
         outcomes = [json.loads(x)["outcome"] for x in (root / "transactions.jsonl").read_text().splitlines()]
         self.assertEqual(outcomes, ["failed:unqualified", "ok"])
 
 
-class Resolve(unittest.TestCase):
+class Resolving(unittest.TestCase):
     def state(self):
         return {"domain": "g", "last_at": 1, "token_of": {"i": "t"}, "reserved": {"t": "r"},
                 "intents": {"i": {"id": "i", "op": "restart", "resource": f"run:process:all/{A}/1",
@@ -110,7 +110,7 @@ class Resolve(unittest.TestCase):
         from trusted.signing import Signer
         root = Path(tempfile.mkdtemp())
         keys = Keys()
-        r = boundary(root).resolver({"restart": Adapter(profile, read)}, Signer("oracle", keys.private["oracle"][1]),
+        r = Resolve(boundary(root), {"restart": Adapter(profile, read)}, Signer("oracle", keys.private["oracle"][1]),
                                     "grant-oracle")
         return r.readback("i", self.state())
 

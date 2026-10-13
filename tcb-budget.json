@@ -81,7 +81,7 @@
     "files": [
       "instruments/*.py"
     ],
-    "ceiling": 1278,
+    "ceiling": 1275,
     "breaks": "a wrong fact, signed by the host with the programs' digest; any replay of the run record reveals it (tools/replay.py). Not T: pinned by the floors, isolated, without key or effect"
   },
   "_frozen": {
