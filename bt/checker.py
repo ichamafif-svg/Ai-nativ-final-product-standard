@@ -447,8 +447,9 @@ class Checker:
             elif op == "prefix":
                 value = _field(request, args[0])
                 ok = isinstance(value, str) and value.startswith(args[1])
-            elif op == "observed":
-                ok = any((o["resource"], o["property"], o["status"], o["level"]) == (request["resource"], *args)
+            elif op == "observed":                      # D46: an optional fourth argument names the author's kind
+                ok = any((o["resource"], o["property"], o["status"], o["level"]) == (request["resource"], *args[:3])
+                         and (len(args) == 3 or _kind(pre["root"], o["author"]) == args[3])
                          and self._eligible(pre, o, at) and not label & set(o["label"])
                          for o in pre["observations"].values())
             elif op == "compare":                       # D35: decimal bounds, restated with exact arithmetic

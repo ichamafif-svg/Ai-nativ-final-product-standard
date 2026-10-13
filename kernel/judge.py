@@ -499,11 +499,13 @@ class Kernel:
         independent = lambda f: not set(f["label"]) & label
         observed_props = language.named(atoms, "observed") | language.named(atoms, "compare")
         open_kinds, closed_kinds = language.named(atoms, "open"), language.named(atoms, "closed_at_least")
+        seen = [o for o in s["observations"].values() if o["resource"] == resource and o["property"] in observed_props
+                and self.eligible(s, law, o, at) and independent(o)]
         return {
             "request": {**stmt, "author": stmt.get("author"), "resource": resource},
-            "observations": {(o["resource"], o["property"], o["status"], o["level"]) for o in s["observations"].values()
-                             if o["resource"] == resource and o["property"] in observed_props
-                             and self.eligible(s, law, o, at) and independent(o)},
+            "observations": {(o["resource"], o["property"], o["status"], o["level"]) for o in seen},
+            "authored": {(o["resource"], o["property"], o["status"], o["level"], kind_of(s["root"], o["author"]))
+                         for o in seen if kind_of(s["root"], o["author"]) is not None},
             "opened": {(ob["stage"], ob["key"]) for ob in s["obligations"].values()
                        if ob.get("type") == "law" and ob["stage"] in open_kinds and not lapsed(ob, at)
                        and "label" in ob and independent(ob)},

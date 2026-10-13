@@ -18,8 +18,9 @@ def _observations(policy: Optional[dict]) -> list:
     out = []
     for atom in (policy or {}).get("all", []):
         if "observed" in atom:
-            name, value, level = atom["observed"]
-            out.append({"kind": "observed", "name": name, "expect": value, "level": level})
+            name, value, level, *by = atom["observed"]
+            out.append({"kind": "observed", "name": name, "expect": value, "level": level,
+                        **({"author_kind": by[0]} if by else {})})
         elif "compare" in atom:
             name, op, value, level = atom["compare"]
             out.append({"kind": "compare", "name": name, "op": op, "expect": value, "level": level})

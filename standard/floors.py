@@ -176,16 +176,18 @@ FLOORS = {
         "abort": {"args": {"from": "segment", "to": "segment"}, "resource": "run:canary:abort/{from}/{to}",
                   "profile": "capability"},
     },
+    # D46: a decision kept for people (review, approved, requested) counts only when a human of the root signed it; an
+    # instrument, the oracle or any machine identity holding `observe` on the resource cannot stand in for a person.
     "conditions": {
         "remediate-autonomous": {"all": [{"observed": ["tests", "green", "real"]},
                                          {"observed": ["reproduced", "yes", "real"]}]},
         "remediate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
-                                       {"observed": ["review", "approved", "real"]}]},
+                                       {"observed": ["review", "approved", "real", "human"]}]},
         # A client's work never lands on its author's word: main's own tests, no new gap on any floor target, and a
         # signed human review, always.
         "integrate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
                                        {"observed": ["regressions", "none", "real"]},
-                                       {"observed": ["review", "approved", "real"]}]},
+                                       {"observed": ["review", "approved", "real", "human"]}]},
         # D36: the agent acts alone in production only on what the scanner measured, against these bounds. The
         # engineers' settings may ask for more (a higher burn, a shorter horizon, a canary that bakes longer); never
         # for less: the kernel refuses.
@@ -203,16 +205,16 @@ FLOORS = {
         # The same switches when the engineers keep them for themselves (D31): the scanner's fact that the switch is
         # possible, and an engineer's signed decision on that exact switch.
         "deploy-reviewed": {"all": [{"observed": ["candidate", "yes", "real"]},
-                                    {"observed": ["approved", "yes", "real"]}]},
+                                    {"observed": ["approved", "yes", "real", "human"]}]},
         "rollback-reviewed": {"all": [{"observed": ["previous", "yes", "real"]},
-                                      {"observed": ["requested", "yes", "real"]}]},
+                                      {"observed": ["requested", "yes", "real", "human"]}]},
         "restart-autonomous": {"all": [{"observed": ["live", "yes", "real"]},
                                        {"compare": ["restarts_last_hour", "le", 11, "real"]},
                                        {"compare": ["failing_pct", "ge", 5, "real"]}]},
         "restart-burn": {"all": [{"observed": ["live", "yes", "real"]},
                                  {"compare": ["restarts_last_hour", "le", 11, "real"]},
                                  {"compare": ["burn_fast", "ge", "14.4", "real"]}]},
-        "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
+        "restart-reviewed": {"all": [{"observed": ["requested", "yes", "real", "human"]}]},
         "canary-autonomous": {"all": [{"observed": ["candidate", "yes", "real"]}]},
         # D35: the rules file changes from the interface with one signature: the scanner checks the commit changes
         # only that file, to exactly what an engineer signed, and that main's tests and the floors hold.
@@ -224,13 +226,13 @@ FLOORS = {
         "implement-reviewed": {"all": [{"observed": ["acceptance", "green", "real"]},
                                        {"observed": ["tests", "green", "real"]},
                                        {"observed": ["regressions", "none", "real"]},
-                                       {"observed": ["review", "approved", "real"]}]},
+                                       {"observed": ["review", "approved", "real", "human"]}]},
         "deploy-canary": {"all": [{"observed": ["candidate", "yes", "real"]},
                                   {"compare": ["canary_error_delta", "le", "2", "real"]},
                                   {"compare": ["canary_requests", "ge", 20, "real"]},
                                   {"compare": ["canary_baked_min", "ge", 1, "real"]}]},
         "abort-autonomous": {"all": [{"observed": ["running", "yes", "real"]}]},   # taking a canary out is always safe
-        "abort-reviewed": {"all": [{"observed": ["requested", "yes", "real"]}]},
+        "abort-reviewed": {"all": [{"observed": ["requested", "yes", "real", "human"]}]},
     },
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.
     "targets": [

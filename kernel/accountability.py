@@ -97,9 +97,12 @@ class Accountability:
             return True
         body, at = record["body"], record["at"]
         law_open = [*a["law"].values(), *(ob for ob in ks["obligations"].values() if ob.get("type") == "law")]
+        eligible = [o for o in ks["observations"].values() if Kernel.eligible(ks, law, o, at)]
+        kind = lambda ident: ks["root"]["identities"].get(ident, {}).get("kind")
         facts = {"request": body,
-                 "observations": {(o["resource"], o["property"], o["status"], o["level"]) for o in ks["observations"].values()
-                                  if Kernel.eligible(ks, law, o, at)},
+                 "observations": {(o["resource"], o["property"], o["status"], o["level"]) for o in eligible},
+                 "authored": {(o["resource"], o["property"], o["status"], o["level"], kind(o["author"]))
+                              for o in eligible if kind(o["author"])},
                  "opened": {(ob["stage"], ob["key"]) for ob in law_open if obl.live(ob, at)},
                  "closed": {(x["type"], x["key"]) for x in [*a["closed"].values(), *ks["closed"].values()]
                             if x["contract"] == law.obligation_contract(x["type"])},

@@ -4,6 +4,8 @@
     eq              [path, scalar]           a request field equals a string or integer
     prefix          [path, text]             a request field starts with text
     observed        [property, status, level]  an eligible, independent observation of the request's resource
+                    [property, status, level, kind]  the same, stated by an identity of that kind of the root in
+                                             force (D46: a human review is a fact a human signed, never a machine)
     compare         [property, le|ge, bound, level]  the same, whose status is a decimal number at most / at least
                                              bound (a decimal string or an integer); exact, no floating point
     closed_at_least [obligation, count]      at least count distinct keys closed, fresh, independent
@@ -18,6 +20,7 @@ from __future__ import annotations
 import re
 from fractions import Fraction
 
+from .floor0 import KINDS
 from .types import PATH, get_path
 
 ATOMS = ("eq", "prefix", "observed", "compare", "closed_at_least", "open", "related")
@@ -51,8 +54,8 @@ def compile_program(program) -> tuple:
         if not isinstance(atom, dict) or len(atom) != 1:
             raise LanguageError("an atom has exactly one operator")
         op, args = next(iter(atom.items()))
-        arity = 3 if op in ("observed", "related") else 4 if op == "compare" else 2
-        if op not in ATOMS or not isinstance(args, list) or len(args) != arity:
+        arity = (3, 4) if op == "observed" else (3,) if op == "related" else (4,) if op == "compare" else (2,)
+        if op not in ATOMS or not isinstance(args, list) or len(args) not in arity:
             raise LanguageError(f"unknown atom or arity: {op}")
         if not all(type(a) is int or (isinstance(a, str) and 0 < len(a) <= 128) for a in args):
             raise LanguageError("arguments are bounded strings or integers")
@@ -65,7 +68,9 @@ def compile_program(program) -> tuple:
         if op in ("observed", "compare", "closed_at_least", "open") and (not isinstance(args[0], str) or not NAME.fullmatch(args[0])):
             raise LanguageError(f"{op} names a pinned fact kind")
         if op == "observed" and not all(isinstance(a, str) for a in args):
-            raise LanguageError("observed names property, status and level")
+            raise LanguageError("observed names property, status, level and optionally its author's kind")
+        if op == "observed" and len(args) == 4 and args[3] not in KINDS:
+            raise LanguageError(f"an observation's author kind is one of {KINDS}")
         if op == "closed_at_least" and not (type(args[1]) is int and 1 <= args[1] <= MAX_FACTS):
             raise LanguageError("closed_at_least counts a positive bounded number")
         if op == "open" and (not isinstance(args[1], str) or not PATH.fullmatch(args[1])):
@@ -85,10 +90,11 @@ def named(atoms, op: str) -> set:
 
 
 def evaluate(atoms, *, request: dict, observations=frozenset(), closed=frozenset(), opened=frozenset(),
-             relations=frozenset()) -> bool:
-    """observations: {(resource, property, status, level)}; closed / opened: {(type, key)};
+             relations=frozenset(), authored=frozenset()) -> bool:
+    """observations: {(resource, property, status, level)}; authored: {(resource, property, status, level, kind)},
+    the same facts with the kind of their author in the root in force; closed / opened: {(type, key)};
     relations: {(name, left, right)}. Malformed facts or a fact set over its bound raise LanguageError."""
-    if any(len(rows) > MAX_FACTS for rows in (observations, closed, opened, relations)):
+    if any(len(rows) > MAX_FACTS for rows in (observations, closed, opened, relations, authored)):
         raise LanguageError("fact set exceeds its bound")
     for op, args in atoms:
         if op == "eq":
@@ -98,7 +104,7 @@ def evaluate(atoms, *, request: dict, observations=frozenset(), closed=frozenset
             value = get_path(request, args[0])
             ok = isinstance(value, str) and value.startswith(args[1])
         elif op == "observed":
-            ok = (request.get("resource"), *args) in observations
+            ok = (request.get("resource"), *args) in (observations if len(args) == 3 else authored)
         elif op == "compare":
             bound = number(args[2])
             ok = any(r == request.get("resource") and p == args[0] and lv == args[3] and (v := number(s)) is not None
