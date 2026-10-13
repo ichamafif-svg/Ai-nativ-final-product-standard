@@ -39,6 +39,10 @@ check_units() {
   done
 }
 
+git_source() {
+  git -c "safe.directory=$SRC" -C "$SRC" "$@"
+}
+
 unit() {
   local name="$1" user="$2" command="$3"
   cat > "/etc/systemd/system/$name.service" <<EOF
@@ -64,13 +68,13 @@ EOF
 install_lab() {
   case "$SRC/" in "$CODE/"*) echo "run from a separate Git checkout" >&2; exit 1 ;; esac
   local commit branch published
-  commit="$(git -C "$SRC" rev-parse --verify HEAD)"
-  branch="$(git -C "$SRC" symbolic-ref --quiet --short HEAD)"
-  published="$(git -C "$SRC" ls-remote --exit-code origin "refs/heads/$branch")"
+  commit="$(git_source rev-parse --verify HEAD)"
+  branch="$(git_source symbolic-ref --quiet --short HEAD)"
+  published="$(git_source ls-remote --exit-code origin "refs/heads/$branch")"
   [ "${published%%[[:space:]]*}" = "$commit" ] || {
     echo "the checked-out commit is not the pushed branch tip" >&2; exit 1;
   }
-  [ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ] || {
+  [ -z "$(git_source status --porcelain --untracked-files=no)" ] || {
     echo "push a clean commit before installing" >&2; exit 1;
   }
   lab_path "$CODE"
@@ -84,7 +88,7 @@ install_lab() {
   rm -rf -- "$CODE" "$ROOT"
   install -d -m 0755 "$CODE" "$ROOT" "$ROOT/seed" "$ROOT/hosting"
   touch "$CODE/$MARKER" "$ROOT/$MARKER"
-  git -C "$SRC" archive "$commit" | tar -x -C "$CODE"
+  git_source archive "$commit" | tar -x -C "$CODE"
   printf '%s\n' "$commit" > "$CODE/LAB_COMMIT"
   python3 -m venv "$CODE/venv"
   "$PY" -m pip install -q -r "$CODE/requirements.txt"
