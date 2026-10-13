@@ -14,7 +14,8 @@ import json
 from instruments.data import EMPTY
 from instruments.jobs import JOBS
 from instruments.recipes import recipes_for
-from standard.autonomy.agent import TASKS, WRITE_SCOPE
+from instruments.scope import REPAIR
+from standard.autonomy.agent import TASKS
 from standard.autonomy.read_model import measurement_for
 from standard.floors import CONTRACTS, FLOORS
 
@@ -39,20 +40,18 @@ def inventory(targets=None) -> list[dict]:
             condition = "Readable tracked entries; not semantic, language or submodule coverage."
         elif measure == "CONDITIONAL":
             condition = "Requires configured sources or deployment; sources are attested inputs."
-        elif measure == "MANUAL":
-            condition = "No automated assessment of the asserted organisational control."
         repair = target.get("repair")
         if repair == "remediate":
-            route = "recipe + review fallback" if tid in recipes else "model + human review"
-            if tid not in TASKS and tid not in recipes or tid not in WRITE_SCOPE:
+            route = "recipe, else model in scope" if tid in recipes else "model in scope"
+            if tid not in TASKS and tid not in recipes or (tid not in REPAIR and tid != "actions"):
                 route = "MISSING"
-            verification = "tests + recipe reproduction or signed review" if suite_job else "MISSING"
+            verification = "tests + reproduction, or tests + no regression + scoped" if suite_job else "MISSING"
         elif repair in ("deploy", "rollback"):
             route, verification = "release agent + guarded register", "switch measures + effect readback"
         elif repair == "inventory-refresh":
             route, verification = "declared capability; inventory measured by scanner", "readable tracked entries"
         elif target.get("human"):
-            route, verification = "human", "remeasure" if measure != "MANUAL" else "fresh signed attestation"
+            route, verification = "human", "remeasure"
         else:
             route, verification = "MISSING", "MISSING"
         rows.append({"target": tid, "resource": resource, "property": target["property"],

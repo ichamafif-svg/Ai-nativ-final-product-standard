@@ -87,13 +87,17 @@ def qualify(config_path) -> list:
                      "no other local user can read a key file", "who else holds a copy (custody, L-03)"))
     humans = [h for h, spec in identities.items() if spec["kind"] == "human"
               and any(key["public"] in local_public for key in spec["keys"])]
-    out.append(probe("T02 humans hold their own keys", release_ok and len(humans) <= 1, humans or "no enrolled human key here",
-                     "at most one human key on the operator's host",
-                     "that the enrolled humans are distinct persons (G01)"))
+    out.append(probe("T02 the human holds their own key", release_ok and not humans, humans or "no human key here",
+                     "no human key on the operator's host: the human signs from their own device",
+                     "that the device is the human's alone (G01)"))
     witnesses = [w for w, spec in identities.items() if spec["kind"] == "witness"
                  and any(key["public"] in local_public for key in spec["keys"])]
-    out.append(probe("T03 witnesses apart from the operator", release_ok and not witnesses, witnesses or "no enrolled witness key here",
-                     "the operator cannot advance witnessed time alone", "that the witnesses' clocks are independent"))
+    quorum = _witness_quorum(journal, c, actual) if release_ok else None
+    out.append(probe("T03 time", release_ok and (quorum == 1 or not witnesses),
+                     {"witness_quorum": quorum, "witness_keys_here": witnesses},
+                     "one human, one agent: the operator's clock states time (F0-1); a team's rules ask for more "
+                     "witnesses, none of them on this host",
+                     "that the operator's clock is right; with one witness the operator can advance time alone"))
     try:
         bundle = json.loads(resolve(c["assessment"]["path"]).read_text())
         assessment = SignedAssessment(bundle, {n: base64.b64decode(k, validate=True)
@@ -203,6 +207,17 @@ def qualify(config_path) -> list:
                          "a client's push, run as the gate user, cannot write a canonical repository",
                          "sshd's configuration, other accounts on the host, and keys authorized outside tools/host.py"))
     return out
+
+
+def _witness_quorum(journal, c, code) -> int | None:
+    """The witness quorum of the rules in force, replayed read-only from the journal by K."""
+    try:
+        with closing(sqlite3.connect(Path(journal).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            rows = [parse(bytes(r[0])) for r in db.execute("SELECT raw FROM entries ORDER BY seq")]
+        kernel = Kernel(RELEASE, code)
+        return kernel.law_of(kernel.replay(rows)).witness_quorum
+    except Exception:
+        return None
 
 
 def main() -> int:

@@ -1,18 +1,17 @@
-"""Constitute an installation (§13.2 step 1, D18), in two phases separated by FLOOR-0's witnessed delay:
+"""Constitute an installation (§13.2 step 1, D18): one human, one agent, the machines.
 
     python tools/ceremony.py init DIR --repo PATH [--pins PATH]                 a local git repository
     python tools/ceremony.py init DIR --github OWNER/NAME --token-file F [--pins PATH]
-    ... at least one hour later ...
-    python tools/ceremony.py activate DIR
     python tools/ceremony.py separate DIR --guard-user U --agent-user V      (as root, before serving)
 
-`init` writes keys, the client law, the genesis, the witnesses' first checkpoint, the grant proposals, a
-self-assessment and DIR/standard.toml. `activate` anchors time again and activates the grants. The genesis grants
-nothing: capabilities are widenings, so they wait for the delay like any other.
+`init` writes the keys, the recommended rules (standard/floors.py RECOMMENDED), the genesis, the clock's first
+checkpoint, the four capabilities (the human's decisions and requests, the agent's moves, the scanner's measures, the
+oracle's proofs), a self-assessment and DIR/standard.toml. Widening takes effect at once: the installation runs as
+soon as `init` returns. A team raises the threshold, the delays and the witnesses later, in the rules.
 
-DEMO: one operator generates every key on one host, including the four humans and the two witnesses. The quorum,
-the witnesses and the assessment are therefore not physical (G01, G06, D19). Use this for a demonstration, never as
-a qualified installation.
+DEMO: one operator generates every key on one host, the human's included. The human's key belongs on the human's own
+device (a passkey in the console); the assessment is self-signed (D19). Use this for a demonstration, never as a
+qualified installation.
 """
 from __future__ import annotations
 
@@ -30,50 +29,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat  # noqa: E402
 
-from standard.floors import RELEASE  # noqa: E402
+from standard.floors import RELEASE, rules  # noqa: E402
 from kernel import Kernel, canon, digest, empty  # noqa: E402
 from bt.assessment import CONTRACTS, PREFIX, SignedAssessment  # noqa: E402
-from standard.runtime.daemon import key  # noqa: E402
 from bt.journal import Journal, PinStore  # noqa: E402
 from standard.runtime import code_digest  # noqa: E402
 from bt.signing import Signer, entry  # noqa: E402
 
-IDENTITIES = {"h1": "human", "h2": "human", "h3": "human", "h4": "human", "w1": "witness", "w2": "witness",
-              "guard": "guard", "agent": "agent", "scanner": "service", "oracle": "oracle", "sentinel": "sentinel"}
+IDENTITIES = {"human": "human", "agent": "agent", "guard": "guard", "scanner": "service", "oracle": "oracle",
+              "clock": "witness"}
+MOVES = ("remediate", "integrate", "implement", "deploy", "canary", "rollback", "restart", "abort")
 YEAR = 365 * 86_400_000
 GRANTS = {
-    "scanner": ("scanner", ["observe", "certify:real"], ["repo:*", "run:*", "build:*"], []),
-    "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*", "run:*"], []),
-    "agent_deploy": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-autonomous"]),
-    "agent_rollback": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-autonomous"]),
-    "agent_rollback_failing": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-failing"]),
-    "agent_rollback_unanswered": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-unanswered"]),
-    "agent_deploy_reviewed": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-reviewed"]),
-    "agent_rollback_reviewed": ("agent", ["effect:rollback"], ["run:service:*"], ["rollback-reviewed"]),
-    "agent_restart": ("agent", ["effect:restart"], ["run:process:*"], ["restart-autonomous"]),
-    "agent_restart_burn": ("agent", ["effect:restart"], ["run:process:*"], ["restart-burn"]),
-    "agent_restart_reviewed": ("agent", ["effect:restart"], ["run:process:*"], ["restart-reviewed"]),
-    "agent_canary": ("agent", ["effect:canary"], ["run:canary:*"], ["canary-autonomous"]),
-    # D34: the agent implements contracted requests (always reviewed) and records their delivery.
-    "agent_implement": ("agent", ["effect:implement"], ["repo:feature:*"], ["implement-reviewed"]),
-    "agent_configure": ("agent", ["effect:configure"], ["repo:config:*"], ["configure-signed"]),
-    "agent_deliver": ("agent", ["transition:request:deliver"], ["build:request/*"], []),
-    # The product owner writes requests and signs their contracts; the reviewer (h3) reviews the code.
-    "product": ("h1", ["register:request", "transition:request:contract", "transition:request:withdraw"],
-                ["build:request/*"], []),
-    "agent_promote": ("agent", ["effect:deploy"], ["run:release:*"], ["deploy-canary"]),
-    "agent_abort": ("agent", ["effect:abort"], ["run:canary:*"], ["abort-autonomous"]),
-    "agent_abort_reviewed": ("agent", ["effect:abort"], ["run:canary:*"], ["abort-reviewed"]),
-    # D31: the engineer sets production's objectives and limits, and decides switches Standard does not take alone.
-    "engineer": ("h1", ["observe", "certify:real"], ["run:policy/*", "run:release:*", "run:service:*", "run:process:*",
-                                                   "run:canary:*", "repo:config:*"], []),
-    "agent_recipe": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-autonomous"]),
-    "agent_review": ("agent", ["effect:remediate"], ["repo:*"], ["remediate-reviewed"]),
-    "agent_integrate": ("agent", ["effect:integrate"], ["repo:contrib:*"], ["integrate-reviewed"]),
-    "reviewer": ("h3", ["observe", "certify:real"], ["repo:*"], []),
-    "officer": ("h2", ["observe", "certify:real"], ["org:*"], []),
-    # A human closes a law violation once handled (resolved = yes on law:violation/<declaration>/<entry>).
-    "steward": ("h4", ["observe", "certify:real"], ["law:violation/*"], []),
+    # The machines: the scanner measures, the oracle proves what was applied.
+    "scanner": ("scanner", ["observe", "certify:real"], ["repo:*", "run:*", "build:*"]),
+    "oracle": ("oracle", ["reconcile", "evidence", "certify:real"], ["repo:*", "run:*"]),
+    # The agent: every move of the rules, and recording a request's delivery. The routes decide when.
+    "agent": ("agent", [*(f"effect:{op}" for op in MOVES), "transition:request:deliver"],
+              ["repo:*", "run:*", "build:request/*"]),
+    # The human: decisions on any move or violation, and what the product must do (requests and their contracts).
+    "human": ("human", ["observe", "certify:real", "register:request", "transition:request:contract",
+                        "transition:request:withdraw"], ["repo:*", "run:*", "build:request/*", "law:violation/*"]),
 }
 
 
@@ -101,14 +77,13 @@ def init(args) -> None:
     (d / "agent").mkdir()                                  # U's own directory: its key, its store, its notes
     signers = {i: new_key(d / ("agent" if i == "agent" else "keys") / f"{i}.key") for i in IDENTITIES}
     assessor = new_key(d / "keys" / "assessor.key")
-    root = {"threshold": 2, "identities": {i: {"kind": k, "keys": [signers[i].root_key()]} for i, k in IDENTITIES.items()}}
-    law = {"format": "standard-client/1", "floors": RELEASE.digest,
-           "bindings": {"owner": "h1", "inventory_source": "scanner", "scanner": "scanner", "compliance_officer": "h2"}}
+    root = {"threshold": 1, "identities": {i: {"kind": k, "keys": [signers[i].root_key()]} for i, k in IDENTITIES.items()}}
+    law = rules({"owner": "human", "inventory_source": "scanner", "scanner": "scanner"})
     code = code_digest()
     kernel = Kernel(RELEASE, code)
     t = now()
-    genesis = entry(empty(), "genesis", {"id": "genesis", "at": t, "author": "h1", "root": root, "law": law,
-                                         "code": code}, [signers["h1"], signers["h2"]])
+    genesis = entry(empty(), "genesis", {"id": "genesis", "at": t, "author": "human", "root": root, "law": law,
+                                         "code": code}, [signers["human"]])
     domain = next(op[2] for op in kernel.decide(empty(), genesis)[1] if op[:2] == ("set", "domain"))
     pins_path = Path(args.pins).resolve() if args.pins else d / "pins" / "pins.db"
     if pins_path.parent == d / "pins":
@@ -117,14 +92,14 @@ def init(args) -> None:
     journal = Journal(journal_path, kernel, PinStore(pins_path, create=True), domain, create=True)
     journal.append(genesis)
     s = journal.snapshot()
-    journal.append(entry(s, "checkpoint", {"id": "checkpoint-0", "at": t + 1, "author": "w1", "size": s["size"],
-                                           "head": s["head"]}, [signers["w1"], signers["w2"]]))
+    journal.append(entry(s, "checkpoint", {"id": "checkpoint-0", "at": t + 1, "author": "clock", "size": s["size"],
+                                           "head": s["head"]}, [signers["clock"]]))
     grants = {}
-    for name, (holder, actions, resources, conditions) in GRANTS.items():
+    for name, (holder, actions, resources) in GRANTS.items():
         s = journal.snapshot()
-        body = {"id": f"grant-{name}", "at": s["last_at"] + 1, "author": "h1", "holder": holder, "actions": actions,
-                "resources": resources, "conditions": conditions, "not_after": t + YEAR}
-        journal.append(entry(s, "grant", body, [signers["h1"], signers["h2"]]))
+        body = {"id": f"grant-{name}", "at": s["last_at"] + 1, "author": "human", "holder": holder,
+                "actions": actions, "resources": resources, "conditions": [], "not_after": t + YEAR}
+        journal.append(entry(s, "grant", body, [signers["human"]]))      # in force with its own entry
         grants[name] = body["id"]
     payload = {"schema": SignedAssessment.SCHEMA, "assessor": "operator", "independent": False, "release": code,
                "genesis": domain, "ledger": digest(str(journal_path)), "issued_at": t, "expires_at": t + 30 * 86_400_000,
@@ -181,30 +156,7 @@ path = "admission.sock"
 key = "agent/agent.key"
 store = "agent/store"
 {data_section}''')
-    activate_after = time.ctime((journal.snapshot()["last_at"] + 3_600_000) / 1000)
-    print(f"constituted {d}: genesis {domain}. Activate the grants after {activate_after}:")
-    print(f"    python tools/ceremony.py activate {d}")
-
-
-def activate(args) -> None:
-    d = Path(args.dir).resolve()
-    import tomllib
-    c = tomllib.loads((d / "standard.toml").read_text())
-    kernel = Kernel(RELEASE, code_digest())
-    journal = Journal(d / c["ledger"]["journal"], kernel, PinStore(Path(c["ledger"]["pins"])), c["ledger"]["genesis"])
-    keys = d / c["keys"]["dir"]
-    h1, h2 = key(keys, "h1"), key(keys, "h2")
-    s = journal.snapshot()
-    journal.append(entry(s, "checkpoint", {"id": f"checkpoint-{now()}", "at": max(now(), s["last_at"] + 1),
-                                           "author": "w1", "size": s["size"], "head": s["head"]},
-                         [key(keys, "w1"), key(keys, "w2")]))
-    for name, grant in c["grants"].items():
-        s = journal.snapshot()
-        if grant in s["grants"]:
-            continue
-        journal.append(entry(s, "activate", {"id": f"activate-{name}", "at": s["last_at"] + 1, "author": "h1",
-                                             "proposal": grant}, [h1, h2]))
-    print("grants active:", ", ".join(c["grants"]))
+    print(f"constituted {d}: genesis {domain}, capabilities in force: {', '.join(grants)}")
 
 
 def separate(args) -> None:
@@ -262,8 +214,6 @@ def main() -> int:
     i.add_argument("--data", help="a reviewed snapshot from tools/refresh_data.py, pinned by its digest")
     i.add_argument("--unconfined-tests", action="store_true",
                    help="DEMO ONLY: run candidate tests as the operator, with its keys (no jail)")
-    a = sub.add_parser("activate")
-    a.add_argument("dir")
     s = sub.add_parser("separate")
     s.add_argument("dir")
     s.add_argument("--guard-user", required=True)
@@ -273,8 +223,6 @@ def main() -> int:
         if bool(args.repo) == bool(args.github) or (args.github and not args.token_file):
             parser.error("give --repo, or --github with --token-file")
         init(args)
-    elif args.command == "activate":
-        activate(args)
     else:
         separate(args)
     return 0

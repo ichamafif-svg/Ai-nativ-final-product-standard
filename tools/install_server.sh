@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Replace the disposable Standard laboratory on Ubuntu 24.04.
-# Run phase 1 from a pushed, clean checkout as root; run "activate" after FLOOR-0's delay.
+# Run from a pushed, clean checkout as root: one human, one agent, in force at once.
 # Never use this installation to claim independent qualification or govern client data.
 set -euo pipefail
 
@@ -123,17 +123,8 @@ runner_user = "standard-runner"
 config = "$ROOT/hosting/hosting.toml"
 gate_user = "standard-gate"
 EOF
-  echo "LABORATORY ONLY: one host holds simulated human and witness keys; qualification must fail."
+  echo "LABORATORY ONLY: this host holds the human's key too; qualification must fail (T02)."
   echo "Commit: $(cat "$CODE/LAB_COMMIT")"
-  echo "Wait for FLOOR-0, then run: bash $CODE/tools/install_server.sh activate"
-}
-
-activate_lab() {
-  lab_path "$CODE"
-  lab_path "$ROOT"
-  [ -f "$CODE/$MARKER" ] && [ -f "$ROOT/$MARKER" ] || exit 1
-  cd "$CODE"
-  "$PY" tools/ceremony.py activate "$ROOT/install"
   "$PY" tools/ceremony.py separate "$ROOT/install" --guard-user standard-guard --agent-user standard-agent
   printf 'standard-guard ALL=(standard-runner) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/standard-runner
   chmod 440 /etc/sudoers.d/standard-runner
@@ -158,6 +149,5 @@ activate_lab() {
 
 case "${1:-}" in
   "") install_lab ;;
-  activate) activate_lab ;;
-  *) echo "usage: $0 [activate]" >&2; exit 2 ;;
+  *) echo "usage: $0" >&2; exit 2 ;;
 esac

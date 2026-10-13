@@ -2,11 +2,13 @@
 
     python -m standard.runtime serve standard.toml
 
-One process, one host, one writer (D06). Every tick: witness (demo only), instruments, departures, readback, proof of
-application. Each pass fails alone and is logged; none can admit anything except through the journal.
+One process, one host, one writer (D06). Every tick: the clock's checkpoint, instruments, departures, readback, proof
+of application. Each pass fails alone and is logged; none can admit anything except through the journal.
 
-In a demo installation (`demo = true`) the operator also holds the witness keys and assessed its own installation:
-the system runs, nothing physical is qualified, and every view says SELF_ASSESSED (D19).
+Time (F0-1, F0-6): with one human and one agent, the operator's own `clock` identity signs the checkpoints, from the
+local clock or from external witness quotes (`[clock] kind = "witnesses"`). A team that raises the witness quorum in
+its rules runs its witnesses elsewhere and the operator stops signing. In a demo installation (`demo = true`) the
+operator also assessed its own installation: every view says SELF_ASSESSED (D19).
 """
 from __future__ import annotations
 
@@ -110,26 +112,22 @@ class Installation:
         self.service = TrustedService(
             self.journal, boundary=SignedAssessment(assessment, assessors), clock=self.clock,
             guard_signer=key(self.keys, "guard"), effect_port=self.boundary.port(effects), reconciliation=self.resolve)
-        names = {gid: name for name, gid in grants.items()}
         self.instruments = Instruments(
             self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock), self.host, self.boundary,
             self.repo_path, self.proposals, anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
             inbox=resolve(repo["inbox"]) if repo.get("inbox") else None, findings=self.path.parent / "findings.json",
-            holders=lambda: {names[gid]: g["holder"] for gid, g in self.journal.snapshot()["grants"].items()
-                             if gid in names}, sources=sources, production=bool(sources) or deploy is not None,
+            sources=sources, production=bool(sources) or deploy is not None,
             registers=self.releases)
         self.prover = Prover(self.service, self.resolve, key(self.keys, "oracle"), grants["oracle"], self.clock)
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):
-        """[clock] kind = "local" (demo only) or "witnesses":
-            quorum = 2, tolerance_ms = 0, state = "clock.json",
+        """[clock] kind = "local" (the operator's clock, the default) or "witnesses":
+            quorum = 1, tolerance_ms = 0, state = "clock.json",
             [clock.witnesses.<name>] public = "<base64 Ed25519>", url = "https://..."   (one per witness)
         Each reading asks every witness for a signed quote of a fresh nonce (bt.clock.WitnessClock)."""
         kind = spec.get("kind", "local")
         if kind == "local":
-            if not self.demo:
-                raise ValueError("a local clock is only acceptable in a demo installation (T03 unqualified)")
             return now_ms
         if kind != "witnesses":
             raise ValueError("[clock] kind is local (demo) or witnesses")
@@ -151,19 +149,19 @@ class Installation:
         state = spec.get("state")
         return WitnessClock(genesis=self.config["ledger"]["genesis"],
                             public_keys={n: base64.b64decode(w["public"]) for n, w in witnesses.items()},
-                            quorum=int(spec.get("quorum", 2)), fetch=fetch,
+                            quorum=int(spec.get("quorum", 1)), fetch=fetch,
                             tolerance_ms=int(spec.get("tolerance_ms", 0)),
                             state=(self.path.parent / state) if state else None)
 
     def witness(self) -> None:
-        """Demo only: the operator's witnesses anchor the current head. Production witnesses run elsewhere."""
-        if not self.demo:
-            return
+        """The operator's clock anchors the current head, unless the rules ask for more witnesses than it."""
         state = self.journal.snapshot()
+        if not (self.keys / "clock.key").exists() or self.kernel.law_of(state).witness_quorum > 1:
+            return
         at = max(self.clock(), state["last_at"] + 1)
-        body = {"id": f"checkpoint-{uuid.uuid4().hex}", "at": at, "author": "w1", "size": state["size"],
+        body = {"id": f"checkpoint-{uuid.uuid4().hex}", "at": at, "author": "clock", "size": state["size"],
                 "head": state["head"]}
-        self.journal.append(entry(state, "checkpoint", body, [key(self.keys, "w1"), key(self.keys, "w2")]))
+        self.journal.append(entry(state, "checkpoint", body, [key(self.keys, "clock")]))
 
     def sync(self) -> None:
         if self.world is not None:                          # GitHub: refresh the mirror, proposals included
