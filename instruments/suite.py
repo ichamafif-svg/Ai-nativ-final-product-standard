@@ -48,12 +48,46 @@ def claimed(message: str) -> str | None:
     return m[1] if m else None
 
 
-def run_suite(code: DirTree, suite_files: dict, tests_dir: str, *, install: bool = False) -> Measure:
+def report_measure(report, returncode: int) -> Measure:
+    """No green from a missing/empty report, skipped tests, duplicates or a failed process without findings."""
+    names, covered, failed, traces = set(), set(), [], []
+    for case in ET.parse(report).iter("testcase"):
+        if not case.get("name"):
+            raise ValueError("test report has an unnamed case")
+        name = f"{case.get('classname')}::{case.get('name')}"
+        if name in names:
+            raise ValueError(f"duplicate test case: {name}")
+        names.add(name)
+        if any(child.tag == "skipped" for child in case):
+            traces.append(f"{name}\nskipped: not covered")
+            continue
+        covered.add(name)
+        bad = [child for child in case if child.tag in ("failure", "error")]
+        if bad:
+            failed.append(name)
+            traces.append(f"{name}\n{(bad[0].get('message') or '')[:300]}\n{(bad[0].text or '')[-1500:]}")
+    if returncode not in (0, 1, 2, 5) or returncode != 0 and not failed and names:
+        raise RuntimeError(f"test process exited {returncode} without a usable failure report")
+    if returncode == 0 and failed:
+        raise RuntimeError("test process exit and report disagree")
+    return Measure(frozenset(names), frozenset(covered), tuple(failed), tuple(traces))
+
+
+def run_suite(code, suite_files: dict, tests_dir: str, *, install: bool = False) -> Measure:
     """`suite_files` ({path: bytes}) against the code of `code`. The universe is the set of tests the suite runs."""
     work = Path(tempfile.mkdtemp())
     try:
         src, suite = work / "code", work / "suite"
-        shutil.copytree(code.files, src, symlinks=True)
+        src.mkdir()
+        for path in sorted(code.paths()):
+            mode, _, _ = code.entries[path]
+            if mode == "120000":
+                raise ValueError(f"suite cannot materialise a symlink: {path}")
+            dest = src / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(code.read(path))
+            if mode == "100755":
+                dest.chmod(0o755)
         for path, data in suite_files.items():
             (suite / path).parent.mkdir(parents=True, exist_ok=True)
             (suite / path).write_bytes(data)
@@ -70,22 +104,12 @@ def run_suite(code: DirTree, suite_files: dict, tests_dir: str, *, install: bool
                                ("_PROXY", "_proxy", "CA_BUNDLE", "CERT_FILE"))}})
         (work / "pytest.ini").write_text("[pytest]\n")
         report = work / "report.xml"
-        subprocess.run([python, "-m", "pytest", "-c", str(work / "pytest.ini"), "--rootdir", str(src), "-p",
+        result = subprocess.run([python, "-m", "pytest", "-c", str(work / "pytest.ini"), "--rootdir", str(src), "-p",
                         "no:cacheprovider", "-q", f"--junitxml={report}", str(suite / tests_dir)],
                        cwd=src, env=env, capture_output=True, timeout=1800)
         if not report.exists():
             raise RuntimeError("no test report")
-        names, failed, traces = set(), [], []
-        for case in ET.parse(report).iter("testcase"):
-            if any(child.tag == "skipped" for child in case):
-                continue
-            name = f"{case.get('classname')}::{case.get('name')}"
-            names.add(name)
-            bad = [child for child in case if child.tag in ("failure", "error")]
-            if bad:
-                failed.append(name)
-                traces.append(f"{name}\n{(bad[0].get('message') or '')[:300]}\n{(bad[0].text or '')[-1500:]}")
-        return Measure(frozenset(), frozenset(names), tuple(failed), tuple(traces))
+        return report_measure(report, result.returncode)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -100,8 +124,8 @@ def tests_report(base: DirTree, head: DirTree, *, install: bool = False) -> tupl
         suite = suite_of(base)
         on_base = run_suite(base, suite, "tests", install=install)
         on_head = run_suite(head, suite, "tests", install=install)
-        lost = [f"{n}\nruns on main, not on this head" for n in sorted(on_base.covered - on_head.covered)]
-        status = verdict("green", Measure(on_base.covered, on_head.covered & on_base.covered, on_head.findings))
+        lost = [f"{n}\ncollected on main, not executed on this head" for n in sorted(on_base.universe - on_head.covered)]
+        status = verdict("green", Measure(on_base.universe, on_head.covered & on_base.universe, on_head.findings))
         return status, [*on_head.details, *lost][:20]
     except Exception as exc:                               # an exception is a measure: nothing was covered
         return verdict("green", exc), [f"{type(exc).__name__}: {str(exc)[:500]}"]
@@ -117,8 +141,10 @@ def contract_on(main: DirTree, request: str, contract: bytes) -> tuple[str, list
         m = _contract(main, request, contract)
     except Exception as exc:
         return f"uncovered:{type(exc).__name__}", [str(exc)[:300]]
-    if not m.covered:
+    if not m.universe:
         return "empty", ["the contract collects no test"]
+    if m.universe != m.covered:
+        return verdict("red", m), list(m.details)
     passing = sorted(m.covered - set(m.findings))
     return ("red", []) if not passing else (f"passes:{len(passing)}", [f"{t}\npasses on main already" for t in passing])
 
@@ -133,6 +159,7 @@ def acceptance_on(head: DirTree, request: str, contract: bytes) -> tuple[str, li
         m = _contract(head, request, contract)
     except Exception as exc:
         return f"uncovered:{type(exc).__name__}", [str(exc)[:300]]
-    if not m.covered:
+    if not m.universe:
         return "empty", ["the contract collects no test"]
-    return ("green", []) if not m.findings else (f"red:{len(m.findings)}", list(m.details)[:10])
+    status = verdict("green", m)
+    return (f"red:{len(m.findings)}" if status.startswith("found:") else status), list(m.details)[:10]

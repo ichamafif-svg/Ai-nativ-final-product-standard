@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from trusted.hosting import HOOK, route  # noqa: E402
+from bt.hosting import HOOK, route  # noqa: E402
 
 CONFIG = {"repositories": {"app": {"canonical": "/c/app.git", "inbox": "/i/app.git",
                                    "readers": ["alice", "bob", "carol"], "writers": ["alice", "bob"]}}}
@@ -59,7 +59,7 @@ class ThroughTheGate(unittest.TestCase):
         for who in ("alice", "bob"):
             script = root / f"ssh-{who}"
             script.write_text(f'#!/bin/sh\nshift\ncd {ROOT}\nSSH_ORIGINAL_COMMAND="$*" '
-                              f'exec {sys.executable} -m trusted.hosting {config} {who}\n')
+                              f'exec {sys.executable} -m bt.hosting {config} {who}\n')
             os.chmod(script, 0o755)
             self.ssh[who] = {"GIT_SSH_COMMAND": str(script)}
         self.work = root / "work"
@@ -95,16 +95,15 @@ class Integration(unittest.TestCase):
     def test_reviewed_green_clean_work_lands_and_red_or_leaky_work_never_does(self):
         import argparse
         import threading
-        sys.path.insert(0, str(ROOT / "tools"))
         sys.path.insert(0, str(ROOT / "tests"))
-        import ceremony
+        from tools import ceremony
         from test_install import Clock
         from test_maintenance import FILES, demo_repository
 
-        import autonomy.__main__ as agent_process
-        import trusted.daemon as daemon
-        from surface.human import load_signer, review
-        from trusted.gateway import AdmissionGateway
+        import standard.autonomy.__main__ as agent_process
+        import standard.runtime.daemon as daemon
+        from standard.surface.human import load_signer, review
+        from bt.gateway import AdmissionGateway
 
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, {**FILES, "sbom.json": "{}\n"})
@@ -159,7 +158,7 @@ class Integration(unittest.TestCase):
             approve("bob", red)
             approve("eve", leaky)
             # D33: a reviewer cannot replace a measure by an opinion: `tests` is the scanner's instrument only.
-            from trusted.signing import envelope
+            from bt.signing import envelope
             for kind, extra in (("observation", {}), ("measurement", {"method": "main-suite",
                                                                         "coverage": "repo:inventory:all",
                                                                         "measured_at": clock.t + 1,

@@ -11,14 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from autonomy.agent import Agent, AgentError  # noqa: E402
-from autonomy.cycle import Cycle  # noqa: E402
-from autonomy.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
-from autonomy.memory import Memory  # noqa: E402
-from autonomy.precheck import precheck  # noqa: E402
-from autonomy.repomap import RepoMap  # noqa: E402
-from autonomy.sandbox import Sandbox  # noqa: E402
-from floors import FLOORS  # noqa: E402
+from standard.autonomy.agent import Agent, AgentError  # noqa: E402
+from standard.autonomy.cycle import Cycle  # noqa: E402
+from standard.autonomy.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
+from standard.autonomy.memory import Memory  # noqa: E402
+from standard.autonomy.precheck import precheck  # noqa: E402
+from standard.autonomy.repomap import RepoMap  # noqa: E402
+from standard.autonomy.sandbox import Sandbox  # noqa: E402
+from standard.floors import FLOORS  # noqa: E402
 from instruments import probes as instruments  # noqa: E402
 from instruments.data import EMPTY  # noqa: E402
 from instruments.suite import tests_report  # noqa: E402
@@ -91,7 +91,7 @@ class WholeLaw(unittest.TestCase):
         self.box = Sandbox()
 
     def candidate(self, files):
-        from autonomy.agent import commit_files
+        from standard.autonomy.agent import commit_files
         return commit_files(self.store, self.base, {p: c.encode() for p, c in files.items()}, "candidate")
 
     def test_a_fix_that_breaks_main_tests_is_not_proposed(self):
@@ -182,7 +182,7 @@ class Memory_(unittest.TestCase):
     def test_the_cycle_abandons_after_the_budget_and_stops_trying(self):
         class Service:
             def view(self):
-                return {"law": {"effective": {"targets": [TARGETS["ci"]]}}, "health": {"as_of": 0},
+                return {"law": {"digest": "test-law", "effective": {"targets": [TARGETS["ci"]]}}, "health": {"as_of": 0},
                         "prefix": {"genesis": "g"}}
 
             def qualify(self, *a):
@@ -206,10 +206,10 @@ class Memory_(unittest.TestCase):
             def craft(self, *a, **kw):
                 raise AgentError("nothing passes")
 
-        import autonomy.cycle as cycle_module
-        real = cycle_module.project
-        cycle_module.project = lambda view, routes, qualify, mode: {"state": "IN_PROGRESS", "tasks": []}
-        self.addCleanup(setattr, cycle_module, "project", real)              # never leak into the next test
+        from standard.autonomy.read_model import ReadModel
+        real = ReadModel.plan
+        ReadModel.plan = lambda self, mode="RUN": {"state": "IN_PROGRESS", "tasks": []}
+        self.addCleanup(setattr, ReadModel, "plan", real)              # never leak into the next test
         root = Path(tempfile.mkdtemp())
         cycle = Cycle(Service(), Engine(), Failing(), [], clock=lambda: 1, main=lambda: "b1",
                       state_path=root / "proposals.json", memory=Memory(root / "memory.json", budget=2))

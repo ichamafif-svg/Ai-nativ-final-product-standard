@@ -1,4 +1,4 @@
-"""Host repositories behind the SSH gate (D23, trusted/hosting.py). Run as root.
+"""Host repositories behind the SSH gate (D23, bt/hosting.py). Run as root.
 
     python tools/host.py create HOSTING.toml NAME --from PATH --guard-user G --gate-user U
     python tools/host.py authorize HOSTING.toml NAME IDENTITY --key id_ed25519.pub [--write] --gate-user U
@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from trusted.hosting import HOOK, IDENTITY  # noqa: E402
+from bt.hosting import HOOK, IDENTITY  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,12 +33,12 @@ def git(*args, user=None) -> str:
 
 
 def load(path: Path) -> dict:
-    import tomllib
+    import toml_compat as tomllib
     return tomllib.loads(path.read_text()) if path.exists() else {"repositories": {}}
 
 
 def save(path: Path, config: dict) -> None:
-    lines = ["# Repositories served by the SSH gate (trusted/hosting.py). Written by tools/host.py."]
+    lines = ["# Repositories served by the SSH gate (bt/hosting.py). Written by tools/host.py."]
     for name, repo in sorted(config["repositories"].items()):
         lines.append(f"\n[repositories.{name}]")
         for key in ("canonical", "inbox", "readers", "writers"):
@@ -101,7 +101,7 @@ def authorize(args) -> None:
     ssh = Path(gate.pw_dir) / ".ssh"
     ssh.mkdir(mode=0o700, exist_ok=True)
     keys = ssh / "authorized_keys"
-    line = f'command="cd {ROOT} && exec {sys.executable} -m trusted.hosting {path} {args.identity}",restrict {key}'
+    line = f'command="cd {ROOT} && exec {sys.executable} -m bt.hosting {path} {args.identity}",restrict {key}'
     existing = keys.read_text().splitlines() if keys.exists() else []
     if line not in existing:
         keys.write_text("\n".join(existing + [line]) + "\n")

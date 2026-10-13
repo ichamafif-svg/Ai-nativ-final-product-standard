@@ -4,7 +4,7 @@
     python tools/run_release.py /srv/standard/deploy 9000 --repo /srv/standard/hosting/repos/app.git
                                 [--releases DIR] [--health /health] [--data /srv/standard/data]
 
-The guard only moves registers, small files in the deploy directory holding commits (D37: trusted/register.py). The
+The guard only moves registers, small files in the deploy directory holding commits (D37: bt/register.py). The
 runner builds what it runs: it exports the commit a register names from the canonical repository, by its hash, into
 its own releases directory. It listens on PORT and forwards every request to the release that serves. When the guard
 moves `current`, or asks for a restart (the `restart` register), the runner starts the new process on a private

@@ -21,6 +21,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from kernel.types import ID
 
 from . import probes, production, suite
 from .data import EMPTY, TrustedData
@@ -28,7 +29,7 @@ from .recipes import recipes_for
 from .tree import DirTree, Measure, verdict
 
 RULES, RULES_TRAILER = "standard/rules.json", re.compile(r"(?m)^Standard-Rules: (sha256:[0-9a-f]{64})$")
-TARGET_TRAILER = re.compile(r"(?m)^Standard-Target: ([a-z-]+)$")
+TARGET_TRAILER = re.compile(r"(?m)^Standard-Target: (" + ID.pattern + r")$")
 AUTHOR = re.compile(r"refs/heads/([a-z0-9][a-z0-9_-]{0,63})/[^\s]+")
 
 
@@ -53,7 +54,8 @@ def plan(p: dict) -> list:
     jobs = [{"job": "floors", "inputs": {"main": {"commit": main}, "data": data, "targets": targets,
                                          "protections": {"world": "protections"}, "history": {"log": [p["anchor"], main]},
                                          "judged": {"value": sorted(p["judged"])},
-                                         "now": {"value": -(-p["now"] // 3_600_000) * 3_600_000}}}]   # the next hour: cached an hour, stale early
+                                         "now": {"value": -(-p["now"] // 3_600_000) * 3_600_000},
+                                         "install": install}, "network": p["install"]}]   # next hour: cache expires early
     for c in p["proposals"]:
         if c["parents"] != [main]:
             continue                                        # only transitions from the current main are measured
@@ -107,7 +109,7 @@ def plan(p: dict) -> list:
 # ---- measuring jobs ------------------------------------------------------------------------------------------------
 def floors(inp: dict) -> list:
     tree, targets, data = DirTree(inp["main"]["tree"]), {t["id"]: t for t in inp["targets"]}, _data(inp)
-    ctx = {"data": data, "history": inp["history"], "judged": set(inp["judged"]),
+    ctx = {"data": data, "history": inp["history"], "judged": set(inp["judged"]), "install": inp.get("install", False),
            "world": type("World", (), {"protections": lambda _: set(inp["protections"])})()}
     facts = [["repo:inventory:all", "coverage", verdict("complete", probes.inventory(tree)), []]]
     for tid, probe in probes.PROBES.items():

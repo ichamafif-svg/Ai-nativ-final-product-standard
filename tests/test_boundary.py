@@ -11,11 +11,11 @@ sys.path.insert(0, str(ROOT))
 
 from fixture import Ledger  # noqa: E402
 
-from floors import CONTRACTS, INSTRUMENTS, PROGRAMS  # noqa: E402
+from standard.floors import CONTRACTS, INSTRUMENTS, PROGRAMS  # noqa: E402
 from kernel import canon  # noqa: E402
-from trusted.guard import NotDispatched  # noqa: E402
-from trusted.host import Evidence  # noqa: E402
-from trusted.transactions import Boundary  # noqa: E402
+from bt.guard import NotDispatched  # noqa: E402
+from bt.host import Evidence  # noqa: E402
+from bt.transactions import Boundary  # noqa: E402
 
 A, B = "a" * 40, "b" * 40
 
@@ -107,7 +107,7 @@ class Resolve(unittest.TestCase):
 
     def resolved(self, profile, read):
         from fixture import Keys
-        from trusted.signing import Signer
+        from bt.signing import Signer
         root = Path(tempfile.mkdtemp())
         keys = Keys()
         r = boundary(root).resolver({"restart": Adapter(profile, read)}, Signer("oracle", keys.private["oracle"][1]),

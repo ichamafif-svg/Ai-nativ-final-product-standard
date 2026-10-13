@@ -1,9 +1,17 @@
-.PHONY: check budget test
+.PHONY: check layers coverage test
+PYTHON ?= python3
 
-check: budget test
+check: layers test
 
-budget:
-	python3 tools/check_tcb.py
+layers:
+	$(PYTHON) tools/check_layers.py
+
+coverage:
+	$(PYTHON) -m tools.coverage
 
 test:
-	cd tests && python3 -W error::ResourceWarning -m unittest -v test_kernel test_trusted test_maintenance test_coverage test_install test_hosting test_agent test_web test_run test_isolation test_build test_boundary
+	GIT_AUTHOR_NAME="$${GIT_AUTHOR_NAME:-standard-tests}" \
+	GIT_AUTHOR_EMAIL="$${GIT_AUTHOR_EMAIL:-tests@standard.invalid}" \
+	GIT_COMMITTER_NAME="$${GIT_COMMITTER_NAME:-standard-tests}" \
+	GIT_COMMITTER_EMAIL="$${GIT_COMMITTER_EMAIL:-tests@standard.invalid}" \
+	$(PYTHON) -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py' -v

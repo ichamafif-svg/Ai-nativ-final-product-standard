@@ -20,18 +20,18 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tomllib
+import toml_compat as tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from floors import RELEASE  # noqa: E402
+from standard.floors import RELEASE  # noqa: E402
 from kernel import Kernel  # noqa: E402
-from trusted.host import Evidence, Host  # noqa: E402
-from trusted.isolation import Isolation  # noqa: E402
-from trusted.journal import Journal, PinStore  # noqa: E402
-from trusted.release import code_digest  # noqa: E402
+from bt.host import Evidence, Host  # noqa: E402
+from bt.isolation import Isolation  # noqa: E402
+from bt.journal import Journal, PinStore  # noqa: E402
+from standard.runtime import code_digest  # noqa: E402
 
 
 def facts(output: dict) -> set:

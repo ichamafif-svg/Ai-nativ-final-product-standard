@@ -24,7 +24,7 @@ say() { printf '\n== %s\n' "$*"; }
 phase1() {
   say "system packages"
   apt-get update -q
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip ufw util-linux apparmor >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip ufw util-linux apparmor bubblewrap >/dev/null
 
   say "code in $CODE, its own Python environment"
   if [ "$SRC" != "$CODE" ]; then rm -rf "$CODE"; mkdir -p "$CODE"; cp -a "$SRC"/. "$CODE"/; fi
@@ -52,9 +52,9 @@ EOF
   say "firewall: SSH only"
   { ufw allow OpenSSH >/dev/null && ufw --force enable >/dev/null; } || echo "WARNING: firewall not enabled"
 
-  say "hosting: one repository (app) seeded from demo/"
+  say "hosting: one repository (app) seeded from examples/demo/"
   rm -rf /srv/standard; mkdir -p /srv/standard/seed "$HOSTING" "$(dirname "$PINS")"; chmod 755 /srv/standard "$HOSTING"
-  cp -a "$CODE/demo/." /srv/standard/seed/
+  cp -a "$CODE/examples/demo/." /srv/standard/seed/
   git -C /srv/standard/seed init -q -b main
   git -C /srv/standard/seed add -A
   git -C /srv/standard/seed -c user.name=Standard -c user.email=standard@localhost commit -qm "Demo repository"
@@ -145,15 +145,15 @@ phase2() {
   fi
 
   say "two services: the operator (guard) and the agent"
-  unit standard-operator standard-guard "-m trusted serve $INSTALL/standard.toml 30"
-  unit standard-agent standard-agent "-m autonomy run $INSTALL/standard.toml 60"
-  unit standard-web standard-web "-m surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
+  unit standard-operator standard-guard "-m standard.runtime serve $INSTALL/standard.toml 30"
+  unit standard-agent standard-agent "-m standard.autonomy run $INSTALL/standard.toml 60"
+  unit standard-web standard-web "-m standard.surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
   # DEMO: the demo product's API and steady traffic, so that Run shows real metrics.
   id standard-demo >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-demo
   install -d -o standard-guard -g standard-guard -m 0755 /srv/standard/deploy
   install -d -o standard-demo -g standard-demo -m 0750 /srv/standard/data      # the product's data, not the guard's
   unit standard-demo-service standard-demo "$CODE/tools/run_release.py /srv/standard/deploy 9000 --repo $HOSTING/repos/app.git --data /srv/standard/data"
-  unit standard-demo-load standard-demo "$CODE/tools/demo_load.py http://127.0.0.1:9000 20"
+  unit standard-demo-load standard-demo "$CODE/examples/load.py http://127.0.0.1:9000 20"
   systemctl daemon-reload
   systemctl enable --now standard-operator
   sleep 5

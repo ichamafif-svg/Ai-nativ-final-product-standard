@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
-from trusted.host import Evidence, Host  # noqa: E402
-from trusted.isolation import Isolation  # noqa: E402
+from bt.host import Evidence, Host  # noqa: E402
+from bt.isolation import Isolation  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
