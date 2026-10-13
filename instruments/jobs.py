@@ -5,30 +5,29 @@ already materialised (an exported commit, the bytes of a blob, a recorded value)
 stdout. `plan` is cheap and sees the ledger's extract; the measuring jobs see only what they measure, so the host can
 cache them by their inputs and anyone can replay them.
 
-    plan          main, proposals, inbox, requests, registers  ->  jobs, each with the inputs the host materialises
+    plan          main, proposals, inbox, requests, registers, the rules in force  ->  jobs, with their inputs
     floors        main's tree, pinned data, protections, lineage  ->  every probed floor target
-    remediation   base, head (a proposal)  ->  tests (+ reproduced when a recipe recomputes it) on repo:{area}:{item}/…
-    configure     base, head with a Standard-Rules trailer  ->  configured, tests, regressions on repo:config:rules/…
-    feature       base, head with a Standard-Request trailer  ->  acceptance, tests, regressions on repo:feature:…
+    remediation   base, head (a proposal)  ->  tests, regressions, scoped (+ reproduced when a recipe recomputes it)
+                  on repo:{area}:{item}/…
+    feature       base, head with a Standard-Request trailer  ->  acceptance, tests, regressions, scoped on
+                  repo:feature:…
     contribution  base, head from the inbox  ->  tests, regressions (+ acceptance) on repo:contrib:…
     request       main, a request's contract  ->  contract (proposed) or accepted (contracted) on build:request/…
     production    scrapes, probes, registers  ->  coverage, slo, lag, what is on each switch, numbers
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 from kernel.types import ID
 
-from . import probes, production, suite
+from . import probes, production, scope, suite
 from .data import EMPTY, TrustedData
 from .recipes import recipes_for
 from .tree import DirTree, Measure, verdict
 
-RULES, RULES_TRAILER = "standard/rules.json", re.compile(r"(?m)^Standard-Rules: (sha256:[0-9a-f]{64})$")
 TARGET_TRAILER = re.compile(r"(?m)^Standard-Target: (" + ID.pattern + r")$")
 AUTHOR = re.compile(r"refs/heads/([a-z0-9][a-z0-9_-]{0,63})/[^\s]+")
 
@@ -46,11 +45,11 @@ def _data(inp) -> TrustedData:
 def plan(p: dict) -> list:
     """Which jobs to run, with which inputs, on this pass."""
     main, data, install = p["main"], {"data": True}, {"value": p["install"]}
-    targets = {"value": p["targets"]}
+    targets, settings = {"value": p["targets"]}, p.get("settings") or {}
+    scopes = {"value": settings.get("scopes") if isinstance(settings.get("scopes"), dict) else {}}
     entities = p["entities"]
     contracted = {r.split("/", 1)[1]: e["fields"]["contract"] for r, e in entities.items()
                   if e["type"] == "request" and e["state"] == "contracted"}
-    engineers = {p["holders"].get("engineer")} - {None}
     jobs = [{"job": "floors", "inputs": {"main": {"commit": main}, "data": data, "targets": targets,
                                          "protections": {"world": "protections"}, "history": {"log": [p["anchor"], main]},
                                          "judged": {"value": sorted(p["judged"])},
@@ -60,21 +59,15 @@ def plan(p: dict) -> list:
         if c["parents"] != [main]:
             continue                                        # only transitions from the current main are measured
         base, head = {"commit": main}, {"commit": c["head"]}
-        signed, rid = RULES_TRAILER.search(c["message"]), suite.claimed(c["message"])
-        if signed:
-            ok = any(f["resource"] == f"repo:config:rules/{main}" and f["property"] == "rules"
-                     and f["status"] == signed[1] and f["author"] in engineers for f in p["facts"])
-            jobs.append({"job": "configure", "inputs": {"base": base, "head": head, "data": data, "targets": targets,
-                                                        "digest": {"value": signed[1]}, "signed": {"value": ok}, "install": install},
-                         "network": p["install"]})
-        elif rid in contracted:
+        rid = suite.claimed(c["message"])
+        if rid in contracted:
             jobs.append({"job": "feature", "inputs": {"base": base, "head": head, "data": data, "targets": targets,
                                                       "request": {"value": rid},
                                                       "contract": {"store": "requests", "digest": contracted[rid]}, "install": install},
                          "network": p["install"]})
         elif rid is None:
             jobs.append({"job": "remediation", "inputs": {"base": base, "head": head, "data": data, "targets": targets,
-                                                          "install": install},
+                                                          "scopes": scopes, "install": install},
                          "network": p["install"]})
     for c in p["inbox"]:
         author = AUTHOR.fullmatch(c["ref"])
@@ -100,7 +93,7 @@ def plan(p: dict) -> list:
         shas = [x for x in {live, (switch or {}).get("from")} if x and re.fullmatch(r"[0-9a-f]{40}", x)]
         jobs.append({"job": "production", "inputs": {
             "now": {"value": p["now"]}, "main": {"value": main}, "deploy": {"value": p["registers"] is not None},
-            "registers": {"value": regs}, "series": {"series": "*"}, "rules": {"file": [main, RULES]},
+            "registers": {"value": regs}, "series": {"series": "*"}, "rules": {"value": settings},
             "facts": {"value": [f for f in p["facts"] if f["resource"].startswith("run:") and f["author"] == p["scanner"]]},
             **{f"manifest_{s}": {"manifest": s} for s in shas}}})
     return jobs
@@ -169,26 +162,9 @@ def remediation(inp: dict) -> list:
         return []
     _, area, item = targets[tid]["resource"].split(":", 2)
     facts["tests"] = suite.tests_report(base, head, install=inp.get("install", False))
-    facts["regressions"] = _regressions(base, head, inp, data)       # a reviewed repair opens no other gap
+    facts["regressions"] = _regressions(base, head, inp, data)       # a repair opens no other gap
+    facts["scoped"] = scope.scoped(scope.changed(base, head), lambda path: scope.repair(tid, path, inp.get("scopes")))
     return [[f"repo:{area}:{item}/{base.commit}/{head.commit}", p, s, d] for p, (s, d) in facts.items()]
-
-
-def configure(inp: dict) -> list:
-    """`configured`: yes only if the commit changes standard/rules.json alone, to bytes whose digest an engineer
-    signed for this very main."""
-    base, head, data = DirTree(inp["base"]["tree"]), DirTree(inp["head"]["tree"]), _data(inp)
-    changed = sorted(p for p in base.entries.keys() | head.entries.keys() if base.entries.get(p) != head.entries.get(p))
-    content = head.read(RULES) if RULES in head.paths() else b""
-    why = [] if changed == [RULES] else [f"changes {changed}, not only {RULES}"]
-    why += [] if "sha256:" + hashlib.sha256(content).hexdigest() == inp["digest"] else ["content differs from the signed digest"]
-    why += [] if inp["signed"] else ["no engineer signed this digest for this main"]
-    try:
-        json.loads(content)
-    except ValueError:
-        why.append(f"{RULES} is not JSON")
-    facts = {"configured": ("no" if why else "yes", why), "tests": suite.tests_report(base, head, install=inp.get("install", False)),
-             "regressions": _regressions(base, head, inp, data)}
-    return [[f"repo:config:rules/{base.commit}/{head.commit}", p, s, d] for p, (s, d) in facts.items()]
 
 
 def feature(inp: dict) -> list:
@@ -196,7 +172,8 @@ def feature(inp: dict) -> list:
     contract, rid = _bytes(inp["contract"]), inp["request"]
     facts = {"acceptance": suite.acceptance_on(head, rid, contract) if contract else ("uncovered:store", []),
              "tests": suite.tests_report(base, head, install=inp.get("install", False)),
-             "regressions": _regressions(base, head, inp, data)}
+             "regressions": _regressions(base, head, inp, data),
+             "scoped": scope.scoped(scope.changed(base, head), lambda path: scope.feature(rid, path))}
     return [[f"repo:feature:{rid}/{base.commit}/{head.commit}", p, s, d] for p, (s, d) in facts.items()]
 
 
@@ -229,13 +206,13 @@ def run_production(inp: dict) -> dict:
     for name, s in inp["series"].items():
         s["points"] = [(at, None if f is None else (json.loads(Path(f).read_text()) if s["role"] == "probes"
                                                     else Path(f).read_text())) for at, f in s["points"]]
-    inp["rules"] = json.loads(_bytes(inp["rules"]) or b"{}") if inp.get("rules") else {}
+    inp["rules"] = inp["rules"] if isinstance(inp.get("rules"), dict) else {}
     inp["manifests"] = {k[len("manifest_"):]: json.loads(Path(v["manifest"]).read_text())["entries"]
                         for k, v in inp.items() if k.startswith("manifest_")}
     return production.measure(inp)
 
 
-JOBS = {"floors": floors, "remediation": remediation, "configure": configure, "feature": feature,
+JOBS = {"floors": floors, "remediation": remediation, "feature": feature,
         "contribution": contribution, "request": request}
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 from bt.host import Host
 from bt.signing import Signer, envelope
 
-MAIN_OPS = ("remediate", "integrate", "implement", "configure")   # the operations that move main, by the same CAS
+MAIN_OPS = ("remediate", "integrate", "implement")   # the operations that move main, by the same CAS
 DAY = 86_400_000
 
 
@@ -57,12 +57,12 @@ class Instruments:
     """T06 pass: plan, measure through the host, sign."""
 
     def __init__(self, service, instrument: Instrument, host: Host, boundary, repo, proposals, *,
-                 anchor: str | None = None, inbox=None, findings=None, install: bool = False, holders=lambda: {},
+                 anchor: str | None = None, inbox=None, findings=None, install: bool = False,
                  sources=None, production: bool = False, registers=None):
         self.service, self.instrument, self.host, self.repo = service, instrument, host, Path(repo)
         self.boundary = boundary
         self.proposals, self.inbox, self.findings_path, self.install = proposals, inbox, findings, install
-        self.holders, self.sources, self.production, self.registers = holders, sources or {}, production, registers
+        self.sources, self.production, self.registers = sources or {}, production, registers
         clock = instrument.clock                          # statements never fall behind the ledger's last instant
         instrument.clock = lambda: max(clock(), service.journal.snapshot()["last_at"] + 1)
         self.anchor = anchor or self._main()
@@ -90,10 +90,11 @@ class Instruments:
         if (state["size"], state["head"]) != (view["prefix"]["size"], view["prefix"]["head"]):
             raise RuntimeError("instrument plan: journal prefix changed during subject capture")
         return {"main": self._main(), "anchor": self.anchor, "now": self.instrument.clock(),
-                "targets": view["law"]["effective"]["targets"], "install": self.install,
+                "targets": view["law"]["effective"]["targets"], "settings": view["law"]["effective"]["settings"],
+                "install": self.install,
                 "proposals": self._commits(self.proposals, "refs/standard/proposals/*") if self.proposals else [],
                 "inbox": self._commits(self.inbox, "refs/heads/*") if self.inbox else [],
-                "entities": state["entities"], "holders": self.holders(), "scanner": self.instrument.signer.identity,
+                "entities": state["entities"], "scanner": self.instrument.signer.identity,
                 "facts": [{k: o[k] for k in ("resource", "property", "status", "author")}
                           for o in state["observations"].values()],
                 "judged": sorted(it["args"]["head"] for i, it in state["intents"].items()

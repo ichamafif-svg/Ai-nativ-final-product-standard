@@ -145,10 +145,6 @@ class Host:
         arg = spec[kind]
         if kind in ("commit", "manifest"):
             return {kind: _git(self.repo, "rev-parse", "--verify", f"{arg}^{{commit}}").strip()}
-        if kind == "file":
-            r = subprocess.run(["git", "-C", str(self.repo), "cat-file", "blob", f"{arg[0]}:{arg[1]}"],
-                               capture_output=True, timeout=60)
-            return {"evidence": self.evidence.put(r.stdout) if r.returncode == 0 else None}
         if kind == "store":
             path = self.stores[arg] / spec.get("digest", ":").split(":", 1)[1]
             data = path.read_bytes() if path.is_file() else None

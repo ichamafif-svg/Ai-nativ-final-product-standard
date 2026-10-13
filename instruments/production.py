@@ -2,14 +2,14 @@
 
 Inputs, all recorded by the host: the scrapes of every declared source (Prometheus text, OpenTelemetry conventions)
 at decreasing resolution (every scrape for minutes, one a minute for hours, one an hour for months), the answers of
-the probes, the release registers and their history, the rules file on main, and the scanner's own earlier facts on
+the probes, the release registers and their history, the settings of the rules in force, and the scanner's own facts on
 run:*. From them, the same reading the console shows: components (APIs, workers, databases, external services,
 scheduled jobs, processes, probes), SLOs with error budgets and burn rates (Google SRE workbook), the served version.
 
 It signs `run:sources:all coverage` (complete only when every source answered: never "fine" by default),
 `run:service:all slo` (`met`, or `breached:N`: counted components failing 5 % or more, SLOs burning at 14.4 or more),
-`run:release:all lag`, and on exact switches what is (`candidate`, `previous`, `proven`, `live`, `running`, `good`)
-with numbers the law compares (D36). It asks the host to send the declared probes on the next pass (`fetch`).
+`run:release:all lag`, and on exact switches what is (`candidate`, `previous`, `proven`, `live`, `running`, `good`,
+whether the deployment `window` of the rules is open) with numbers the routes compare (D36). It asks the host to send the declared probes on the next pass (`fetch`).
 A counter that goes down is a restart and counts from zero; between two sparse points a restart loses the requests
 it hides (declared limit of the budget over long windows).
 """
@@ -135,7 +135,7 @@ def stats(ds: list, seconds: float, slo: float) -> dict:
             "p50": ms(0.5), "p95": ms(0.95), "p99": ms(0.99)}
 
 
-RULES = "standard/rules.json"      # D35: the engineers' rules, in the product's repository
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 PROBE = re.compile(r"(GET|HEAD|POST) (/[A-Za-z0-9._~/?=&%-]{0,200}) ([1-5][0-9][0-9])")
 SELECTOR = re.compile(r"counted|all|kind:(api|worker|job|database|dependency|probe)|c-[0-9a-f]{12}(,c-[0-9a-f]{12}){0,31}")
 
@@ -152,10 +152,24 @@ def _in(value, low, high, default):
     return x if low <= x <= high else default
 
 
+def window(m: dict, now_ms: int) -> str:
+    """`open` inside the rules' deployment days and hours, in their time zone; `closed` otherwise or if malformed."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    try:
+        local = datetime.fromtimestamp(now_ms / 1000, timezone.utc).astimezone(ZoneInfo(m["deploy_tz"]))
+        hours = re.fullmatch(r"([01]?[0-9]|2[0-3])-([01]?[0-9]|2[0-4])", m["deploy_hours"])
+        start, end = int(hours[1]), int(hours[2])
+    except Exception:
+        return "closed"
+    days = m["deploy_days"].split(",")
+    return "open" if DAYS[local.weekday()] in days and start <= local.hour < end else "closed"
+
+
 def measures(doc) -> dict:
-    """What to measure, from the rules file: a malformed entry is skipped, never half-read."""
+    """What to measure, from the settings of the rules in force: a malformed entry is skipped, never half-read."""
     part = lambda d, k: v if isinstance(v := (d if isinstance(d, dict) else {}).get(k), dict) else {}
-    g = part(doc, "global")
+    g = doc if isinstance(doc, dict) else {}
     objective, base = _in(g.get("objective"), 50, 99.999, 99.9), str(g.get("base_url", ""))
     slos = {"s-default": {"name": "Disponibilité du service", "sli": "availability", "target": objective,
                           "window_d": 30, "selector": "counted", "threshold_ms": None, "state": "on"}}
@@ -170,6 +184,8 @@ def measures(doc) -> dict:
                          "selector": k["selector"] if SELECTOR.fullmatch(str(k.get("selector"))) else b["selector"],
                          "state": "off" if k.get("state") == "off" else "on"}
     return {"objective": objective, "window_s": int(_in(g.get("window_s"), 60, 3600, 300)),
+            "deploy_days": str(g.get("deploy_days", ",".join(DAYS))), "deploy_hours": str(g.get("deploy_hours", "00-24")),
+            "deploy_tz": str(g.get("deploy_tz", "UTC")),
             "canary_percent": int(_in(g.get("canary_percent"), 1, 50, 10)),
             "base_url": base if re.fullmatch(r"https?://[A-Za-z0-9.:-]{1,200}", base) else "",
             "counted": {c: k["counted"] == "on" for c, k in part(doc, "components").items()
@@ -261,10 +277,11 @@ def evaluate(rows: list, slos: dict, now_minute: int, *, counted) -> dict:
 
 def release_facts(live: str | None, main: str, history: list, good: set, now_ms: int, numbers: dict, *,
                   served: str | None = None, crossed=lambda live, prev: 0, canary: str | None = None,
-                  canary_stats=lambda release, since: None) -> list:
+                  canary_stats=lambda release, since: None, open_: str = "open") -> list:
     """What is, on each exact switch, as (resource, property, status):
 
-    run:release:all/{live}/{main}     candidate  main moved and its head was never stepped back from; budget_pct; and
+    run:release:all/{live}/{main}     candidate  main moved and its head was never stepped back from; window,
+                                                 budget_pct; and
                                                  when main runs as the canary, its numbers against the live release
     run:canary:all/{live}/{main}      candidate  the same, beside a live release and no canary yet
     run:canary:abort/{live}/{canary}  running    a canary runs
@@ -278,9 +295,11 @@ def release_facts(live: str | None, main: str, history: list, good: set, now_ms:
     facts = [("run:release:all", "lag", "none" if (served or live) == main and live == main else "behind")]
     if live != main and main not in stepped:
         r = f"run:release:all/{live_name}/{main}"
-        facts += [(r, "candidate", "yes"), (r, "budget_pct", _n(100 if numbers.get("budget_pct") is None else numbers["budget_pct"]))]
+        budget = _n(100 if numbers.get("budget_pct") is None else numbers["budget_pct"])
+        facts += [(r, "candidate", "yes"), (r, "window", open_), (r, "budget_pct", budget)]
         if live and canary is None:
-            facts.append((f"run:canary:all/{live}/{main}", "candidate", "yes"))
+            c = f"run:canary:all/{live}/{main}"
+            facts += [(c, "candidate", "yes"), (c, "window", open_), (c, "budget_pct", budget)]
         if live and canary == main:
             started = next((h["at"] for h in reversed(history) if h.get("op") == "canary" and h.get("to") == main), now_ms)
             c, s = canary_stats(main, started // 1000) or {}, canary_stats(live, started // 1000) or {}
@@ -439,7 +458,8 @@ def measure(inp: dict) -> dict:
             good.add(live)
         facts += release_facts(live, inp["main"], history, good, now_ms, a, served=a["served"]["version"],
                                crossed=lambda l, p: crossed(inp["manifests"].get(l), inp["manifests"].get(p)),
-                               canary=canary, canary_stats=lambda rel, since: release_stats(runner, rel, since))
+                               canary=canary, canary_stats=lambda rel, since: release_stats(runner, rel, since),
+                               open_=window(m, now_ms))
     offered = {(r, p) for r, p, s in facts if p in PREMISES}
     facts += [(r, p, "no") for (r, p), s in sorted(earlier.items()) if p in PREMISES and s == "yes"
               and (r, p) not in offered and p != "good"]
