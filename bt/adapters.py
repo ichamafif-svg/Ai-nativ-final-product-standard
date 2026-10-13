@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
+import urllib.error
 import urllib.request
 import subprocess
 from pathlib import Path
@@ -116,11 +118,14 @@ class GitHub:
         return "unknown"                                    # a server error may follow an applied update
 
     def _push(self, base: str, head: str) -> str:
+        # The credential travels in the environment (readable by this user and root only), never in argv, which every
+        # local account can read in /proc: the agent's user must never see the guard's write token (T07, G15).
         auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
-        r = subprocess.run(["git", "-C", str(self.push_from), "-c", f"http.extraHeader=Authorization: Basic {auth}",
-                            "-c", "remote.origin.mirror=false",
+        env = {**os.environ, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader",
+               "GIT_CONFIG_VALUE_0": f"Authorization: Basic {auth}", "GIT_TERMINAL_PROMPT": "0"}
+        r = subprocess.run(["git", "-C", str(self.push_from), "-c", "remote.origin.mirror=false",
                             "push", "--porcelain", f"--force-with-lease=refs/heads/main:{base}", "origin",
-                            f"{head}:refs/heads/main"], capture_output=True, text=True, timeout=300)
+                            f"{head}:refs/heads/main"], capture_output=True, text=True, timeout=300, env=env)
         if r.returncode == 0:
             return "ok"
         return "failed" if "[rejected]" in r.stdout or "[remote rejected]" in r.stdout else "unknown"

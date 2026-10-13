@@ -25,6 +25,7 @@ from kernel.canon import digest as canon_digest, parse as canon_parse
 
 from .isolation import Isolation
 
+TRUSTED_JOBS = ("plan", "production")                      # read recorded data only; every other job runs candidate code
 KEEP = ((900, 0), (6 * 3600, 60), (32 * 86400, 3600))      # age below -> keep one point per period (0: every one)
 
 
@@ -227,7 +228,7 @@ class Host:
         return output, record
 
     def run(self, job: str, resolved: dict, *, network: bool = False) -> dict:
-        if self.isolation.isolated and not self.isolation.candidate_fs_confined and job not in ("plan", "production"):
+        if job not in TRUSTED_JOBS and not self.isolation.may_run_candidates:
             return {"error": "candidate filesystem isolation unavailable"}
         work = Path(tempfile.mkdtemp(prefix="standard-run-"))
         try:

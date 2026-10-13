@@ -18,6 +18,7 @@ from bt import Journal, PinStore, Signer, TrustedService
 from bt.adapters import GitRepository
 from bt.transactions import Boundary, ledger_of
 from instruments.data import TrustedData
+from bt.isolation import Isolation  # noqa: E402
 from bt.host import Evidence, Host
 from standard.runtime.operator import Instrument, Instruments, Prover
 
@@ -32,7 +33,8 @@ def host_for(root: Path, repo, data=None, world=None, stores=None, clock=None, s
         from kernel.canon import canon
         path.write_bytes(canon(data.value))
     return Host(ROOT, Evidence(root / "evidence"), repo, data=(path, data.digest) if data is not None else None,
-                world=world, stores=stores, clock=clock, series=series)
+                world=world, stores=stores, clock=clock, series=series,
+                isolation=Isolation(unconfined=True))           # functional tests: candidate code runs unconfined
 
 
 def sh(cwd, *args):

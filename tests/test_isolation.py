@@ -39,6 +39,28 @@ class Isolated(unittest.TestCase):
         self.assertEqual(out, {"error": "candidate filesystem isolation unavailable"})
         self.assertFalse(marker.exists())
 
+    def test_no_runner_user_is_no_candidate_code_never_the_operator_account(self):
+        """Falsifier (review, critical 1): without [tests] runner_user, candidate code ran as the operator."""
+        root = Path(tempfile.mkdtemp())
+        marker = root / "executed"
+        repo = demo_repository(root, {**FILES, "tests/test_hostile.py":
+                               f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"})
+        main = subprocess.run(["git", "-C", str(repo), "rev-parse", "main"], capture_output=True, text=True).stdout.strip()
+        host = Host(ROOT, Evidence(root / "evidence"), repo)
+        out, _ = host.call("contribution", {"base": {"commit": main}, "head": {"commit": main},
+                                            "author": {"value": "eve"}, "targets": {"value": []}})
+        self.assertEqual(out, {"error": "candidate filesystem isolation unavailable"})
+        self.assertFalse(marker.exists())
+
+    def test_unconfined_is_explicit_and_demo_only(self):
+        from standard.runtime.daemon import isolation
+        self.assertFalse(isolation({}, demo=True).may_run_candidates)
+        self.assertTrue(isolation({"tests": {"unconfined": True}}, demo=True).may_run_candidates)
+        with self.assertRaises(ValueError):
+            isolation({"tests": {"unconfined": True}}, demo=False)
+        with self.assertRaises(ValueError):
+            Isolation("runner", unconfined=True)
+
 
 if __name__ == "__main__":
     unittest.main()

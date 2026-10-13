@@ -149,6 +149,8 @@ def init(args) -> None:
         from kernel import parse
         snapshot = Path(args.data).resolve()
         data_section = f'\n[data]\npath = "{snapshot}"\ndigest = "{digest(parse(snapshot.read_bytes(), max_bytes=64 << 20))}"\n'
+    if getattr(args, "unconfined_tests", False):             # functional tests only: candidate code runs as the operator
+        data_section += "\n[tests]\nunconfined = true\n"
     (d / "standard.toml").write_text(f'''# DEMO installation: every key on one host, self-assessed (ARCHITECTURE.md §15.4, D18, D19).
 demo = true
 
@@ -256,6 +258,8 @@ def main() -> int:
     i.add_argument("--pins")
     i.add_argument("--inbox", help="the hosting inbox of this repository (tools/host.py)")
     i.add_argument("--data", help="a reviewed snapshot from tools/refresh_data.py, pinned by its digest")
+    i.add_argument("--unconfined-tests", action="store_true",
+                   help="DEMO ONLY: run candidate tests as the operator, with its keys (no jail)")
     a = sub.add_parser("activate")
     a.add_argument("dir")
     s = sub.add_parser("separate")

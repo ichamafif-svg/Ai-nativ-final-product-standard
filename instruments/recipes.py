@@ -37,9 +37,26 @@ def sbom(tree, data=None) -> dict | None:
     return {"sbom.json": (json.dumps(doc, indent=2) + "\n").encode()}
 
 
+def _fix(current, fixes):
+    """The smallest fixed version above the pin, on the pin's own major line; None when there is none.
+
+    Advisories list a fix per maintained branch (OSV `fixed` events): the smallest of them may be an older major.
+    Moving a pin backwards, or across a major, is a judgment, never a recipe."""
+    from packaging.version import InvalidVersion, Version
+    out = []
+    for raw in fixes:
+        try:
+            v = Version(raw)
+        except (InvalidVersion, TypeError):
+            continue                                       # a commit id or garbage is not a release version
+        if v > current and v.major == current.major and not v.is_prerelease:
+            out.append(v)
+    return min(out) if out else None
+
+
 def vulns(tree, data) -> dict | None:
-    """Each vulnerable pin moves to the smallest version that fixes every one of its advisories; an advisory without a
-    fix means no recipe (a human decides)."""
+    """Each vulnerable pin moves forward to the smallest version, on its own major line, that fixes every one of its
+    advisories; an advisory without such a fix means no recipe (a human decides)."""
     from packaging.version import InvalidVersion, Version
     target = {}
     for name, version in _pins(tree):
@@ -47,9 +64,13 @@ def vulns(tree, data) -> dict | None:
         if not advisories:
             continue
         try:
-            target[name] = str(max(min(Version(v) for v in a["fix_versions"]) for a in advisories))
-        except (ValueError, InvalidVersion, KeyError):
+            current = Version(version)
+            fixes = [_fix(current, a["fix_versions"]) for a in advisories]
+        except (InvalidVersion, KeyError, TypeError):
             return None
+        if any(f is None for f in fixes):
+            return None
+        target[name] = str(max(fixes))
     if not target:
         return None
     lines = []

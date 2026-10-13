@@ -29,9 +29,9 @@ sys.path.insert(0, str(ROOT))
 from standard.floors import RELEASE  # noqa: E402
 from kernel import Kernel  # noqa: E402
 from bt.host import Evidence, Host  # noqa: E402
-from bt.isolation import Isolation  # noqa: E402
 from bt.journal import Journal, PinStore  # noqa: E402
 from standard.runtime import code_digest  # noqa: E402
+from standard.runtime.daemon import isolation  # noqa: E402
 
 
 def facts(output: dict) -> set:
@@ -79,7 +79,7 @@ def host_for(config: Path) -> Host:
     repo = c["repository"]
     data = c.get("data")
     return Host(ROOT, Evidence(base / "evidence"), resolve(repo.get("path") or repo["mirror"]),
-                isolation=Isolation(c.get("tests", {}).get("runner_user")),
+                isolation=isolation(c, c.get("demo") is True),
                 stores={"requests": resolve(c.get("build", {}).get("store", "requests"))},
                 data=(resolve(data["path"]), data["digest"]) if data else None)
 

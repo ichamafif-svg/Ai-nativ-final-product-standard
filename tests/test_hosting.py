@@ -113,7 +113,7 @@ class Integration(unittest.TestCase):
         os.chmod(inbox / "hooks" / "update", 0o755)
         clock = Clock(1_900_000_000_000)
         ceremony.now = daemon.now_ms = clock
-        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None,
+        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db"), inbox=str(inbox)))
         clock.t += 3_600_100
         ceremony.activate(argparse.Namespace(dir=str(root / "install")))

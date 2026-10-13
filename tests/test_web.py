@@ -65,7 +65,7 @@ class Server(unittest.TestCase):
         repo = demo_repository(root, FILES)
         clock = Clock(1_900_000_000_000)
         ceremony.now = daemon.now_ms = clock
-        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None,
+        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
         clock.t += 3_600_100
         ceremony.activate(argparse.Namespace(dir=str(root / "install")))
@@ -82,6 +82,10 @@ class Server(unittest.TestCase):
         try:
             state = json.loads(urllib.request.urlopen(f"{url}/api/state").read())
             self.assertEqual(state["assessment"], "SELF_ASSESSED")
+            rebound = urllib.request.Request(f"{url}/api/state", headers={"Host": "evil.example:8080"})
+            with self.assertRaises(urllib.error.HTTPError) as foreign:    # review, high 5: DNS rebinding
+                urllib.request.urlopen(rebound)
+            self.assertEqual(foreign.exception.code, 403)
             self.assertIn("sbom", [g["target"] for g in state["run"]["gaps"]])
             self.assertEqual(state["signing"]["grants"]["reviewer"]["holder"], "h3")
             self.assertEqual(state["product"], "repo")

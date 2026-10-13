@@ -46,6 +46,18 @@ def key(keys_dir: Path, identity: str) -> Signer:
     return Signer(identity, Ed25519PrivateKey.from_private_bytes(base64.b64decode(path.read_text().strip())))
 
 
+def isolation(config: dict, demo: bool) -> Isolation:
+    """The runner of candidate code. No runner user means no candidate code at all, unless a demo explicitly accepts
+    running it in this very account (`[tests] unconfined = true`), with every key this process can read."""
+    tests = config.get("tests", {})
+    if tests.get("unconfined") is True:
+        if not demo or tests.get("runner_user"):
+            raise ValueError("[tests] unconfined is a demo-only setting, exclusive with runner_user")
+        print("WARNING: candidate code runs unconfined, as the operator, with its keys (demo only)", file=sys.stderr)
+        return Isolation(unconfined=True)
+    return Isolation(tests.get("runner_user"))
+
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -79,7 +91,7 @@ class Installation:
         run, deploy, data = c.get("run", {}), c.get("deploy"), c.get("data")
         evidence = Evidence(self.path.parent / "evidence")             # D37: what every measure read and returned
         self.host = Host(Path(__file__).resolve().parents[2], evidence, self.repo_path,
-                         isolation=Isolation(c.get("tests", {}).get("runner_user")),   # D33: never run their code as us
+                         isolation=isolation(c, self.demo),        # D33: never run their code as us
                          stores={"requests": resolve(c.get("build", {}).get("store", "requests"))},
                          data=(resolve(data["path"]), data["digest"]) if data else None, world=self.world,
                          series=Series(evidence, self.path.parent / "series.json"), clock=self.clock,

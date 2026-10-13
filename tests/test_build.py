@@ -61,7 +61,7 @@ class Construction(unittest.TestCase):
         clock = Clock(1_900_000_000_000)
         ceremony.now = daemon.now_ms = clock
         install = root / "install"
-        ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None,
+        ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
         clock.t += 3_600_100
         ceremony.activate(argparse.Namespace(dir=str(install)))

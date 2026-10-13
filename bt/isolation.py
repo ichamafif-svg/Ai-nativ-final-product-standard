@@ -10,6 +10,10 @@ output directory. Installing dependencies is a separate step, as the same user, 
 This boundary does not yet confine the runner's filesystem, and installation of candidate dependencies is a
 separate networked step. The host refuses candidate jobs while this is incomplete; `isolated` means user separation
 only, not a complete candidate-code jail. Qualification must not report T06 as complete on this implementation.
+
+Fail closed: without a runner user the host refuses candidate code as well. `unconfined=True` is the only way to run
+candidate code in the trusted process's own account, and exists for functional tests and explicit demos: it gives the
+candidate every key that process can read, so it is never inferred from a missing setting.
 """
 from __future__ import annotations
 
@@ -19,8 +23,10 @@ from pathlib import Path
 
 
 class Isolation:
-    def __init__(self, user: str | None = None, *, memory_mb: int = 2048):
-        self.user, self.memory = user, memory_mb << 20
+    def __init__(self, user: str | None = None, *, memory_mb: int = 2048, unconfined: bool = False):
+        if unconfined and user:
+            raise ValueError("a runner user and an unconfined executor are exclusive")
+        self.user, self.memory, self.unconfined = user, memory_mb << 20, unconfined is True
 
     @property
     def isolated(self) -> bool:
@@ -29,6 +35,11 @@ class Isolation:
     @property
     def candidate_fs_confined(self) -> bool:
         return False
+
+    @property
+    def may_run_candidates(self) -> bool:
+        """Candidate code runs only in a complete jail, or where an operator explicitly accepted no jail at all."""
+        return self.candidate_fs_confined or self.unconfined
 
     def open_to_runner(self, *paths) -> None:
         """Make the copies the runner reads world-readable (code is not secret), and give it one writable place."""

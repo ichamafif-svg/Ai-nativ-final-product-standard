@@ -35,7 +35,7 @@ class Installation(unittest.TestCase):
         repo = demo_repository(root, FILES)
         clock = Clock(1_900_000_000_000)
         ceremony.now = daemon.now_ms = clock
-        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None,
+        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
         clock.t += 3_600_100
         ceremony.activate(argparse.Namespace(dir=str(root / "install")))
@@ -67,7 +67,7 @@ class Installation(unittest.TestCase):
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, FILES)
         ceremony.now = Clock(1_900_000_000_000)
-        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None,
+        ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=None))
         from tools import qualify
         report = {p["probe"]: p for p in qualify.qualify(root / "install" / "standard.toml")}
@@ -121,6 +121,24 @@ class GitHubAdapter(unittest.TestCase):
         self.assertEqual(gh.remediate("r", {"base": other, "head": head}, "k"), "failed")   # main is not that base
         self.assertEqual(gh.remediate("r", {"base": base, "head": head}, "k"), "ok")
         self.assertEqual(git("-C", str(origin), "rev-parse", "main"), head)
+
+    def test_the_write_token_never_appears_in_argv(self):
+        """Falsifier (review, high 4): argv is world-readable in /proc; the token goes through the environment."""
+        from unittest.mock import patch
+        import subprocess as sp
+        seen = []
+        real = sp.run
+
+        def spy(args, *a, **k):
+            seen.append((list(args), dict(k.get("env") or {})))
+            return real(["true"], capture_output=True, text=True)
+        from bt.adapters import GitHub
+        gh = GitHub("acme/app", "s3cr3t-token", push_from="/nonexistent")
+        with patch("bt.adapters.subprocess.run", spy):
+            gh.remediate("r", {"base": "a" * 40, "head": "b" * 40}, "k")
+        argv, env = seen[0]
+        self.assertFalse(any("s3cr3t" in a or "Authorization" in a for a in argv))
+        self.assertIn("Authorization: Basic", env["GIT_CONFIG_VALUE_0"])
 
     def test_readback_never_concludes_absence(self):
         gh, _ = self.github([(200, {"status": "ahead"}), (200, {"status": "diverged"})])

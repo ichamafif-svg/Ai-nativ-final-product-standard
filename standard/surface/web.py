@@ -524,9 +524,28 @@ class Installation:
                 "diff": git(self.repo, "show", "--stat", "--patch", "--format=", head)[:120_000]}
 
 
-def handler(inst: Installation):
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+
+def host_name(header: str | None) -> str | None:
+    """The host name a request addresses, without its port; None when malformed."""
+    value = (header or "").strip().lower()
+    m = re.fullmatch(r"(\[[0-9a-f:]+\]|[a-z0-9.-]+)(?::[0-9]{1,5})?", value)
+    return m[1] if m else None
+
+
+def handler(inst: Installation, allowed_hosts=LOCAL_HOSTS):
+    allowed = frozenset(h.lower() for h in allowed_hosts)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "Standard"
+
+        def _foreign(self) -> bool:
+            """DNS rebinding: a page of another site that resolves to this address must not read or write here."""
+            if host_name(self.headers.get("Host")) in allowed:
+                return False
+            self._ok({"error": "unknown host"}, HTTPStatus.FORBIDDEN)
+            return True
 
         def log_message(self, fmt, *args):
             sys.stderr.write("web: " + fmt % args + "\n")
@@ -547,6 +566,8 @@ def handler(inst: Installation):
             self._send(status, json.dumps(value).encode(), "application/json")
 
         def do_GET(self):
+            if self._foreign():
+                return None
             route = self.path.split("?", 1)[0]
             try:
                 if route in ("/", "/index.html"):
@@ -590,6 +611,8 @@ def handler(inst: Installation):
                 return self._ok({"error": f"{type(exc).__name__}: {exc}"[:400]}, HTTPStatus.SERVICE_UNAVAILABLE)
 
         def do_POST(self):
+            if self._foreign():
+                return None
             if self.path not in ("/api/admit", "/api/requests", "/api/rules", "/api/system-settings"):
                 return self._ok({"error": "not found"}, HTTPStatus.NOT_FOUND)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -617,10 +640,12 @@ def main(argv=None) -> int:
     parser.add_argument("config")
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--allow-host", action="append", default=[],
+                        help="a host name a TLS proxy in front forwards (repeatable); localhost names are always allowed")
     args = parser.parse_args(argv)
     inst = Installation(args.config)
     inst.telemetry.start()
-    server = ThreadingHTTPServer((args.bind, args.port), handler(inst))
+    server = ThreadingHTTPServer((args.bind, args.port), handler(inst, (*LOCAL_HOSTS, *args.allow_host)))
     print(f"Standard interface on http://{args.bind}:{args.port}", flush=True)
     server.serve_forever()
     return 0

@@ -611,7 +611,7 @@ class Qualification(unittest.TestCase):
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, FILES)
         with patch.object(ceremony, 'now', Clock(1_900_000_000_000)):
-            ceremony.init(argparse.Namespace(dir=str(root / 'install'), repo=str(repo), github=None, token_file=None,
+            ceremony.init(argparse.Namespace(dir=str(root / 'install'), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                              pins=None))
         return root / 'install'
 

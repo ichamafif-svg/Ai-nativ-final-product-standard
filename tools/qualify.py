@@ -122,8 +122,11 @@ def qualify(config_path) -> list:
             clean = run.returncode == 0
     except (KeyError, OSError, subprocess.SubprocessError):
         entry, clean, groups = None, False, []
-    out.append(probe("T06 contributors' code runs isolated", bool(clean and Isolation(runner).candidate_fs_confined),
+    unconfined = c.get("tests", {}).get("unconfined") is True
+    out.append(probe("T06 contributors' code runs isolated",
+                     bool(clean and not unconfined and Isolation(runner).candidate_fs_confined),
                      {"runner": runner, "groups": groups, "identity_and_network": bool(clean),
+                      "unconfined_demo_executor": unconfined,
                       "filesystem": "not confined by the trusted suite runner"},
                      "the code a contribution brings runs without keys, network or access to unrelated files",
                      "that the kernel's namespaces and sudo are themselves sound"))

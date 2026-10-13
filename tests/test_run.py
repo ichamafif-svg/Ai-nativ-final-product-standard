@@ -360,7 +360,7 @@ class Production(unittest.TestCase):
         clock = Clock(1_900_000_000_000)
         ceremony.now = daemon.now_ms = clock
         install = root / "install"
-        ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None,
+        ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
         with open(install / "standard.toml", "a") as f:
             f.write('\n[run]\nmetrics = ["http://standard/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n')
@@ -481,7 +481,7 @@ class CanaryEndToEnd(unittest.TestCase):
         clock = Clock(1_900_000_000_000)
         ceremony.now = daemon.now_ms = clock
         install = root / "install"
-        ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None,
+        ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
         with open(install / "standard.toml", "a") as f:
             f.write('\n[run]\nmetrics = ["http://standard/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n'
