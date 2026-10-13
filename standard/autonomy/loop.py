@@ -107,5 +107,6 @@ class Loop:
                 notes[m["resource"]] = {"state": getattr(exc, "code", None) or str(exc)[:200], "op": m["op"],
                                         "next_at": now + self.backoff_ms}
             played[m["resource"]] = notes[m["resource"]]["state"]
+        notes["why"] = holding                              # the agent's restraint, for the console
         self.notes.write_text(json.dumps(notes, indent=2, sort_keys=True))
         return played, holding, waiting

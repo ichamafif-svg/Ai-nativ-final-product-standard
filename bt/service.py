@@ -93,7 +93,7 @@ class TrustedService:
             if "/" in resource:
                 transitions.setdefault(resource, {})[prop] = ob["status"]
         return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
-                "law": {"digest": law.digest, "effective": law.raw}, "health": health,
+                "law": {"digest": law.digest, "effective": law.raw, "client": state["law"]["client"]}, "health": health,
                 "assessment": self.assessment(), "transitions": transitions,
                 # Public admitted declarations only: visibility of rights is never permission to exercise them.
                 "grants": state["grants"],
@@ -106,6 +106,10 @@ class TrustedService:
                                "state": state["line"].get(i, {}).get("state"), "at": state["line"].get(i, {}).get("at")}
                            for i, it in state["intents"].items()},
                 "now": now,
+                # Who changed the rules of the game, and when (the bodies stay in the journal).
+                "rules_history": sorted(({"id": i, "at": r["at"], "author": r["author"], "kind": r["kind"]}
+                                         for i, r in state["statements"].items() if r["kind"] in ("genesis", "law")),
+                                        key=lambda x: -x["at"])[:30],
                 "facts": sorted(({k: o[k] for k in ("id", "resource", "property", "status", "author", "at")}
                                  for o in state["observations"].values()), key=lambda o: -o["at"])[:500]}
 

@@ -1,10 +1,14 @@
-"""BUILD/RUN projections of one derived reading; no admission or authority."""
+"""BUILD/RUN projections of one derived reading; no admission or authority.
+
+Every candidate shown (a repair, a contribution, an implementation) carries its move: who plays next under the rules
+in force (standard/autonomy/moves.py). `awaiting` is true when only the human's decision can play it."""
 from __future__ import annotations
 
 import re
 import subprocess
 
 from instruments.suite import claimed, contract_path, load
+from standard.autonomy.moves import judge, op_of
 from standard.autonomy.read_model import ReadModel
 
 BRANCH = re.compile(r"([0-9a-f]{40})\trefs/heads/([a-z0-9][a-z0-9_-]{0,63})/(\S+)")
@@ -18,18 +22,25 @@ def git(repo, *args, check=True) -> str:
     return result.stdout
 
 
+def move_of(model: ReadModel, resource: str) -> dict:
+    """The move on this exact resource, as both players see it."""
+    found = op_of(model.law["ops"], resource)
+    if found is None:
+        return {"status": None, "missing": [], "refuted": [], "route": None}
+    return judge(model.view, found[0], resource, found[1])
+
+
 def requirements(model: ReadModel) -> list:
     out = []
     for row in model.targets():
         target, finding = row["target"], row["finding"]
-        state = {"attestation_due": "attest", "unknown": "pending", "open": "pending"}.get(
-            row["state"], row["state"])
+        state = {"unknown": "pending", "open": "pending"}.get(row["state"], row["state"])
         who = row["role"]["actor"]
         out.append({"id": target["id"], "domain": target["resource"].split(":")[1],
                     "resource": target["resource"], "property": target["property"], "expect": target["expect"],
                     "measured": finding.get("status"), "state": state,
                     "diagnostic_conflict": row["diagnostic_conflict"],
-                    "diagnostic_alignment": row["diagnostic_alignment"], "projections": row["projections"],
+                    "diagnostic_alignment": row["diagnostic_alignment"], "level": row["role"]["level"],
                     "who": who, "where": [str(d).splitlines()[0][:200] for d in finding.get("details", [])[:8]]})
     return out
 
@@ -41,11 +52,10 @@ def run(model: ReadModel, proposals: dict, memory: dict) -> dict:
     for proposal in proposals.values():
         target = targets.get(proposal["target"], {})
         transition = f"repo:{proposal['area']}:{proposal['item']}/{proposal['base']}/{proposal['head']}"
-        facts = model.transition(transition)
+        move = move_of(model, transition)
         repairs.append({**proposal, "requirement": f"{target.get('property')} = {target.get('expect')}",
-                        "facts": facts, "resource": transition, "kind": "repair",
-                        "awaiting_review": proposal["route"] == "review" and facts.get("tests") == "green"
-                        and facts.get("review") != "approved"})
+                        "facts": model.transition(transition), "resource": transition, "kind": "repair",
+                        "move": move, "awaiting": move["status"] == "yours"})
     gaps = []
     for row in model.targets():
         target, finding = row["target"], row["finding"]
@@ -77,11 +87,10 @@ def requests_of(model: ReadModel, repo, requests, request_notes: dict, main: str
                              "kind": "feature", "request": rid, "title": entity["fields"]["title"],
                              "landed": landed, "stale": base != main and not landed,
                              "why": [str(detail).splitlines()[0][:200]
-                                     for prop in ("acceptance", "tests", "regressions")
+                                     for prop in ("acceptance", "tests", "regressions", "scoped")
                                      for detail in model.finding(transition, prop).get("details", [])[:3]],
-                             "awaiting_review": not landed and base == main and facts.get("acceptance") == "green"
-                             and facts.get("tests") == "green" and facts.get("regressions") == "none"
-                             and facts.get("review") != "approved"})
+                             "move": (move := move_of(model, transition)),
+                             "awaiting": not landed and base == main and move["status"] == "yours"})
         out.append({"id": rid, "resource": resource, "title": entity["fields"]["title"],
                     "state": entity["state"], "owner": entity.get("owner"), "created": entity.get("created"),
                     "expected": entity["expected"], "facts": model.transition(resource),
@@ -116,8 +125,8 @@ def build(model: ReadModel, repo, inbox, requests, request_notes: dict, main: st
                 "landed": landed, "stale": base != main and not landed, "blocked": blocked,
                 "why": [str(detail).splitlines()[0][:200] for prop in blocked
                         for detail in model.finding(resource, prop).get("details", [])[:5]],
-                "awaiting_review": not landed and not blocked and facts.get("tests") == "green"
-                and facts.get("regressions") == "none" and facts.get("review") != "approved",
+                "move": (move := move_of(model, resource)),
+                "awaiting": not landed and not blocked and move["status"] == "yours",
                 "request": claimed(git(repo, "log", "-1", "--format=%B", head, check=False)) if not landed else None,
             })
     return {"contributions": contributions,

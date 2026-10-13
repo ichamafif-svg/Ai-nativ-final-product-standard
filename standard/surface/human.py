@@ -1,12 +1,15 @@
-"""What a human signs from the surface (§11.4, §12, D16): a review of one exact transition, or an organisational
-attestation. Each is an observation under the human's own capability, signed with the human's own key; the kernel
-decides whether it is independent enough to permit anything. In production a human signs with a passkey; a key file
-is the stand-in for this version.
+"""The human's three gestures (§11.4, §12, D51), each one statement signed with the human's own key.
+
+    yes      decide(resource)      `decision = approve` on the exact resource of one move: its human route may hold
+    no       refuse(scope)         freeze the move's resource, or a whole scope: nothing acts on it any more
+    rules    rules(client)         put new rules in force (a widening: the human's threshold signs it)
+
+Lifting a no (`release`) is a widening too. The kernel decides whether a statement is admitted and what it permits.
+In production the human signs with a passkey in the console; a key file is the stand-in for the command line.
 """
 from __future__ import annotations
 
 import base64
-import re
 import time
 import uuid
 from pathlib import Path
@@ -14,8 +17,6 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from bt.signing import Signer, envelope
-
-REVIEW = ("approved", "changes_requested")
 
 
 def load_signer(identity: str, key_path) -> Signer:
@@ -30,28 +31,29 @@ def _at(view: dict, at) -> int:
     return max(int(time.time() * 1000) if at is None else at, view["health"]["as_of"] + 1)
 
 
-def _observation(view, signer: Signer, under: str, resource: str, prop: str, status: str, at=None) -> dict:
-    body = {"id": f"{prop}-{uuid.uuid4().hex}", "at": _at(view, at), "author": signer.identity, "under": under,
-            "resource": resource, "property": prop, "status": status, "level": "real"}
-    return envelope(view["prefix"]["genesis"], "observation", body, [signer])
+def _statement(view: dict, signer: Signer, kind: str, at=None, **fields) -> dict:
+    body = {"id": f"{kind}-{uuid.uuid4().hex}", "at": _at(view, at), "author": signer.identity, **fields}
+    return envelope(view["prefix"]["genesis"], kind, body, [signer])
 
 
-def review(view: dict, signer: Signer, under: str, target_id: str, base: str, head: str, verdict: str,
-           at=None) -> dict:
-    """A review binds the exact transition base → head of one remediable target, never a mutable pointer."""
-    if verdict not in REVIEW:
-        raise ValueError(f"a review is one of {REVIEW}")
-    if target_id.startswith("contrib:"):                  # contrib:AUTHOR, a client's contribution (D23)
-        author = target_id.split(":", 1)[1]
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", author):
-            raise ValueError("contrib:AUTHOR")
-        return _observation(view, signer, under, f"repo:contrib:{author}/{base}/{head}", "review", verdict, at)
-    target = next(t for t in view["law"]["effective"]["targets"] if t["id"] == target_id)
-    _, area, item = target["resource"].split(":", 2)
-    return _observation(view, signer, under, f"repo:{area}:{item}/{base}/{head}", "review", verdict, at)
+def decide(view: dict, signer: Signer, under: str, resource: str, at=None) -> dict:
+    """Yes to one move, on its exact resource (a transition base/head, a switch from/to): never a mutable pointer."""
+    if "/" not in resource:
+        raise ValueError("a decision names the exact resource of a move")
+    return _statement(view, signer, "observation", at, under=under, resource=resource, property="decision",
+                      status="approve", level="real")
 
 
-def attest(view: dict, signer: Signer, under: str, target_id: str, at=None) -> dict:
-    """An organisational attestation: the procedure or register named by the target is current."""
-    target = next(t for t in view["law"]["effective"]["targets"] if t["id"] == target_id)
-    return _observation(view, signer, under, target["resource"], target["property"], target["expect"], at)
+def refuse(view: dict, signer: Signer, scope: str, at=None) -> dict:
+    """No: freeze one move's resource, or a scope (`run:release:*` stops every deployment)."""
+    return _statement(view, signer, "freeze", at, scope=scope)
+
+
+def release(view: dict, signer: Signer, scope: str, at=None) -> dict:
+    """Lift a no: unfreeze a scope the human froze."""
+    return _statement(view, signer, "unfreeze", at, scope=scope)
+
+
+def rules(view: dict, signer: Signer, client: dict, at=None) -> dict:
+    """New rules of the game, in force with this entry unless the rules in force ask widenings to wait."""
+    return _statement(view, signer, "law", at, client=client)

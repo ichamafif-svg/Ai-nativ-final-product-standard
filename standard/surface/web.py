@@ -1,13 +1,16 @@
-"""U08 — the web interface (ARCHITECTURE.md §11.9): BUILD and RUN of one installation, reviews to sign, the law.
+"""U08 — the web console (ARCHITECTURE.md §11.9): the game as the human sees it, BUILD and RUN of one installation.
+
+The human's queue (the moves only their decision can play), yes and no on each move, the rules of the game to edit and
+sign, production and the product being built.
 
     python -m standard.surface.web standard.toml [--bind 127.0.0.1] [--port 8080]
 
 It binds to localhost by default: reach it through an SSH tunnel (`ssh -L 8080:localhost:8080 server`) or put a TLS
 proxy in front. It holds no key and decides nothing. It reads the installation through the admission gateway (the view,
 the facts on exact transitions), plus what is published for people (the instruments' findings, the agent's notes, the
-repositories read-only), and forwards to the kernel the envelopes a person signed in their own browser. A person's
-private key is imported into their browser and never sent here; the browser builds the bytes it signs from the body it
-displays.
+repositories read-only), and forwards to the kernel the envelopes the human signed in their own browser. The
+human's private key is imported into their browser and never sent here; the browser builds the bytes it signs from
+the body it displays: a decision, a freeze, or the full new rules the console drafted for them.
 """
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ import tomllib
 from bt.gateway import GatewayClient
 from standard.autonomy.context import task_context
 from standard.autonomy.drift_map import gap_dossiers
-from standard.autonomy.law_surface import law_surface_map
+from standard.autonomy.moves import moves
 from standard.autonomy.projection import installed_routes
 from standard.autonomy.read_model import ReadModel
 from standard.autonomy.work import WorkEngine
@@ -35,7 +38,6 @@ from standard.surface.read_views import git
 
 STATIC = Path(__file__).with_name("static")
 SHA = re.compile(r"[0-9a-f]{40}")
-PEOPLE = ("reviewer", "officer", "engineer", "product", "steward")   # grants people sign under; holders come from the ledger
 MAX_BODY = 1 << 20
 
 
@@ -69,24 +71,24 @@ class Installation:
         agent = resolve(c.get("agent", {}).get("store", "agent/store")).parent
         self.findings, self.memory, self.proposals = base / "findings.json", agent / "memory.json", agent / "proposals.json"
         self.work_db = agent / "work.db"
-        self.grant_ids = {name: gid for name, gid in c["grants"].items() if name in PEOPLE}
+        self.grant_ids = {name: gid for name, gid in c["grants"].items() if name == "human"}
         self.product = self.repo.name.removesuffix(".git")
         run = c.get("run", {})
         from .telemetry import Telemetry
         self.telemetry = Telemetry(Path(run.get("store", Path.home() / ".standard" / "telemetry.db")).expanduser(),
                                    run.get("metrics", []), slo=float(run.get("slo", 99.9)) / 100,
                                    interval=float(run.get("interval", 15)))
-        self.rollback = bool(c.get("deploy")) and "agent_rollback" in c["grants"]     # D30: can act in production
+        self.rollback = bool(c.get("deploy")) and "agent" in c["grants"]     # D30: can act in production
         self.slo_db = base / "slo.db"
         self.requests = resolve(c.get("build", {}).get("store", "requests"))          # D34: specs and contracts
-        self.request_notes = agent / "requests.json"                                                   # D32: the operator's SLO data
+        self.request_notes, self.moves_notes = agent / "requests.json", agent / "moves.json"
         self.telemetry.extra = self.burning
         self.deploy_root = resolve(c["deploy"]["root"]) if c.get("deploy") else None
         hosted = c.get("hosting", {}).get("config")
         self.products = sorted(_toml(hosted).get("repositories", {})) if hosted else [self.product]
 
     def people(self, view: dict | None = None) -> dict:
-        """The grants people sign under, with the holder the admitted journal names (never a hard-coded identity)."""
+        """The human's capability, with the holder the admitted journal names (never a hard-coded identity)."""
         grants = (view or self.client.view()).get("grants", {})
         return {name: {"id": gid, "holder": grants.get(gid, {}).get("holder")} for name, gid in self.grant_ids.items()}
 
@@ -112,26 +114,18 @@ class Installation:
         view, findings = self.client.view(), _json(self.findings)
         main = git(self.repo, "rev-parse", "main").strip()
         model = self.read_model(view, findings, main)
-        return build_agent_context(kind, ident, view=view, findings=findings, settings=model.settings,
-                                   routes=self.routes, qualify=self.client.qualify, requests=self.requests,
-                                   main=main, inputs=model.basis["inputs"], model=model)
+        return build_agent_context(kind, ident, view=view, findings=findings, routes=self.routes,
+                                   qualify=self.client.qualify, requests=self.requests, main=main, model=model)
 
     def read_model(self, view: dict, findings: dict, main: str) -> ReadModel:
-        return ReadModel(view, findings, self.routes, self.client.qualify, settings=self.settings_doc(main),
-                         main=main, inputs=self.surface_inputs(main, findings))
+        return ReadModel(view, findings, self.routes, self.client.qualify, main=main,
+                         inputs=self.surface_inputs(main, findings))
 
     def surface_inputs(self, main: str, findings: dict) -> dict:
         import hashlib
         content = json.dumps(findings, sort_keys=True, separators=(",", ":"), default=str).encode()
         return {"findings": {"kind": "diagnostic_document", "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
-                             "association_to_prefix": "unverified"},
-                "settings": {"kind": "repository_file", "commit": main, "path": "standard/rules.json"}}
-
-    def law_surface(self, focus: str | None = None) -> dict:
-        view, findings = self.client.view(), _json(self.findings)
-        main = git(self.repo, "rev-parse", "main").strip()
-        model = self.read_model(view, findings, main)
-        return law_surface_map(view, model=model, focus=focus or None)
+                             "association_to_prefix": "unverified"}}
 
     def run(self, view: dict, findings: dict, model: ReadModel | None = None) -> dict:
         model = model or ReadModel(view, findings, self.routes, self.client.qualify)
@@ -149,20 +143,15 @@ class Installation:
         model.assert_view(view)
         return read_views.requests_of(model, self.repo, self.requests, _json(self.request_notes), main)
 
-    def store_rules(self, body: dict) -> dict:
-        """D35: keep a new standard/rules.json by digest, as the bytes the agent will commit; the engineer signs it."""
-        import hashlib
-        doc = body.get("document")
-        if not isinstance(doc, dict):
-            raise ValueError("a system settings document is a JSON object")
-        doc = {k: v for k, v in doc.items() if k in ("global", "components", "slos", "probes")}
-        data = (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()
-        digest = hashlib.sha256(data).hexdigest()
-        self.requests.mkdir(parents=True, exist_ok=True)
-        (self.requests / digest).write_bytes(data)
-        return {"digest": f"sha256:{digest}", "base": git(self.repo, "rev-parse", "main").strip()}
-
-    store_system_settings = store_rules
+    def draft_rules(self, body: dict) -> dict:
+        """The full new rules for the human to sign: the rules in force with these changes, each value checked against
+        its schema. The kernel judges the signed rules against the socle; this only drafts."""
+        from standard.autonomy.rules import change
+        view = self.client.view()
+        drop = [tuple(x) for x in body.get("drop", []) if isinstance(x, list) and len(x) == 2]
+        client = change(view["law"]["client"], settings=body.get("settings"), routes=body.get("routes"),
+                        sections=body.get("sections"), drop=drop)
+        return {"client": client, "domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"]}
 
     def store_request(self, body: dict) -> dict:
         """Keep a request's specification and contract by digest; the person then signs the digests."""
@@ -189,6 +178,7 @@ class Installation:
         model = self.read_model(view, findings, main)
         law = view["law"]["effective"]
         health = view["health"]
+        played = moves(view, main=main)
         return {
             "prefix": view["prefix"], "assessment": view["assessment"], "law_digest": view["law"]["digest"],
             "health": {"state": health["state"], "open": len(health["open"]), "escalated": health["escalated"],
@@ -196,56 +186,41 @@ class Installation:
             "main": main, "history": self.history(),
             "product": self.product, "products": self.products,
             "requirements": (reqs := self.requirements(view, findings, model)),
-            "external_references": [{"label": name.removeprefix("external:"), "mapping": spec["value"]["mapping"]}
-                                    for name, spec in model.graph()["declarations"].items()
-                                    if name.startswith("external:")],
             "autonomy": self.autonomy(reqs),
             "drift": gap_dossiers(view, model=model),
-            "law_surface": law_surface_map(view, model=model)["summary"],
+            "moves": played, "queue": [m for m in played if m["status"] == "yours" and m["wanted"]],
             "run": self.run(view, findings, model), "build": self.build(view, findings, main, model),
             "progress": WorkEngine.read_progress(self.work_db),
             "law": {"targets": [{k: t.get(k) for k in ("id", "resource", "property", "expect", "coverage", "repair",
                                                         "human", "due_ms")} for t in law["targets"]],
-                    "conditions": law["conditions"], "ops": sorted(law["ops"])},
+                    "routes": {op: sorted(spec["routes"]) for op, spec in law["ops"].items()}},
             "signing": {"domain": view["prefix"]["genesis"], "as_of": health["as_of"], "grants": self.people(view)},
         }
 
     def autonomy(self, requirements: list) -> dict:
-        """What Standard does without a person, for each requirement and each kind of component, and why not more.
+        """What Standard does without the human, requirement by requirement, under the rules in force, and why not more.
 
-        autonomous: the agent repairs alone, because an independent instrument recomputes the repair byte for byte;
-        supervised: the agent prepares, a person signs, because the repair needs judgment no instrument can prove;
-        human: only people act, because what is asked is not in the repository (a procedure, a platform setting);
-        observed: Standard measures, nobody acts through it yet, because the law has no operation for it."""
+        autonomous: an autonomous route of the rules holds on the scanner's facts, the agent lands it alone;
+        decision: the rules keep the move for the human: the agent proposes, the human says yes or no;
+        human: no move of the rules reaches it (a provider's settings): the human repairs it;
+        observed: Standard measures, nobody acts through it on this installation."""
         why = {
-            "autonomous": "La correction se recalcule à l'identique par un instrument indépendant : la loi peut l'accepter sans personne.",
-            "supervised": "La correction demande un jugement. Aucun instrument ne peut prouver qu'elle est juste, donc une personne signe.",
-            "human": "Ce qui est demandé n'est pas dans le code : une procédure, un registre ou un réglage de plateforme qu'une personne atteste.",
+            "autonomous": "Une route automatique des règles tient sur les faits du scanner : l'agent joue seul, dans le périmètre.",
+            "decision": "Les règles gardent ce coup pour toi : l'agent prépare, tu dis oui ou non.",
+            "human": "Aucun coup des règles n'y touche (un réglage du fournisseur) : c'est toi qui répares.",
             "observed": "Standard mesure ce composant mais n'agit pas dessus : aucune mise en production ne lui est confiée sur "
-                        "cette installation (section [deploy]). Il ne déploie pas et ne revient pas à la version précédente.",
+                        "cette installation (section [deploy]).",
         }
-        why["acting"] = ("Standard met main en production et revient seul à la version précédente quand l'objectif casse juste "
-                         "après une mise en production, sur des faits signés par le scanner et par la garde, comme les "
-                         "changements de code. Il ne redémarre pas une machine et n'ajoute pas de capacité.")
-        conditions = {
-            "run-slo": "Seulement si la rupture suit de moins de 30 min une mise en production et que la version remplacée "
-                       "tenait l'objectif ; sinon une personne, à l'échéance.",
-            "run-live": "Sauf une version déjà retirée par un retour arrière : il faut alors un nouveau commit sur main.",
-            "vulns": "Seulement si l'instantané de données connaît une version corrigée ; sinon une personne décide.",
-            "actions": "Seulement si l'instantané de données connaît le commit de l'action ; sinon une personne décide.",
-            "sbom": None,
-        }
-        level = {"agent": "autonomous", "review": "supervised", "people": "human"}
+        why["acting"] = ("Standard met main en production et revient seul à la version précédente dans les bornes des "
+                         "règles, sur des faits signés par le scanner, comme les changements de code.")
         rows = []
         for r in requirements:
-            lv = level[r["who"]]
-            blocked = r["state"] == "unmeasured"
+            lv = r["level"] if r["level"] in ("autonomous", "decision", "human") else "observed"
             production = r["resource"].startswith("run:") and lv == "autonomous"
             rows.append({"id": r["id"], "level": lv, "why": why["acting"] if production else why[lv],
-                         "condition": conditions.get(r["id"]),
                          "blocked": "Non mesurée sur cette installation : aucune autonomie possible tant que rien ne la mesure."
-                         if blocked else None})
-        count = {lv: sum(1 for x in rows if x["level"] == lv) for lv in ("autonomous", "supervised", "human")}
+                         if r["state"] == "unmeasured" else None})
+        count = {lv: sum(1 for x in rows if x["level"] == lv) for lv in ("autonomous", "decision", "human")}
         runtime = {"level": "autonomous", "why": why["acting"]} if self.rollback else {"level": "observed",
                                                                                          "why": why["observed"]}
         return {"levels": why, "requirements": rows, "count": count, "total": len(rows), "runtime": runtime}
@@ -280,45 +255,27 @@ class Installation:
         view = self.client.view()
         return {"facts": view.get("facts", []), "prefix": view["prefix"], "law": view["law"]["digest"]}
 
-    def rules_doc(self, commit: str = "main") -> dict:
-        try:
-            doc = json.loads(git(self.repo, "show", f"{commit}:standard/rules.json", check=False) or "{}")
-        except ValueError:
-            doc = {}
-        return doc if isinstance(doc, dict) else {}
-
-    settings_doc = rules_doc
-
     def settle(self, view: dict | None = None):
-        """The engineers' settings as main carries them, and the signed silences (D36), so that the console judges
-        and alerts with them."""
-        from standard.autonomy.policy import Policy
-        policy = Policy(self.rules_doc(), transitions=(view or {}).get("transitions"))
-        self.telemetry.limits, self.telemetry.late_periods = policy.limits, int(policy.get("late_periods"))
-        self.telemetry.slo = policy.get("objective") / 100
-        return policy
-
-    def changes(self) -> list:
-        """The rules file's history on main: who changed what, when (git keeps it; the journal keeps the proofs)."""
-        from standard.autonomy.policy import history
-        log = git(self.repo, "log", "-30", "--format=%H %at %an", "main", "--", "standard/rules.json", check=False)
-        versions = [(int(at) * 1000, author, self.rules_doc(h)) for h, at, author in
-                    (line.split(" ", 2) for line in log.splitlines()[::-1] if line.count(" ") >= 2)]
-        return history(versions)
+        """The rules in force, so that the console judges and alerts with the same settings as the agent (D36)."""
+        from standard.autonomy.rules import Rules
+        rules = Rules((view or self.client.view())["law"]["effective"])
+        self.telemetry.limits, self.telemetry.late_periods = rules.limits, int(rules.get("late_periods", 2))
+        self.telemetry.slo = float(rules.get("objective", 99.9)) / 100
+        return rules
 
     @staticmethod
     def flagged(findings: dict, policy) -> dict:
         """The SLOs the scanner measured, with the engineers' alert thresholds applied: fast is a page, slow a ticket."""
-        return {sid: {**e, "fast": (e.get("fast_burn") or 0) >= policy.get("burn_fast"),
-                      "slow": (e.get("slow_burn") or 0) >= policy.get("burn_slow")}
+        return {sid: {**e, "fast": (e.get("fast_burn") or 0) >= float(policy.get("burn_fast", 14.4)),
+                      "slow": (e.get("slow_burn") or 0) >= float(policy.get("burn_slow", 6))}
                 for sid, e in (findings.get("run:slos", {}).get("details") or {}).items()}
 
     def burning(self) -> dict:
         """The SLOs burning their error budget, as open conditions for the alerts: fast is a page, slow a ticket."""
         out, policy = {}, self.settle()
         for sid, s in (_json(self.findings).get("run:slos", {}).get("details") or {}).items():
-            fast = (s.get("fast_burn") or 0) >= policy.get("burn_fast")
-            if fast or (s.get("slow_burn") or 0) >= policy.get("burn_slow"):
+            fast = (s.get("fast_burn") or 0) >= float(policy.get("burn_fast", 14.4))
+            if fast or (s.get("slow_burn") or 0) >= float(policy.get("burn_slow", 6)):
                 span = "1h" if fast else "6h"
                 out[("slo", "page" if fast else "ticket", s["name"])] = (
                     "failing" if fast else "degraded",
@@ -333,11 +290,11 @@ class Installation:
         target, window_d = float(query.get("target", 99.9)), max(1, min(90, int(float(query.get("window_d", 30)))))
         sli, threshold = query.get("sli", "availability"), float(query.get("threshold_ms") or 1000)
         selector = query.get("selector", "counted")
-        fast, slow = (float(query.get("burn_fast") or policy.get("burn_fast")),
-                      float(query.get("burn_slow") or policy.get("burn_slow")))
+        fast, slow = (float(query.get("burn_fast") or policy.get("burn_fast", 14.4)),
+                      float(query.get("burn_slow") or policy.get("burn_slow", 6)))
         now_minute = int(time.time()) // 60
-        counted = lambda cid, kind: (policy.get("counted", cid) == "on" if policy.get("counted", cid)
-                                     else kind != "dependency")
+        own = lambda cid: policy.get("components", {}).get(cid, {}).get("counted")
+        counted = lambda cid, kind: own(cid) == "on" if own(cid) else kind != "dependency"
         total, bad = {}, {}
         for minute, cid, kind, t, b, buckets in self.telemetry.minutes(now_minute - window_d * 1440):
             if matches(selector, cid, kind, counted):
@@ -374,25 +331,31 @@ class Installation:
                 "slow_alerts": episodes["slow"], "window_d": window_d}
 
     def settings(self) -> dict:
-        """Everything an engineer may set, its effective value, what is pending, and every component to tune (D31)."""
-        from standard.autonomy.policy import law_bounds
+        """The rules of the game as the human edits them: every move and its routes (on or off), every setting with
+        the socle's bound, the components to tune, who changed the rules and when (D51)."""
+        from standard.autonomy.rules import SCHEMA
+        from kernel.law import setting_ways
+        from standard.floors import FLOORS
         findings, view = _json(self.findings), self.client.view()
-        policy = self.settle(view)
+        rules = self.settle(view)
         report = self.telemetry.report(window=3600)
         components = [{k: r.get(k) for k in ("id", "kind", "operation", "name", "state", "availability", "p99",
                                              "counted")} for rows in report["components"].values() for r in rows
                       if r.get("id")]
-        main = git(self.repo, "rev-parse", "main").strip()
-        notes = _json(self.request_notes.with_name("rules.json"))
-        landing = [{"digest": k.split("/", 1)[1], **v} for k, v in notes.items() if k.startswith(main + "/")]
-        return {"main": main, "rules_landing": landing,
-                "rules_file": bool(git(self.repo, "ls-tree", "--name-only", "main", "standard/rules.json", check=False).strip()),
-                "policy": policy.published(int(time.time() * 1000), law_bounds(view["law"]["effective"]["conditions"]),
-                                           self.changes()), "components": components,
-                "slos": self.flagged(findings, policy),
+        ways = setting_ways(FLOORS)
+        socle = {op: sorted(r for r in spec["routes"] if r != "human") for op, spec in FLOORS["ops"].items()}
+        return {"main": git(self.repo, "rev-parse", "main").strip(),
+                "rules": {"settings": rules.settings, "routes": rules.routes(), "socle": socle,
+                          "bounds": {k: {"socle": FLOORS["settings"][k], "way": ways.get(k)} for k in FLOORS["settings"]},
+                          "schema": {k: v[1] for k, v in SCHEMA.items() if v[1] is not None},
+                          "team": {"delays": view["law"]["effective"]["delays"],
+                                   "witnesses": view["law"]["effective"]["witnesses"]},
+                          "history": view.get("rules_history", []),
+                          "silences": rules.silences(int(time.time() * 1000))},
+                "components": components, "slos": self.flagged(findings, rules),
                 "probes": findings.get("run:probes", {}).get("details", []), "configured": self.deploy_root is not None,
                 "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
-                            "grant": self.people(view).get("engineer")}}
+                            "grant": self.people(view).get("human")}}
 
     def live(self, findings: dict, view: dict | None = None) -> dict:
         """What production runs, as the scanner signed it, the switches the guard made (D30), and the decisions an
@@ -401,35 +364,29 @@ class Installation:
         history = []
         if self.deploy_root and (self.deploy_root / "history.jsonl").exists():
             history = [json.loads(x) for x in (self.deploy_root / "history.jsonl").read_text().splitlines() if x]
-        offered = lambda prefix, prop: next((r for r, f in sorted((view or {}).get("transitions", {}).items())
-                                             if r.startswith(prefix) and f.get(prop) == "yes"), None)
         current = next((h["to"] for h in reversed(history) if h.get("op") in ("deploy", "rollback")), None)
-        restarts = [h for h in history if h.get("op") == "restart" and h.get("to") == current]
-        why = _json(self.request_notes.with_name("releases.json")).get("why") or {}    # the agent's restraint (D36)
+        why = _json(self.moves_notes).get("why") or {}                                 # the agent's restraint (D36)
+        production = [m for m in moves(view or self.client.view()) if m["op"] in ("deploy", "canary", "rollback",
+                                                                               "restart", "abort")]
         return {"configured": self.deploy_root is not None, "lag": lag.get("status"),
                 "details": lag.get("details", []) + [f"{k}: {v}" for k, v in sorted(why.items())],
                 "slo": findings.get("run:service:all|slo", {}).get("status"), "switches": history[-12:][::-1],
                 "canary": self.canary_state(history),
                 "slos": self.flagged(findings, self.settle(view)),
-                "actions": {"deploy": offered("run:release:all/", "candidate"),
-                            "abort": offered("run:canary:abort/", "running") or (
-                                f"run:canary:abort/{current}/{self.canary_state(history)['release']}"
-                                if self.canary_state(history) else None),
-                            "rollback": offered("run:service:all/", "previous"),
-                            "restart": f"run:process:all/{current}/{len(restarts) + 1}" if current else None},
-                "grant": self.people(view).get("engineer")}
+                "current": current, "moves": production, "grant": self.people(view).get("human")}
 
-    def acts(self, policy) -> str:
-        """What Standard does alone in production, in the engineers' current settings (D31)."""
-        get = policy.get
-        parts = [f"Retour à la version précédente si l'objectif casse dans les {get('rollback_horizon_min') or 30} min "
+    def acts(self, rules) -> str:
+        """What Standard does alone in production, under the rules in force (D31, D36)."""
+        get, auto = rules.get, {op: r["auto"] for op, r in rules.routes().items()}
+        parts = [f"Retour à la version précédente si l'objectif casse dans les {get('rollback_horizon_min', 30)} min "
                  "qui suivent une mise en production, ou si la nouvelle version ne démarre pas"
-                 if get("auto_rollback") != "off" else "Retour arrière décidé par un ingénieur",
-                 "mise en production de main seul" if get("auto_deploy") != "off" else "mise en production approuvée par un ingénieur",
-                 f"redémarrage sans coupure (au plus {get('restarts_per_hour')} par heure)" if get("auto_restart") == "on"
-                 else "redémarrage décidé par un ingénieur"]
+                 if auto.get("rollback") else "Retour arrière sur ta décision",
+                 ("mise en production de main seule, dans la fenêtre des règles" if "direct" in auto.get("deploy", [])
+                  else "mise en production par canari" if auto.get("canary") else "mise en production sur ta décision"),
+                 f"redémarrage sans coupure (au plus {get('restarts_per_hour', 2)} par heure)" if auto.get("restart")
+                 else "redémarrage sur ta décision"]
         return (" ; ".join(parts).capitalize() + ". Jamais à travers une migration non déclarée compatible. Au-delà, ou si "
-                "la cause est hors du code (service externe, machine), une personne.")
+                "la cause est hors du code (service externe, machine), c'est toi.")
 
     def canary_state(self, history: list) -> dict | None:
         """The release on a share of traffic, if any: which, since when, on what share."""
@@ -457,8 +414,7 @@ class Installation:
         reasons = {
             "see": (f"Mesuré toutes les {interval} s depuis ses métriques et jugé selon les seuils publiés.",
                     "Source muette ou absente : Standard ne voit pas ce composant en ce moment."),
-            "alert": ("Signalé dans l'interface dès qu'il se dégrade ; une personne le prend en charge par une signature. "
-                      "Pas encore d'e-mail ni de messagerie.",
+            "alert": ("Signalé dans la console dès qu'il se dégrade. Pas encore d'e-mail ni de messagerie.",
                       "Personne n'est prévenu : Standard ne le voit pas en ce moment."),
             "act": (self.acts(policy or self.settle()),
                     "Aucune action en production n'est configurée : Standard ne déploie pas, ne revient pas à la version "
@@ -482,12 +438,9 @@ class Installation:
         rows = [r for rs in report["components"].values() for r in rs]
         report["frontier_total"] = {k: sum(1 for r in rows if r["frontier"][k]) for k in self.FRONTIER} | {"of": len(rows)}
 
-    ACK_MS = 10 * 60_000      # an alert nobody takes within ten minutes is flagged as not taken
-
     def alerts(self, view: dict | None = None) -> dict:
-        """Production incidents and overdue obligations, each with who took it. Taking an alert is a statement a person
-        signs in their browser (property `ack` on `repo:alert/<kind>/<name>/<opened>`), admitted by the kernel and kept
-        in the journal: the proof that someone was told is the person's own signature, not a delivery receipt."""
+        """Production incidents and overdue obligations. A silence (in the rules) mutes one in the console, never a
+        signed fact; an overdue obligation escalates to the human in the journal whatever the console shows."""
         view = view or self.client.view()
         now = int(time.time() * 1000)
         slug = lambda s: re.sub(r"[^A-Za-z0-9._@-]+", "-", str(s)).strip("-")[:80] or "x"
@@ -503,8 +456,6 @@ class Installation:
         from instruments.production import component_id
         silences = self.settle(view).silences(now)
         for a in out:
-            facts = view["transitions"].get(a["resource"], {})
-            a["taken"] = facts.get("ack") == "taken"
             a["severity"] = ("page" if a["kind"] == "obligation" or a.get("operation") == "page"
                              or a["state"] == "failing" else "ticket")
             a["subject"] = ((a.get("why") or {}).get("slo") if a["kind"] == "slo" else
@@ -512,15 +463,10 @@ class Installation:
                             if a["kind"] not in ("obligation", "source") else a["name"])
             a["silenced"] = next((dict(m, id=mid) for mid, m in silences.items()
                                   if m.get("target_of") in ("all", a["subject"]) and m.get("until", 0) > now), None)
-            a["unattended"] = (a["closed_at"] is None and not a["taken"] and not a["silenced"]
-                               and now - a["opened_ms"] > self.ACK_MS)
         live = [a for a in out if a["closed_at"] is None]
         loud = [a for a in live if not a["silenced"]]
-        return {"alerts": out, "open": len(loud), "untaken": sum(1 for a in loud if not a["taken"]),
-                "unattended": sum(1 for a in loud if a["unattended"]), "silenced": len(live) - len(loud),
-                "ack_ms": self.ACK_MS, "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
-                                                   "grant": self.people(view).get("reviewer"),
-                                                   "engineer": self.people(view).get("engineer")}}
+        return {"alerts": out, "open": len(loud), "silenced": len(live) - len(loud),
+                "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"]}}
 
     def dossier(self, head: str) -> dict:
         if not SHA.fullmatch(head):
@@ -589,9 +535,6 @@ def handler(inst: Installation, allowed_hosts=LOCAL_HOSTS):
                 if route == "/api/agent-context":
                     query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                     return self._ok(inst.agent_context(query.get("kind", [""])[0], query.get("id", [""])[0]))
-                if route == "/api/law-surface":
-                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-                    return self._ok(inst.law_surface(query.get("focus", [""])[0]))
                 if route == "/api/alerts":
                     return self._ok(inst.alerts())
                 if route == "/api/settings":
@@ -618,18 +561,17 @@ def handler(inst: Installation, allowed_hosts=LOCAL_HOSTS):
         def do_POST(self):
             if self._foreign():
                 return None
-            if self.path not in ("/api/admit", "/api/requests", "/api/rules", "/api/system-settings"):
+            if self.path not in ("/api/admit", "/api/requests", "/api/rules/draft"):
                 return self._ok({"error": "not found"}, HTTPStatus.NOT_FOUND)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self._ok({"error": "application/json only"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
             size = int(self.headers.get("Content-Length") or 0)
             if not 0 < size <= MAX_BODY:
                 return self._ok({"error": "bad length"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-            if self.path in ("/api/requests", "/api/rules", "/api/system-settings"):   # D34, D35: store only
+            if self.path in ("/api/requests", "/api/rules/draft"):   # D34: store only; D51: draft only
                 try:
                     body = json.loads(self.rfile.read(size))
-                    return self._ok(inst.store_request(body) if self.path == "/api/requests"
-                                    else inst.store_system_settings(body))
+                    return self._ok(inst.store_request(body) if self.path == "/api/requests" else inst.draft_rules(body))
                 except (ValueError, OSError) as exc:
                     return self._ok({"error": str(exc)[:300]}, HTTPStatus.BAD_REQUEST)
             try:
