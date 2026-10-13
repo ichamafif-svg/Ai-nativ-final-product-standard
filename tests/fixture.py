@@ -27,9 +27,9 @@ IDENTITIES = {"h1": "human", "h2": "human", "w1": "witness", "w2": "witness", "g
 BINDINGS = {"owner": "h1", "inventory_source": "oracle", "scanner": "scanner"}
 
 
-def client_law(**extra) -> dict:
+def client_law(bindings=None, **extra) -> dict:
     """The recommended rules, with these sections replaced (settings merged)."""
-    return rules(BINDINGS, **extra)
+    return rules(bindings or BINDINGS, **extra)
 
 
 class Keys:

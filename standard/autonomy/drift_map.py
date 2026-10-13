@@ -14,14 +14,14 @@ from .read_model import ReadModel
 
 
 def _task_for(tasks: list, target_id: str) -> Optional[dict]:
-    return next((t for t in tasks if t.get("target") == target_id and t.get("need") in ("repair", "review")),
+    return next((t for t in tasks if t.get("target") == target_id and t.get("need") in ("repair", "human")),
                 next((t for t in tasks if t.get("target") == target_id), None))
 
 
 def _action(target: dict, task: Optional[dict], role: dict) -> dict:
     if role["level"] == "human":
-        return {"owner": "human", "method": "attestation", "can_repair": False,
-                "why": "the target is organisational or explicitly human"}
+        return {"owner": "human", "method": "human", "can_repair": False,
+                "why": "no move of the rules repairs it: the human does (a provider's settings)"}
     if not target.get("repair"):
         return {"owner": "observer", "method": "observe", "can_repair": False,
                 "why": "the law declares no repair operation"}
@@ -32,16 +32,19 @@ def _action(target: dict, task: Optional[dict], role: dict) -> dict:
         return {"owner": "agent", "method": "recipe", "can_repair": task.get("state") == "AVAILABLE",
                 "why": "a trusted recipe can be independently reproduced"}
     if task.get("state") == "HUMAN_REVIEW":
-        return {"owner": "human", "method": "review", "can_repair": False,
-                "why": "the projected need requires human review"}
+        return {"owner": "human", "method": "decision", "can_repair": False,
+                "why": "the projected need waits for the human's decision"}
+    if role["level"] == "decision":
+        return {"owner": "agent", "method": "candidate + human decision", "can_repair": task.get("state") == "AVAILABLE",
+                "why": "the rules keep this move for the human: the agent proposes, the human decides"}
     return {"owner": "agent", "method": "llm_or_configured_scope", "can_repair": task.get("state") == "AVAILABLE",
-            "why": "the agent may propose code, but independent facts and possibly review still decide"}
+            "why": "the agent proposes code; the scanner's facts on the exact commit decide which route holds"}
 
 
-def gap_dossiers(view: dict, findings=None, routes=(), qualify=None, *, settings=None, mode: str = "RUN",
+def gap_dossiers(view: dict, findings=None, routes=(), qualify=None, *, mode: str = "RUN",
                  model: ReadModel | None = None) -> list:
     """Return one deterministic dossier per target of the effective law."""
-    model = model or ReadModel(view, findings, routes, qualify, settings=settings)
+    model = model or ReadModel(view, findings, routes, qualify)
     model.assert_view(view)
     tasks = model.plan(mode)["tasks"]
     out = []

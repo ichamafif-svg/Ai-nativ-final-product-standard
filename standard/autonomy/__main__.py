@@ -22,7 +22,7 @@ from instruments.data import EMPTY, TrustedData
 from bt.gateway import GatewayClient
 from bt.signing import Signer
 
-from . import Agent, Cycle, WorkEngine
+from . import Agent, Builder, Loop, Repairer, WorkEngine
 from .llm import Gate
 from .memory import Memory
 from .projection import installed_routes
@@ -35,7 +35,8 @@ def git(repo, *args) -> str:
                           timeout=300).stdout.strip()
 
 
-def build(config_path) -> tuple[Cycle, callable]:
+def build(config_path):
+    """The agent: one capability (`grants.agent`), one loop, a repair producer and, when configured, a builder."""
     path = Path(config_path).resolve()
     c, base = tomllib.loads(path.read_text()), path.parent
     resolve = lambda p: (base / p).resolve()
@@ -54,59 +55,30 @@ def build(config_path) -> tuple[Cycle, callable]:
         main = lambda: git(store, "ls-remote", "origin", "refs/heads/main").split()[0]
         refresh = lambda: git(store, "fetch", "-q", "origin", "+refs/heads/main:refs/heads/main")
         publish = lambda head: git(store, "push", "-q", "origin", f"{head}:refs/heads/standard/proposals/{head}")
-    def system_settings() -> dict:                        # D35/D36: system settings as main carries them
-        shown = subprocess.run(["git", "-C", str(store), "show", "refs/heads/main:standard/rules.json"],
-                               capture_output=True, text=True, timeout=60)
-        try:
-            return json.loads(shown.stdout) if shown.returncode == 0 else {}
-        except ValueError:
-            return {}
     data = c.get("data")
     api = agent_cfg.get("api_key_file")
     llm = Gate.from_config(c["llm"], resolve, store.parent / "egress.log") if c.get("llm") else None
-    agent = Agent(signer, {"recipe": c["grants"]["agent_recipe"], "review": c["grants"]["agent_review"]}, store,
-                  data=TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY,
+    clock = lambda: int(time.time() * 1000)
+    service = GatewayClient(resolve(c["socket"]["path"]))
+    try:                                                  # the write scopes of the client's own targets: the rules'
+        scopes = service.view()["law"]["effective"]["settings"].get("scopes")
+    except Exception:
+        scopes = None
+    agent = Agent(store, data=TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY,
                   api_key=resolve(api).read_text().strip() if api and not llm else None, publish=publish, llm=llm,
-                  scopes=agent_cfg.get("scopes"), research_sources=agent_cfg.get("research_sources"))
+                  scopes=scopes, research_sources=agent_cfg.get("research_sources"))
     routes = installed_routes(agent.scopes, model=agent.llm is not None, scanner=True)
-    cycle = Cycle(GatewayClient(resolve(c["socket"]["path"])), WorkEngine(store.parent / "work.db"), agent, routes,
-                  clock=lambda: int(time.time() * 1000), main=main, state_path=store.parent / "proposals.json",
-                  findings=path.parent / "findings.json",
-                  memory=Memory(store.parent / "memory.json", budget=int(agent_cfg.get("attempts", 3))),
-                  settings=system_settings)
-    if repo.get("inbox") and "agent_integrate" in c["grants"]:
-        from .contributions import Integrator
-        integrator = Integrator(cycle.service, signer, c["grants"]["agent_integrate"], resolve(repo["inbox"]),
-                                main=main, clock=lambda: cycle.clock(), notes=store.parent / "contributions.json")
-        run = cycle.run
-        cycle.run = lambda mode="RUN": {**run(mode), "integrate": integrator.run()}
-    switches = {name: gid for name, gid in c["grants"].items()
-                if name.startswith(("agent_deploy", "agent_rollback", "agent_restart", "agent_canary",
-                                    "agent_promote", "agent_abort"))}
-    if "agent_configure" in c["grants"]:                  # D35: commit the rules an engineer signed
-        from .rules import Configurer
-        configurer = Configurer(cycle.service, signer, c["grants"]["agent_configure"], store,
-                                resolve(c.get("build", {}).get("store", "requests")), main=main,
-                                clock=lambda: cycle.clock(), notes=store.parent / "rules.json")
-        run_rules = cycle.run
-        cycle.run = lambda mode="RUN": {**run_rules(mode), "rules": configurer.run()}
-    if "agent_implement" in c["grants"]:                  # D34: build what contracted requests ask for
-        from .build import Builder
-        builder = Builder(cycle.service, signer, {k: c["grants"][k] for k in ("agent_implement", "agent_deliver")
-                                                  if k in c["grants"]}, store,
-                          resolve(c.get("build", {}).get("store", "requests")), main=main,
-                          clock=lambda: cycle.clock(), notes=store.parent / "requests.json", llm=agent.llm,
-                          data=agent.data, research_sources=agent_cfg.get("research_sources"),
-                          settings=system_settings)
-        run_build = cycle.run
-        cycle.run = lambda mode="RUN": {**run_build(mode), "build": builder.run()}
-    if switches:                                          # D30: production follows main, and steps back on a breach
-        from .release import Releaser
-        releaser = Releaser(cycle.service, signer, switches, clock=lambda: cycle.clock(),
-                            notes=store.parent / "releases.json", rules=system_settings)
-        run_release = cycle.run
-        cycle.run = lambda mode="RUN": {**run_release(mode), "release": releaser.run()}
-    return cycle, refresh
+    repairer = Repairer(service, WorkEngine(store.parent / "work.db"), agent, routes, clock=clock,
+                        state_path=store.parent / "proposals.json", findings=path.parent / "findings.json",
+                        memory=Memory(store.parent / "memory.json", budget=int(agent_cfg.get("attempts", 3))))
+    grant = c["grants"]["agent"]
+    producers = [repairer]
+    if c.get("build"):                                    # D34: build what contracted requests ask for
+        producers.append(Builder(service, signer, grant, store, resolve(c["build"].get("store", "requests")),
+                                 clock=clock, notes=store.parent / "requests.json", llm=agent.llm, data=agent.data,
+                                 research_sources=agent_cfg.get("research_sources")))
+    loop = Loop(service, signer, grant, main=main, clock=clock, notes=store.parent / "moves.json", producers=producers)
+    return loop, repairer, main, refresh
 
 
 def main(argv=None) -> int:
@@ -114,12 +86,12 @@ def main(argv=None) -> int:
     if len(argv) < 2 or argv[0] not in ("run", "patrol"):
         print("usage: python -m standard.autonomy (run|patrol) standard.toml [interval-seconds|focus]")
         return 2
-    cycle, refresh = build(argv[1])
+    loop, repairer, main_, refresh = build(argv[1])
     if argv[0] == "patrol":
         from .patrol import run_patrol
         try:
             refresh()
-            print(json.dumps(run_patrol(cycle, focus=argv[2] if len(argv) > 2 else None)))
+            print(json.dumps(run_patrol(repairer, main=main_, focus=argv[2] if len(argv) > 2 else None)))
             return 0
         except (OSError, ValueError) as exc:
             print(json.dumps({"error": str(exc)}))
@@ -128,7 +100,7 @@ def main(argv=None) -> int:
     while True:
         try:
             refresh()
-            report = cycle.run()
+            report = loop.run()
         except Exception as exc:
             report = {"blocked": f"{type(exc).__name__}: {exc}"}
         print(json.dumps({"at": int(time.time() * 1000), **report}, default=str), flush=True)

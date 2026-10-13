@@ -1,10 +1,11 @@
-"""U04 — the maintenance agent: turn one repair task into one proposed commit, then a signed intent (§11.1, §11.4).
+"""U04 — the repair crafter: turn one repair task into one candidate commit (§11.1, §11.4).
 
 What a model writes is hostile data: it never reaches a working tree, a git process's configuration or a shell. The
 commit is built with git plumbing in the agent's own proposals store, from a map {path: bytes} whose paths must lie in
-the target's write scope. The agent holds only its own key; it never writes to the maintained repository. Whether the
-commit may land is decided by the law, from facts independent instruments observe about this exact transition:
-a recipe's output can become autonomous (`reproduced`); a model's judgment needs a signed human review.
+the target's write scope (instruments/scope.py, the same definition the scanner judges `scoped` with). The agent never
+writes to the maintained repository. Whether the commit lands is the rules' call, from facts the scanner measures on
+this exact transition: a recipe's output is `reproduced`; a model's change lands alone when main's tests pass, nothing
+regresses and it stays in scope, unless the rules keep that route for the human.
 
 Sending repository context to a model is itself an effect of data egress (§7.4, R15): a detected secret never leaves.
 For the secrets target the model sees the files with every detected value replaced by a redaction mark, and a reply
@@ -14,29 +15,19 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
-import uuid
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 from instruments.probes import SECRETS
 from instruments.tree import Snapshot
 from instruments.data import EMPTY
 from instruments.recipes import recipes_for
-from bt.signing import Signer, envelope
-from .research import Research, ResearchError, relative_path
+from instruments.scope import relative, repair as in_scope
+from .research import Research, ResearchError
 
 MODEL = os.environ.get("STANDARD_AGENT_MODEL", "claude-sonnet-5-5")
-SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}"
-SOURCE = rf"(?!tests/)(?!\.github/)(?!standard/)({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md)"
-DEPENDENCIES = r"requirements[A-Za-z0-9_.-]*\.txt|sbom\.json"
-WRITE_SCOPE = {
-    "vulns": DEPENDENCIES, "licenses": DEPENDENCIES, "sbom": r"sbom\.json", "deps-age": rf"{DEPENDENCIES}|{SOURCE}",
-    "sast": SOURCE, "ci": SOURCE, "secrets": SOURCE, "actions": rf"\.github/workflows/{SEGMENT}\.ya?ml",
-}
 TASKS = {
     "vulns": "Upgrade the vulnerable pinned dependencies in requirements.txt to the lowest fixed versions; keep exact pins.",
     "deps-age": "Upgrade the pinned dependencies that are a major version behind, adapting the code if needed.",
@@ -51,16 +42,6 @@ REDACTED = b"<REDACTED>"
 
 class AgentError(ValueError):
     pass
-
-
-def in_scope(target: str, path, scopes=None) -> bool:
-    if not relative_path(path):
-        return False
-    if target in WRITE_SCOPE:
-        return re.fullmatch(WRITE_SCOPE[target], path) is not None
-    if path.split("/")[0] in ("tests", ".github", "standard"):
-        return False
-    return any(fnmatchcase(path, scope) for scope in (scopes or {}).get(target, []))
 
 
 def _git(repo, *args, input: bytes | None = None, env=None) -> str:
@@ -136,15 +117,14 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
 
 
 class Agent:
-    def __init__(self, signer: Signer, capability, store, *, data=EMPTY, api_key: str | None = None, ask=None,
-                 publish=None, llm=None, sandbox=None, iterations: int = 2, scopes=None, research_sources=None):
-        """capability: one grant id, or {"recipe": id, "review": id} when the two routes are granted apart.
-        data: the same pinned snapshot the instruments use, so that recipes reproduce.
-        llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and `ask(prompt, key) -> dict` build one for tests."""
+    def __init__(self, store, *, data=EMPTY, api_key: str | None = None, ask=None, publish=None, llm=None,
+                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None):
+        """data: the same pinned snapshot the instruments use, so that recipes reproduce. scopes: the write scopes
+        the rules give the client's own targets. llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and
+        `ask(prompt, key) -> dict` build one for tests."""
         from .llm import Gate, Provider
         from .sandbox import Sandbox
-        self.capabilities = capability if isinstance(capability, dict) else {"recipe": capability, "review": capability}
-        self.signer, self.store = signer, Path(store)
+        self.store = Path(store)
         self.data, self.iterations = data, iterations
         self.publish = publish or (lambda head: None)   # e.g. push the branch standard/proposals/<head> on GitHub
         if llm is None and api_key:
@@ -153,18 +133,18 @@ class Agent:
                        self.store.parent / "egress.log", transport=transport)
         self.llm, self.sandbox = llm, sandbox or Sandbox(cache_roots=(self.store.parent / "venvs",))
         self.scopes = dict(scopes or {})
-        if any(not isinstance(patterns, list) or not patterns or any(not relative_path(p) for p in patterns)
+        if any(not isinstance(patterns, list) or not patterns or any(not relative(p) for p in patterns)
                for patterns in self.scopes.values()):
             raise AgentError("custom repair scopes must be configured lists of relative path patterns")
         self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources)
 
-    def investigate(self, view, task, base, findings=None, settings=None, *, model=None):
+    def investigate(self, view, task, base, findings=None, *, model=None):
         from .context import model_packet, task_context
         tree = Snapshot(self.store, base)
         prompt = ("Find a way to serve this missing need. Inspect, research, reuse or experiment with a tool. "
                   "Return a summary and proposed tool files if useful, the required independent verification and any "
                   "operator action. Do not claim the requirement is closed or register a new trusted instrument.\n"
-                  + model_packet(task_context(view, task, findings, settings=settings, model=model)))
+                  + model_packet(task_context(view, task, findings, model=model)))
         try:
             return self.research.dialogue(prompt, tree, key=task["id"])
         except ResearchError as exc:
@@ -175,7 +155,7 @@ class Agent:
 
     def craft(self, target_id: str, base: str, *, targets: dict | None = None, finding: dict | None = None,
               lessons: str = "", law_text: str = "") -> tuple[str, str]:
-        """(head, route): "recipe" when an instrument can reproduce it, "review" when a human must sign a review.
+        """(head, way): "recipe" when the scanner can reproduce it, "model" when a model wrote it.
         Nothing is proposed that the agent's own precheck rejects: it fixes the target, regresses no other one,
         keeps main's tests green and adds no lint or type error."""
         from .precheck import precheck
@@ -201,7 +181,7 @@ class Agent:
                                    for n, p in self.data.packages.items()}, indent=1)[:6000]
         where = "\n".join(d[:400] for d in finding["details"][:20]) or "(none published)"
         for _ in range(self.iterations):
-            instruction = TASKS.get(target_id, "Serve the client requirement using the configured write scope; human review is required.")
+            instruction = TASKS.get(target_id, "Serve the client requirement within the write scope the rules give it.")
             prompt = (f"Repository maintenance. Target `{target_id}`.\nTask: {instruction}\n"
                       f"Requirement: {target['resource']} must have {target['property']} = {target['expect']}; "
                       f"the independent instrument reports {finding['status']}.\nWhere:\n{where}\n{law_text}\n"
@@ -233,12 +213,6 @@ class Agent:
                                   str(reply.get("risks", "")))
                 head = self._commit(base, {p: c.encode() for p, c in files.items()}, message)
                 self.publish(head)
-                return head, "review"
+                return head, "model"
             feedback = "\n".join(check["problems"])[:4000]
         raise AgentError(f"no candidate for {target_id} passed the agent's precheck: {feedback[:1500]}")
-
-    def intent(self, domain: str, at: int, area: str, item: str, base: str, head: str, route: str = "recipe") -> dict:
-        body = {"id": f"intent-{uuid.uuid4().hex}", "at": at, "author": self.signer.identity,
-                "under": self.capabilities[route],
-                "op": "remediate", "args": {"area": area, "item": item, "base": base, "head": head}}
-        return envelope(domain, "intent", body, [self.signer])

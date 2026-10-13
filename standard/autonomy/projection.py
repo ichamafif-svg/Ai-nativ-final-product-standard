@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
-NEEDS = ("cover", "observe", "repair", "prove", "review", "witness", "investigate")
+NEEDS = ("cover", "observe", "repair", "prove", "human", "witness", "investigate")
 CONTRACTS = tuple(f"T{i:02}" for i in range(1, 10))
 STATES = ("AVAILABLE", "TRUST_BLOCKED", "NO_ROUTE", "HUMAN_REVIEW")
 
@@ -59,7 +59,7 @@ def _tasks_of(item: dict, law: dict) -> list:
         out = []
         for need in item.get("needs", []):
             if need == "repair" and target.get("human"):
-                need = "review"
+                need = "human"
             out.append((target["resource"], need))
         return out
     if kind == "protocol" and item.get("stage") == "proof":
@@ -67,7 +67,7 @@ def _tasks_of(item: dict, law: dict) -> list:
     if kind in ("clock", "clock_gap"):
         return [("ledger:time", "witness")]
     if kind == "violation":
-        return [("law:" + item["declaration"], "review")]
+        return [("law:" + item["declaration"], "human")]
     return []                          # pending, unredeemed, reconcile: the operator's own passes (T)
 
 
@@ -89,7 +89,7 @@ def project(view: dict, routes, qualify, *, mode: str = "RUN") -> dict:
                 except Exception:
                     state = "TRUST_BLOCKED"
                 choices.append({"route": route.id, "state": state, "required_t": sorted(required)})
-            if need in ("review", "witness"):
+            if need in ("human", "witness"):
                 state = "HUMAN_REVIEW"
             elif any(c["state"] == "AVAILABLE" for c in choices):
                 state = "AVAILABLE"

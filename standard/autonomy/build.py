@@ -1,20 +1,20 @@
-"""U: build what a contracted request asks for (D34).
+"""U — the build producer: implement what a contracted request asks for (D34).
 
-For each request whose contract a person signed, the agent writes an implementation on the current main: code only,
-never a test, plus the contract file itself byte for byte (tests/acceptance/test_<request>.py). Before proposing it,
-it checks in its sandbox that the contract passes, main's tests still pass, no floor target gets worse and no new lint
-error appears; it iterates on its own failures. It then proposes the commit (trailer `Standard-Request:`) and asks the
-law to `implement` it: refused until the independent scanner measured acceptance, tests and regressions on that exact
-commit and a reviewer signed it. Once main passes the contract, it records the delivery (`deliver`), which the law
-admits only on the scanner's `accepted = yes`.
+The human said what the product must do by signing the request's contract (its acceptance tests). For each
+contracted request, the agent writes an implementation on the current main: source code only (instruments/scope.py),
+plus the contract file itself byte for byte (tests/acceptance/test_<request>.py). Before proposing it, it checks in
+its sandbox that the contract passes, main's tests still pass, no floor target gets worse and no new lint error
+appears; it iterates on its own failures. The commit (trailer `Standard-Request:`) is a candidate: the scanner
+measures acceptance, tests, regressions and scope on it, and the loop plays `implement` when a route of the rules
+holds. Once main passes the contract, the producer records the delivery (`deliver`), which the rules admit only on
+the scanner's `accepted = yes`.
 
-What the agent cannot do: write or change a test, change the contract, land anything without a review.
-Without a model it proposes nothing and says so; any contributor may implement the request instead (same trailer).
+What the agent cannot do: write or change a test, change the contract. Without a model it proposes nothing and says
+so; any contributor may implement the request instead (same trailer).
 """
 from __future__ import annotations
 
 import json
-import re
 import uuid
 import tempfile
 from pathlib import Path
@@ -23,34 +23,33 @@ from instruments.suite import contract_path, load
 from instruments.tree import Snapshot
 from bt.signing import Signer, envelope
 
+from instruments.scope import feature
+
 from .agent import AgentError, commit_files, model_context
 from .context import task_context, model_packet
+from .moves import judge
 from .read_model import ReadModel
 from .research import Research, ResearchError
 
-SCOPE = re.compile(r"(?!tests/)(?!\.github/)(?!standard/)([A-Za-z0-9_][A-Za-z0-9_.-]{0,99}/){0,8}"
-                   r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}\.(py|md|txt|json|toml|ya?ml|sql|html|css|js)")
-
-
-def in_scope(path) -> bool:
-    return isinstance(path, str) and ".." not in path and SCOPE.fullmatch(path) is not None
+def in_scope(rid: str, path) -> bool:
+    return isinstance(path, str) and path != contract_path(rid) and feature(rid, path)
 
 
 class Builder:
-    def __init__(self, service, signer: Signer, grants: dict, store, requests, *, main, clock, notes, llm=None,
-                 sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None,
-                 settings=lambda: {}):
-        """grants: {"agent_implement": id, "agent_deliver": id}. store: the agent's proposals store. requests: the
-        request store (contracts and specs by digest)."""
+    name = "build"
+
+    def __init__(self, service, signer: Signer, grant: str, store, requests, *, clock, notes, llm=None,
+                 sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None):
+        """grant: the agent's capability. store: the agent's proposals store. requests: the request store (contracts
+        and specs by digest)."""
         from instruments.data import EMPTY
 
         from .sandbox import Sandbox
-        self.service, self.signer, self.grants, self.store = service, signer, grants, Path(store)
-        self.requests, self.main, self.clock, self.notes = Path(requests), main, clock, Path(notes)
+        self.service, self.signer, self.grant, self.store = service, signer, grant, Path(store)
+        self.requests, self.clock, self.notes = Path(requests), clock, Path(notes)
         self.llm, self.sandbox, self.data = llm, sandbox or Sandbox(
             cache_roots=(self.store.parent / "venvs",)), data or EMPTY
         self.iterations, self.backoff_ms = iterations, backoff_ms
-        self.settings = settings
         self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources)
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
@@ -107,7 +106,7 @@ class Builder:
             except ResearchError as exc:
                 raise AgentError(str(exc)) from exc
             files = reply.get("files")
-            if not isinstance(files, dict) or not files or not all(in_scope(p) and isinstance(c, str)
+            if not isinstance(files, dict) or not files or not all(in_scope(rid, p) and isinstance(c, str)
                                                                     for p, c in files.items()):
                 raise AgentError("the implementation leaves its write scope (code only, never tests)")
             blobs = {p: c.encode() for p, c in files.items()} | {contract_path(rid): contract}
@@ -135,9 +134,9 @@ class Builder:
         except Exception as exc:
             return getattr(exc, "code", None) or str(exc)
 
-    def run(self) -> dict:
-        view, now, base = self.service.view(), self.clock(), self.main()
-        model = ReadModel(view, settings=self.settings(), main=base)
+    def run(self, view: dict, main: str) -> dict:
+        now, base = self.clock(), main
+        model = ReadModel(view, main=base)
         notes = json.loads(self.notes.read_text()) if self.notes.exists() else {}
         targets = {row["target"]["id"]: row["target"] for row in model.targets()}
         report = {}
@@ -145,9 +144,9 @@ class Builder:
             if e["state"] != "contracted":
                 continue
             rid, note = resource.split("/", 1)[1], notes.setdefault(resource.split("/", 1)[1], {})
-            if model.transition(resource).get("accepted") == "yes" and "agent_deliver" in self.grants:
+            if model.transition(resource).get("accepted") == "yes":
                 outcome = self._admit(view, "transition", {
-                    "under": self.grants["agent_deliver"], "resource": resource, "operation": "deliver",
+                    "under": self.grant, "resource": resource, "operation": "deliver",
                     "expected": e["expected"], "changes": {}})
                 report[rid] = note["state"] = "delivered" if outcome == "admitted" else f"delivery: {outcome}"
                 continue
@@ -157,6 +156,10 @@ class Builder:
             if contract is None:
                 report[rid] = "the contract is not in the request store"
                 continue
+            if note.get("head") and note.get("base") == base and judge(
+                    view, "implement", f"repo:feature:{rid}/{base}/{note['head']}",
+                    {"request": rid, "base": base, "head": note["head"]})["status"] == "refuted":
+                note["base"] = None                          # the scanner refuted it: implement again
             if note.get("base") != base:                     # main moved: implement again on the new main
                 try:
                     note.update(base=base, head=self.craft(rid, e["fields"]["title"], spec or b"", contract, base,
@@ -165,12 +168,6 @@ class Builder:
                                       "opened": e.get("created"), "due": None}, model=model)), state="proposed")
                 except AgentError as exc:
                     note.update(base=base, head=None, state=f"waiting: {exc}", next_at=now + 10 * self.backoff_ms)
-            if note.get("head") and note.get("state") != "landing" and "agent_implement" in self.grants:
-                outcome = self._admit(view, "intent", {"under": self.grants["agent_implement"], "op": "implement",
-                                                       "args": {"request": rid, "base": base, "head": note["head"]}})
-                note["state"] = "landing" if outcome == "admitted" else f"proposed: {outcome}"
-                if outcome != "admitted":
-                    note["next_at"] = now + self.backoff_ms
             report[rid] = note.get("state")
         self.notes.write_text(json.dumps(notes, indent=2, sort_keys=True))
         return report

@@ -14,14 +14,9 @@ from instruments.probes import PROBES
 from instruments.data import EMPTY
 from instruments.recipes import recipes_for
 from kernel.floor0 import FLOOR0, floor0_digest
-from standard.floors import COMPLIANCE_SCOPES
 
 from .projection import project
 
-EXTERNAL_REFERENCES = {
-    "OWASP Agentic Top 10 2026": "https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/",
-    "OWASP Agent Control Standard": "https://genai.owasp.org/resource/agent-control-standard-acs/",
-}
 LOCATION = re.compile(r"(?P<path>(?!/)(?!\.)[A-Za-z0-9_./-]+):(?P<line>[1-9][0-9]*)(?::|$)")
 
 
@@ -37,31 +32,24 @@ def locations(details: list) -> list:
     return out
 
 
-def projection_labels(target: dict) -> list:
-    return [scope["framework"] for scope in COMPLIANCE_SCOPES if target["id"] in scope["targets"]]
-
-
 def human_target(target: dict) -> bool:
+    """A target no move repairs: the human repairs it where the machine cannot (a provider's settings)."""
     return target.get("human") is True
 
 
-def work_role(target: dict) -> dict:
+def work_role(target: dict, law: dict | None = None) -> dict:
+    """Who repairs a target under the rules in force: the agent alone, or the agent and the human's decision."""
     if human_target(target):
-        return {"actor": "people", "level": "human", "method": "attestation"}
-    if target["id"] in recipes_for(EMPTY) and target.get("repair"):
-        return {"actor": "agent", "level": "autonomous", "method": "recipe"}
+        return {"actor": "human", "level": "human", "method": "human"}
+    op = (law or {}).get("ops", {}).get(target.get("repair") or "", {})
+    autonomous = sorted(r for r in op.get("routes", {}) if r != "human")
+    if target["id"] in recipes_for(EMPTY) and "reproduced" in autonomous:
+        return {"actor": "agent", "level": "autonomous", "method": "recipe", "routes": autonomous}
+    if target.get("repair") and autonomous:
+        return {"actor": "agent", "level": "autonomous", "method": "agent", "routes": autonomous}
     if target.get("repair"):
-        return {"actor": "review", "level": "supervised", "method": "review"}
+        return {"actor": "agent", "level": "decision", "method": "human decision", "routes": []}
     return {"actor": "agent", "level": "observed", "method": "observation"}
-
-
-def compliance_reading(target: dict, state: str, health_state: str) -> list[dict]:
-    """Coarse scope is informative even when the target is proven; it never certifies a control."""
-    status = "fault" if health_state == "FAULT" else "partial" if state == "held" else "missing"
-    return [{"framework": scope["framework"], "scope": scope["scope"], "clause": scope["clause"],
-             "source": scope["source"], "granularity": scope["granularity"], "status": status,
-             "authority": "projection_only", "certifies": False}
-            for scope in COMPLIANCE_SCOPES if target["id"] in scope["targets"]]
 
 
 def measurement_for(target: dict, law: dict) -> dict:
@@ -80,7 +68,7 @@ def measurement_for(target: dict, law: dict) -> dict:
     if declared:
         return {"kind": "law_declared_instrument", "method": declared["method"], "declared": declared}
     if human_target(target):
-        return {"kind": "manual", "method": "signed human attestation", "declared": None}
+        return {"kind": "manual", "method": "the human repairs it", "declared": None}
     return {"kind": "unmapped", "method": None, "declared": None}
 
 
@@ -89,8 +77,6 @@ def target_state(target: dict, finding: dict, debt: list, proven: bool) -> str:
     if any(item["state"] == "escalated" for item in debt):
         return "escalated"
     if debt:
-        if human_target(target):
-            return "attestation_due"
         status = finding.get("status")
         if status and str(status).startswith("uncovered"):
             return "unmeasured"
@@ -99,22 +85,19 @@ def target_state(target: dict, finding: dict, debt: list, proven: bool) -> str:
         return "open"
     if proven:
         return "held"
-    if human_target(target):
-        return "attestation_due"
     return "unknown"
 
 
 class ReadModel:
     """Shared graph of declared, recorded and candidate links at one explicit reading basis."""
 
-    def __init__(self, view: dict, findings=None, routes=(), qualify=None, *, settings=None, main=None, inputs=None,
-                 code_index=None):
+    def __init__(self, view: dict, findings=None, routes=(), qualify=None, *, main=None, inputs=None, code_index=None):
         self.view = copy.deepcopy(view)
         self.law = self.view["law"]["effective"]
-        self.findings, self.settings = copy.deepcopy(findings or {}), copy.deepcopy(settings or {})
+        self.findings, self.settings = copy.deepcopy(findings or {}), self.law.get("settings", {})
         self.routes, self.qualify = tuple(routes), qualify or (lambda contracts: None)
         captured = copy.deepcopy(inputs or {})
-        for name, document in (("findings", self.findings), ("settings", self.settings)):
+        for name, document in (("findings", self.findings),):
             encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), default=str).encode()
             captured.setdefault(name, {})["digest"] = "sha256:" + hashlib.sha256(encoded).hexdigest()
         self.basis = {"prefix": copy.deepcopy(view["prefix"]), "law_digest": view["law"]["digest"],
@@ -196,9 +179,7 @@ class ReadModel:
                          "proof": proof.get(target["id"]),
                          "facts": facts.get((target["resource"], target["property"]), []),
                          "measurement": measure, "locations": locations(finding.get("details", [])),
-                         "projections": projection_labels(target),
-                         "compliance": compliance_reading(target, status, health.get("state", "unknown")),
-                         "role": work_role(target), "state": status,
+                         "role": work_role(target, self.law), "state": status,
                          "diagnostic_conflict": conflict, "diagnostic_alignment": aligned})
         self._targets = rows
         return rows
@@ -239,7 +220,7 @@ class ReadModel:
             for ident, statement in FLOOR0:
                 node(f"floor0:{ident}", "floor0_axiom", statement, "pinned_kernel_code")
                 edge("law:floor0/value", "pins", f"floor0:{ident}", "effective_law")
-        node("settings:main", "system_settings", self.settings, "repository_file")
+        node("rules:settings", "settings", self.settings, "effective_law")
         if self.basis["main"]:
             node(f"code:{self.basis['main']}", "repository_snapshot", {"commit": self.basis["main"]}, "git")
         if self.code_index is not None:
@@ -248,15 +229,14 @@ class ReadModel:
                 edge(f"code:{self.basis['main']}", "contains", f"code:{path}", "git_ast_index")
                 for imported in sorted(self.code_index.imports[path]):
                     edge(f"code:{path}", "imports", imported, "git_ast_index", "syntactic")
-        for label in (scope["framework"] for scope in COMPLIANCE_SCOPES):
-            node(f"external:{label}", "external_reference", {"mapping": "coarse_projection_only"},
-                 "local_projection")
-        for label, url in EXTERNAL_REFERENCES.items():
-            node(f"external:{label}", "external_reference", {"url": url, "mapping": "not_established"},
-                 "published_framework")
         for op, spec in self.law.get("ops", {}).items():
             if "resource" in spec:
                 edge(f"law:ops/{op}", "acts_on", spec["resource"], "effective_law")
+            for route, policy in spec.get("routes", {}).items():
+                for atom in policy.get("all", []):
+                    for kind in ("observed", "compare"):
+                        if kind in atom:
+                            edge(f"law:ops/{op}#{route}", "requires_property", atom[kind][0], "effective_law")
         for name, policy in self.law.get("conditions", {}).items():
             for atom in policy.get("all", []):
                 for kind in ("observed", "compare"):
@@ -335,8 +315,6 @@ class ReadModel:
                 if "path" in loc:
                     edge(tid, "possible_code_location", f"code:{loc['path']}:{loc['line']}",
                          "diagnostic_finding", "candidate")
-            for label in row["projections"]:
-                edge(tid, "projected_to", f"external:{label}", "coarse_projection", "unverified")
             if row["finding"]:
                 edge(tid, "diagnosed_by", f"finding:{target['resource']}|{target['property']}",
                      "published_finding", row["diagnostic_alignment"])
@@ -350,8 +328,7 @@ class ReadModel:
                      "kernel_accountability", "constitutional")
         self._graph = {"schema": "standard-read-model/v1", "basis": self.basis,
                        "scope": {"law": "entire_effective_law", "facts": "bounded_gateway_view",
-                                 "code": "git_ast_index" if self.code_index is not None else "diagnostic_locations_only",
-                                 "external_controls": "coarse_or_unmapped"},
+                                 "code": "git_ast_index" if self.code_index is not None else "diagnostic_locations_only"},
                        "declarations": nodes, "relations": edges,
                        "authority": "derived reading only; the kernel decides from admitted statements"}
         return self._graph

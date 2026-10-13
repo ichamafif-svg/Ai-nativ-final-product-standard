@@ -18,11 +18,10 @@ SUSPICION_KEYS = ("law_ref", "surface", "why", "evidence_seen", "determinism_gap
                   "suggested_action", "confidence", "authority")
 
 
-def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, settings=None, rules=None, focus=None,
+def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=None,
                    mode: str = "RUN", model: ReadModel | None = None) -> dict:
     """Context for a repo-wide or targeted law patrol."""
-    model = model or ReadModel(view, findings, routes, qualify,
-                               settings=settings if settings is not None else rules)
+    model = model or ReadModel(view, findings, routes, qualify)
     model.assert_view(view)
     law, findings, settings = model.law, model.findings, model.settings
     dossiers = gap_dossiers(view, model=model, mode=mode)
@@ -30,26 +29,26 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, settin
     if focus:
         text = str(focus)
         selected = [d for d in dossiers if text in (d["id"], d["law"]["resource"]) or text in json.dumps(d["law"])]
-    weak = [d for d in selected if d["state"] in ("unknown", "unmeasured", "open", "attestation_due")
+    weak = [d for d in selected if d["state"] in ("unknown", "unmeasured", "open")
             or d["route"]["state"] in (None, "NO_ROUTE", "TRUST_BLOCKED")
             or d["action"]["method"] in ("missing_task", "llm_or_configured_scope")]
     return {"kind": "law-patrol", "mode": "targeted" if focus else "wide", "focus": focus,
             "basis": view["prefix"], "law_digest": view["law"].get("digest"),
             "read_model": {"basis": model.basis, "authority": model.graph()["authority"]},
-            "effective_law": law, "system_settings": settings,
+            "effective_law": law, "settings": settings,
             "known_findings": findings,
-            "known_gaps": [d for d in selected if d["state"] in ("gap", "open", "escalated", "unmeasured",
-                                                           "attestation_due")],
+            "known_gaps": [d for d in selected if d["state"] in ("gap", "open", "escalated", "unmeasured")],
             "weak_spots": weak,
             "instruments": law.get("instruments", {}),
             "operations": law.get("ops", {}),
-            "conditions": law.get("conditions", {}),
+            "routes": {op: spec.get("routes", {}) for op, spec in law.get("ops", {}).items()},
             "authority": AUTHORITY["patrol"],
             "expected_output": {"suspicions": [{k: "..." for k in SUSPICION_KEYS}]}}
 
 
-def run_patrol(cycle, *, focus=None) -> dict:
-    """Run one advisory pass inside U, with read/search tools only; keep a private result history."""
+def run_patrol(cycle, *, main, focus=None) -> dict:
+    """Run one advisory pass inside U, with read/search tools only; keep a private result history.
+    cycle: the repair producer (its agent, findings and routes)."""
     from .advisory_llm import propose_patrol
     from .llm import redact
 
@@ -57,9 +56,8 @@ def run_patrol(cycle, *, focus=None) -> dict:
         raise ValueError("law patrol needs a configured model in the agent process")
     if focus is not None and (not isinstance(focus, str) or len(focus) > 200):
         raise ValueError("patrol focus is at most 200 characters")
-    view, base = cycle.service.view(), cycle.main()
-    model = ReadModel(view, cycle._findings(), cycle.routes, cycle.service.qualify,
-                      settings=cycle.settings(), main=base)
+    view, base = cycle.service.view(), main()
+    model = ReadModel(view, cycle._findings(), cycle.routes, cycle.service.qualify, main=base)
     context = patrol_context(view, focus=focus, model=model)
     tree = Snapshot(cycle.agent.store, base)
 

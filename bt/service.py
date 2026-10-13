@@ -99,6 +99,13 @@ class TrustedService:
                 "grants": state["grants"],
                 # D34: typed resources (requests) with the digest a transition must name as `expected`
                 "entities": {r: {**e, "expected": digest(e)} for r, e in state["entities"].items()},
+                # Who is who (kinds only), what the human froze, and where every move played so far stands.
+                "identities": {i: d["kind"] for i, d in state["root"]["identities"].items()},
+                "frozen": sorted(state["frozen"]),
+                "played": {i: {"op": it["op"], "resource": it["resource"], "author": it["author"],
+                               "state": state["line"].get(i, {}).get("state"), "at": state["line"].get(i, {}).get("at")}
+                           for i, it in state["intents"].items()},
+                "now": now,
                 "facts": sorted(({k: o[k] for k in ("id", "resource", "property", "status", "author", "at")}
                                  for o in state["observations"].values()), key=lambda o: -o["at"])[:500]}
 

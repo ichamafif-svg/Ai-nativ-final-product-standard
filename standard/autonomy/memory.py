@@ -33,7 +33,7 @@ class Memory:
         self._save()
 
     def exhausted(self, target: str, base: str) -> bool:
-        return len([a for a in self.attempts(target, base) if a["outcome"] != "admitted"]) >= self.budget
+        return len([a for a in self.attempts(target, base) if a["outcome"] not in ("admitted", "crafted")]) >= self.budget
 
     def abandon(self, target: str, base: str, dossier: str) -> None:
         self.data.setdefault(target, {"attempts": []})["abandoned"] = {"base": base, "dossier": dossier[:8000]}
@@ -45,5 +45,5 @@ class Memory:
 
     def lessons(self, target: str, limit: int = 5) -> str:
         """The last failures, for the agent's next attempt: what was tried and why it did not pass."""
-        failed = [a for a in self.attempts(target) if a["outcome"] != "admitted"][-limit:]
+        failed = [a for a in self.attempts(target) if a["outcome"] not in ("admitted", "crafted")][-limit:]
         return "\n".join(f"- attempt on {a['base'][:12]} ({a['route']}): {a['outcome']}: {a['why']}" for a in failed)
