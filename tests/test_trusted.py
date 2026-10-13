@@ -43,7 +43,7 @@ class Checks(unittest.TestCase):
         record, delta = L.kernel.decide(L.state, entry)
         law = L.kernel.law_by_digest(record["law"])
         with self.assertRaises(Disagreement):
-            Checker().check(L.state, record, mutate(copy.deepcopy(delta)), entry, law.raw, law.digest)
+            Checker(RELEASE.floors).check(L.state, record, mutate(copy.deepcopy(delta)), entry, law.raw, law.digest)
 
     def test_r01_a_restriction_must_be_applied(self):
         self.corrupted("revoke", "h3", lambda d: [op for op in d if op[1] != "revoked"], grant=self.g)
@@ -66,7 +66,7 @@ class Checks(unittest.TestCase):
         law = L.kernel.law_by_digest(record["law"])
         forged = {**record, "body": {**body, "scope": "x:*"}}
         with self.assertRaises(Disagreement):
-            Checker().check(L.state, forged, delta, entry, law.raw, law.digest)
+            Checker(RELEASE.floors).check(L.state, forged, delta, entry, law.raw, law.digest)
 
 
 class Durable(unittest.TestCase):

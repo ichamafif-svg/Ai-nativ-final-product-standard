@@ -56,6 +56,7 @@ class Accountability:
             a["obligations"].pop("clock:witness", None)
         elif kind in ("observation", "measurement"):
             self._qualify(a, ks, law, record)
+            self._resolve_violation(a, ks, record)
         if law.obligations:
             self._law_step(a, ks, law, record)
         law = self.kernel.law_of(ks)                   # an activation applies its new targets after its own entry
@@ -87,6 +88,20 @@ class Accountability:
                     "type": "violation", "declaration": decl["id"], "code": code, "detail": detail,
                     "owner": record["author"], "opened": at, "due": at}
             self._count(a, decl["id"], "violations")
+
+    @staticmethod
+    def _resolve_violation(a, ks, record) -> None:
+        """A violation is an obligation already due; a human of the root closes it by signing that it was handled
+        (`resolved = yes` on law:violation/<declaration>/<entry>). The count of violations stays: closing is not
+        forgetting, and no machine identity can close one."""
+        b = record["body"]
+        if (record["kind"] != "observation" or b["property"] != "resolved" or b["status"] != "yes"
+                or not b["resource"].startswith("law:violation/")
+                or ks["root"]["identities"].get(b["author"], {}).get("kind") != "human"):
+            return
+        parts = b["resource"][len("law:violation/"):].split("/", 1)
+        if len(parts) == 2:
+            a["obligations"].pop(f"violation:{parts[0]}:{parts[1]}", None)
 
     @staticmethod
     def _count(a, decl_id, what) -> None:

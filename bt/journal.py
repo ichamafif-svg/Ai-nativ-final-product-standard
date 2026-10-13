@@ -125,7 +125,7 @@ class Journal:
         if not isinstance(genesis_pin, str) or not genesis_pin.startswith(DIGEST_PREFIX):
             raise ValueError("an externally supplied genesis pin is required")
         self.kernel, self.pins, self.genesis_pin = kernel, pins, genesis_pin
-        self.checker = Checker()
+        self.checker = Checker(kernel.release.floors)
         self._lock = threading.RLock()
         self.state, self.heads = empty(), []
         if create:

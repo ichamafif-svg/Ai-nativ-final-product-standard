@@ -72,6 +72,8 @@ GRANTS = {
     "agent_integrate": ("agent", ["effect:integrate"], ["repo:contrib:*"], ["integrate-reviewed"]),
     "reviewer": ("h3", ["observe", "certify:real"], ["repo:*"], []),
     "officer": ("h2", ["observe", "certify:real"], ["org:*"], []),
+    # A human closes a law violation once handled (resolved = yes on law:violation/<declaration>/<entry>).
+    "steward": ("h4", ["observe", "certify:real"], ["law:violation/*"], []),
 }
 
 

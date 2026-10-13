@@ -733,6 +733,9 @@ class Kernel:
             no("PROV.COVERAGE", "source, method and coverage must match the instrument contract")
         if b["measured_at"] > c.at or b["measured_at"] + spec["fresh_ms"] < c.at:
             no("PROV.STALE", "a measurement is fresh and not from the future")
+        prior = c.s["observations"].get(f"{b['resource']}|{b['property']}|{b['author']}")
+        if prior is not None and b["measured_at"] < prior["at"]:
+            no("PROV.STALE", "an older reading never replaces a newer one of the same source")
         chain, label = self._authorize(c, b["author"], b["under"], "observe", b["resource"], b)
         self._certify(c, chain, b["level"])
         if c.law.rank[b["level"]] < c.law.rank[spec["min_level"]]:

@@ -23,9 +23,10 @@ from fractions import Fraction
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 
 from kernel.canon import canon, digest, parse
-from kernel.floor0 import DISPATCH_MS, LINE
+from kernel.floor0 import DISPATCH_MS, LINE, MAX_AHEAD_MS
 
 PREFIX = "urn:standard:kernel:1:"
 RESTRICT = {"veto": ("human",), "revoke": None, "freeze": ("human", "sentinel"), "flag": ("human", "sentinel"),
@@ -62,6 +63,26 @@ def _no(why: str):
     raise Disagreement(why)
 
 
+def _b64(text) -> bytes:
+    """Canonical standard base64 only, restated: one byte string, one spelling."""
+    raw = base64.b64decode(text, validate=True)
+    if base64.b64encode(raw).decode() != text:
+        _no("non-canonical base64 in the envelope")
+    return raw
+
+
+def _b64u(text) -> bytes:
+    if not isinstance(text, str) or not re.fullmatch(r"[A-Za-z0-9_-]*", text):
+        _no("bad base64url")
+    raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    if base64.urlsafe_b64encode(raw).rstrip(b"=").decode() != text:
+        _no("non-canonical base64url")
+    return raw
+
+
+_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+
+
 def _humans(root) -> set:
     return {i for i, d in root["identities"].items() if d["kind"] == "human"}
 
@@ -96,19 +117,77 @@ def _live(ob, at) -> bool:
     return not ((ob["stage"] in LAPSING or ob.get("on_due") == "lapse") and at > ob["due"])
 
 
-class Checker:
-    """One instance per journal. The law snapshot is rebuilt from pinned declarations when the law changes."""
+def _floors_kept(effective: dict, floors: dict, client: dict) -> None:
+    """G03 restated: the effective law contains every floor of the release, bound to the client's identities, only
+    tightened. The kernel composes the law; this recomputes the containment apart from it (review, high 7)."""
+    bindings = client.get("bindings") if isinstance(client, dict) else None
+    if not isinstance(bindings, dict):
+        _no("the client law binds no floor role")
+    bind = lambda v: bindings.get(v[1:]) if isinstance(v, str) and v.startswith("@") else v
+    for key in ("format", "floor0", "levels"):
+        if effective.get(key) != floors[key]:
+            _no(f"the effective law changes the floors' {key}")
+    rank = {name: i for i, name in enumerate(floors["levels"])}
+    for section in ("evidence", "discharges", "conditions", "resources"):
+        for name, value in floors.get(section, {}).items():
+            if effective.get(section, {}).get(name) != value:
+                _no(f"the effective law changes the floor {section}.{name}")
+    for name, value in floors.get("instruments", {}).items():
+        if effective.get("instruments", {}).get(name) != {**value, "sources": [bind(x) for x in value["sources"]]}:
+            _no(f"the effective law changes the floor instrument {name}")
+    for name, op in floors["ops"].items():
+        e = effective.get("ops", {}).get(name)
+        if (not isinstance(e, dict) or e.get("args") != op["args"] or e.get("resource") != op["resource"]
+                or e.get("profile") not in (op["profile"], "human_quorum")
+                or not set(op.get("trusted", [])) <= set(e.get("trusted", []))):
+            _no(f"the effective law weakens the floor op {name}")
+    t, f = effective.get("ttl", {}), floors["ttl"]
+    if set(t) != set(f) or any(type(t[k]) is not int or not 0 < t[k] <= f[k] for k in f):
+        _no("the effective law lengthens a floor ttl")
+    d, f = effective.get("delays", {}), floors["delays"]
+    if set(d) != set(f) or any(type(d[k]) is not int or d[k] < f[k] for k in f):
+        _no("the effective law shortens a floor delay")
+    if type(effective.get("witnesses", {}).get("quorum")) is not int or \
+            effective["witnesses"]["quorum"] < floors["witnesses"]["quorum"]:
+        _no("the effective law lowers the witness quorum")
+    hb, base = effective.get("controls", {}).get("heartbeat_ms"), floors["controls"]["heartbeat_ms"]
+    if type(hb) is not int or not (hb == base == 0 or (hb > 0 and (base == 0 or hb <= base))):
+        _no("the effective law relaxes the silent-control rule")
+    targets = {x.get("id"): x for x in effective.get("targets", []) if isinstance(x, dict)}
+    for ft in floors["targets"]:
+        e = targets.get(ft["id"])
+        loose = ("owner", "sources", "min_level", "fresh_ms", "due_ms")
+        if (e is None or set(e) != set(ft) or any(e[k] != ft[k] for k in ft if k not in loose)
+                or e["owner"] != bind(ft["owner"]) or e["sources"] != [bind(x) for x in ft["sources"]]
+                or rank.get(e["min_level"], -1) < rank[ft["min_level"]]
+                or any(type(e[k]) is not int or not 0 < e[k] <= ft[k] for k in ("fresh_ms", "due_ms"))):
+            _no(f"the effective law weakens the floor target {ft['id']}")
+    order = {"measure": 0, "escalate": 1, "refuse": 2}
+    obligations = {x.get("id"): x for x in effective.get("obligations", []) if isinstance(x, dict)}
+    for fo in floors.get("obligations", []):
+        e = obligations.get(fo["id"])
+        if (e is None or set(e) != set(fo) or any(e[k] != fo[k] for k in fo if k not in ("level", "due_ms"))
+                or order.get(e["level"], -1) < order[fo["level"]] or not 0 < e["due_ms"] <= fo["due_ms"]):
+            _no(f"the effective law weakens the floor obligation {fo['id']}")
 
-    def __init__(self):
-        self._law_digest = None
+
+class Checker:
+    """One instance per journal. The law snapshot is rebuilt from pinned declarations when the law changes.
+    `floors`: the release's floor declarations (data), against which every effective law is checked apart from K."""
+
+    def __init__(self, floors: dict | None = None):
+        if not isinstance(floors, dict):
+            raise ValueError("the second judge needs the release floors to check the law's composition")
+        self.floors, self._law_digest = copy.deepcopy(floors), None
 
     # ---- law snapshot -------------------------------------------------------------------------------------------
-    def use(self, effective: dict, law_digest: str) -> None:
+    def use(self, effective: dict, law_digest: str, client: dict | None = None) -> None:
         if self._law_digest == law_digest:
             return
         raw = copy.deepcopy(effective)
         if digest(raw) != law_digest:
             _no("the law snapshot differs from its pin")
+        _floors_kept(raw, self.floors, client)
         self.raw, self._law_digest = raw, law_digest
         self.levels = raw["levels"]
         self.evidence = set(raw.get("evidence", {}))
@@ -150,7 +229,7 @@ class Checker:
     def _check(self, pre, record, delta, entry, effective, law_digest):
         if record["law"] != law_digest or (pre["size"] and pre["law"]["digest"] != law_digest):
             _no("an entry is judged under the law in force at its position")
-        self.use(effective, law_digest)
+        self.use(effective, law_digest, record["body"]["law"] if record["kind"] == "genesis" else pre["law"]["client"])
         kind, body, at = record["kind"], record["body"], record["at"]
         root = body["root"] if kind == "genesis" else pre["root"]
         signers = self._signed(pre, record, entry, root)
@@ -174,6 +253,8 @@ class Checker:
             _no("time runs forward; only a restriction shares the last instant")
         if (kind == "genesis") != (pre["size"] == 0):
             _no("the genesis is first, and only first")
+        if at < 0 or (pre["size"] and kind != "checkpoint" and at > pre["anchor_at"] + MAX_AHEAD_MS):
+            _no("an entry runs too far ahead of witnessed time (F0-6)")
         if restricting:
             self._restriction(pre, record, root)
         handler = getattr(self, "_" + kind, None) if kind not in self.evidence else self._evidence
@@ -198,7 +279,7 @@ class Checker:
         ids = [s["keyid"] for s in env["signatures"]]
         if ids != sorted(set(ids)) or any(set(s) - {"keyid", "sig", "webauthn"} for s in env["signatures"]):
             _no("one signature per key, in key order, nothing unsigned")
-        payload = base64.b64decode(env["payload"], validate=True)
+        payload = _b64(env["payload"])
         st = parse(payload)
         body = st["predicate"]
         kind = st["predicateType"].removeprefix(PREFIX)
@@ -215,11 +296,11 @@ class Checker:
         signers = set()
         for sig in env["signatures"]:
             name, key = keys[sig["keyid"]]
-            public = base64.b64decode(key["public"], validate=True)
+            public = _b64(key["public"])
             if "sha256:" + hashlib.sha256(public).hexdigest() != sig["keyid"]:
                 _no("a signer key id is wrong")
             if key["alg"] == "ed25519":
-                Ed25519PublicKey.from_public_bytes(public).verify(base64.b64decode(sig["sig"], validate=True), message)
+                Ed25519PublicKey.from_public_bytes(public).verify(_b64(sig["sig"]), message)
             elif key["alg"] == "webauthn-es256":
                 self._webauthn(key, public, message, sig)
             else:
@@ -231,17 +312,20 @@ class Checker:
 
     @staticmethod
     def _webauthn(key, public, message, sig):
-        unb64 = lambda t: base64.urlsafe_b64decode(t + "=" * (-len(t) % 4))
         w = sig["webauthn"]
-        auth, client_raw = unb64(w["authenticatorData"]), unb64(w["clientDataJSON"])
+        auth, client_raw = _b64u(w["authenticatorData"]), _b64u(w["clientDataJSON"])
         client = json.loads(client_raw)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(message).digest()).rstrip(b"=").decode()
         if (client.get("type") != "webauthn.get" or client.get("origin") not in key["origins"]
                 or client.get("challenge") != challenge or len(auth) < 37
                 or auth[:32] != hashlib.sha256(key["rp_id"].encode()).digest() or auth[32] & 0x05 != 0x05):
             _no("a WebAuthn assertion is invalid")
+        der = _b64u(sig["sig"])
+        r, s_ = decode_dss_signature(der)
+        if encode_dss_signature(r, s_) != der or not 0 < s_ <= _N // 2:
+            _no("an ECDSA signature is strict DER with a low s")
         ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), public).verify(
-            unb64(sig["sig"]), auth + hashlib.sha256(client_raw).digest(), ec.ECDSA(hashes.SHA256()))
+            der, auth + hashlib.sha256(client_raw).digest(), ec.ECDSA(hashes.SHA256()))
 
     # ---- widening ---------------------------------------------------------------------------------------------------
     def _root_ok(self, root) -> None:
@@ -513,6 +597,14 @@ class Checker:
         if len(stored) != 1 or stored[0][2] != b["id"] or {k: v for k, v in stored[0][3].items() if k != "label"} != expected:
             _no("the stored intent differs from the signed request")
         _, label = self._authority(pre, b["author"], b["under"], "effect:" + b["op"], resource, b, record["at"])
+        prior = b.get("retry_of")
+        if prior is not None:
+            p = pre["intents"].get(prior)
+            names = [f"pending:{prior}", f"reconcile:{prior}"] + (
+                [f"unredeemed:{pre['token_of'][prior]}"] if prior in pre["token_of"] else [])
+            if (not p or (p["op"], p["resource"]) != (b["op"], resource)
+                    or any(n in pre["obligations"] and _live(pre["obligations"][n], record["at"]) for n in names)):
+                _no("a retry names an earlier, resolved intent of the same effect")
         if stored[0][3]["label"] != sorted(label):
             _no("the intent's provenance label is wrong")
         self._frozen(pre, resource)
@@ -603,6 +695,9 @@ class Checker:
         if (spec is None or b["author"] not in spec["sources"] or b["method"] != spec["method"]
                 or b["coverage"] != spec["coverage"] or not b["measured_at"] <= record["at"] <= b["measured_at"] + spec["fresh_ms"]):
             _no("an unqualified measurement")
+        prior = pre["observations"].get(f"{b['resource']}|{b['property']}|{b['author']}")
+        if prior is not None and b["measured_at"] < prior["at"]:
+            _no("an older reading replaced a newer one")
         chain, label = self._attestation(pre, record, "observe", b["resource"])
         self._certifies(chain, b["level"])
         if self.levels.index(b["level"]) < self.levels.index(spec["min_level"]):
@@ -733,9 +828,11 @@ class Checker:
                                           and inst["contract"] == self.contracts[d["id"]]
                                           and not set(inst["label"]) & set(label)):
                     _no(f"{record['kind']} passed a closed gate {d['id']}:{k}")
+            holds = "when" not in d or self._holds(pre, d["when"], {**record["body"], "resource": self._subject(record)},
+                                                    set(label), record["at"])
             for rule in d["open"]:
                 k = self._key(rule, record)
-                if k is not None:
+                if k is not None and holds:
                     may_open.add(f"{d['id']}:{k}")
                     may_close.add(f"{d['id']}:{k}")
             for rule in d["close"]:
@@ -758,6 +855,10 @@ class Checker:
                         or op[3] != {"type": prev["stage"], "key": prev["key"], "at": record["at"], "label": label,
                                      "contract": prev["contract"]}):
                     _no(f"{record['kind']} may not record {name} as closed")
+
+    def _subject(self, record):
+        b = record["body"]
+        return self._resource_of(b["op"], b["args"]) if record["kind"] == "intent" else b.get("resource")
 
     @staticmethod
     def _key(rule, record):
@@ -783,7 +884,7 @@ class Checker:
         try:
             if pre["law"]["digest"] != law_digest:
                 _no("dispatch is judged under the law in force")
-            self.use(effective, law_digest)
+            self.use(effective, law_digest, pre["law"]["client"])
             tok = pre["tokens"][token]
             cur = pre["line"].get(tok["intent"])
             if cur is None or cur["state"] != "reserved" or now > cur["at"] + DISPATCH_MS:

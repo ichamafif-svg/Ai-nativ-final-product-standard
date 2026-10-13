@@ -63,7 +63,7 @@ class Ledger:
         self.kernel = kernel or Kernel(RELEASE, CODE)
         self.state, self.entries, self.n = empty(), [], 0
         self.records = []
-        self.checker = Checker()        # every admitted entry is also checked by the independent judge
+        self.checker = Checker(self.kernel.release.floors)        # every admitted entry is also checked by the independent judge
         self.genesis(law or client_law(), at)
 
     def entry(self, kind, body, signers):

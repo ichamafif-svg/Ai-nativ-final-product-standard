@@ -10,11 +10,13 @@ import base64
 import binascii
 import hashlib
 import json
+import re
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from .canon import CanonError, canon, parse
@@ -33,14 +35,36 @@ class IdentityError(ValueError):
 
 
 def b64d(text) -> bytes:
+    """Standard base64 in its one canonical spelling: unused bits zero, exact padding (one value, one encoding)."""
     try:
-        return base64.b64decode(text, validate=True)
+        raw = base64.b64decode(text, validate=True)
     except (binascii.Error, TypeError, ValueError):
         raise IdentityError("bad base64") from None
+    if base64.b64encode(raw).decode() != text:
+        raise IdentityError("non-canonical base64")
+    return raw
 
 
 def _b64u(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    """URL-safe base64 without padding, canonical only."""
+    if not isinstance(text, str) or not re.fullmatch(r"[A-Za-z0-9_-]*", text):
+        raise IdentityError("bad base64url")
+    raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    if _b64u_enc(raw) != text:
+        raise IdentityError("non-canonical base64url")
+    return raw
+
+
+P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+
+
+def low_s_der(sig: bytes) -> bool:
+    """An ECDSA signature in its one encoding: strict DER and s in the lower half (s and n - s verify alike)."""
+    try:
+        r, s_ = decode_dss_signature(sig)
+    except ValueError:
+        return False
+    return encode_dss_signature(r, s_) == sig and 0 < s_ <= P256_N // 2
 
 
 def _b64u_enc(raw: bytes) -> str:
@@ -132,8 +156,11 @@ def _webauthn(key: dict, message: bytes, signature: dict) -> bool:
         return False
     if len(auth) < 37 or auth[:32] != hashlib.sha256(key["rp_id"].encode()).digest() or (auth[32] & 0x05) != 0x05:
         return False                                   # wrong relying party, or user not present and verified
+    sig = _b64u(signature["sig"])
+    if not low_s_der(sig):
+        return False                                   # a relay could otherwise flip s and change the head
     public = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), b64d(key["public"]))
-    public.verify(_b64u(signature["sig"]), auth + hashlib.sha256(client_json).digest(), ec.ECDSA(hashes.SHA256()))
+    public.verify(sig, auth + hashlib.sha256(client_json).digest(), ec.ECDSA(hashes.SHA256()))
     return True
 
 
