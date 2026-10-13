@@ -65,6 +65,19 @@ WantedBy=multi-user.target
 EOF
 }
 
+start_interface() {
+  unit standard-operator standard-guard "-m standard.runtime serve $ROOT/install/standard.toml 30"
+  unit standard-web standard-web "-m standard.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
+  systemctl daemon-reload
+  systemctl enable --now standard-operator standard-web
+  local ready=0
+  for _ in {1..15}; do
+    if curl -fsS http://127.0.0.1:8080/api/state >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+  done
+  [ "$ready" = 1 ] || { echo "web interface did not become ready" >&2; exit 1; }
+}
+
 install_lab() {
   case "$SRC/" in "$CODE/"*) echo "run from a separate Git checkout" >&2; exit 1 ;; esac
   local commit branch published
@@ -123,8 +136,11 @@ runner_user = "standard-runner"
 config = "$ROOT/hosting/hosting.toml"
 gate_user = "standard-gate"
 EOF
+  "$PY" tools/ceremony.py separate "$ROOT/install" --guard-user standard-guard --agent-user standard-agent
+  start_interface
   echo "LABORATORY ONLY: one host holds simulated human and witness keys; qualification must fail."
   echo "Commit: $(cat "$CODE/LAB_COMMIT")"
+  echo "Interface ready on 127.0.0.1:8080 through an SSH tunnel; grants are still pending."
   echo "Wait for FLOOR-0, then run: bash $CODE/tools/install_server.sh activate"
 }
 
@@ -133,23 +149,20 @@ activate_lab() {
   lab_path "$ROOT"
   [ -f "$CODE/$MARKER" ] && [ -f "$ROOT/$MARKER" ] || exit 1
   cd "$CODE"
-  "$PY" tools/ceremony.py activate "$ROOT/install"
+  systemctl stop standard-web standard-operator
+  if ! "$PY" tools/ceremony.py activate "$ROOT/install"; then
+    "$PY" tools/ceremony.py separate "$ROOT/install" --guard-user standard-guard --agent-user standard-agent
+    systemctl start standard-operator standard-web
+    exit 1
+  fi
   "$PY" tools/ceremony.py separate "$ROOT/install" --guard-user standard-guard --agent-user standard-agent
   printf 'standard-guard ALL=(standard-runner) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/standard-runner
   chmod 440 /etc/sudoers.d/standard-runner
 
-  unit standard-operator standard-guard "-m standard.runtime serve $ROOT/install/standard.toml 30"
   unit standard-agent standard-agent "-m standard.autonomy run $ROOT/install/standard.toml 60"
-  unit standard-web standard-web "-m standard.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
-  systemctl enable --now standard-operator
-  systemctl enable --now standard-agent standard-web
-  local ready=0
-  for _ in {1..15}; do
-    if curl -fsS http://127.0.0.1:8080/api/state >/dev/null 2>&1; then ready=1; break; fi
-    sleep 1
-  done
-  [ "$ready" = 1 ] || { echo "web interface did not become ready" >&2; exit 1; }
+  start_interface
+  systemctl enable --now standard-agent
   "$PY" tools/qualify.py "$ROOT/install/standard.toml" > "$ROOT/qualification.json" || true
   "$PY" -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1])), list)' "$ROOT/qualification.json"
   echo "LABORATORY ONLY: qualification is recorded in $ROOT/qualification.json, not claimed."
