@@ -90,13 +90,13 @@ def authorize(args) -> None:
     path = Path(args.config).resolve()
     config = load(path)
     repo = config["repositories"][args.name]
+    key = Path(args.key).read_text().strip()
+    if "\n" in key or not key.startswith(("ssh-ed25519 ", "sk-ssh-ed25519@openssh.com ", "ecdsa-sha2-")):
+        raise SystemExit("one public key, ed25519 or ecdsa")       # checked before any access is recorded
     for role in ("readers",) + (("writers",) if args.write else ()):
         if args.identity not in repo[role]:
             repo[role].append(args.identity)
     save(path, config)
-    key = Path(args.key).read_text().strip()
-    if "\n" in key or not key.startswith(("ssh-ed25519 ", "sk-ssh-ed25519@openssh.com ", "ecdsa-sha2-")):
-        raise SystemExit("one public key, ed25519 or ecdsa")
     gate = pwd.getpwnam(args.gate_user)
     ssh = Path(gate.pw_dir) / ".ssh"
     ssh.mkdir(mode=0o700, exist_ok=True)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -72,16 +73,22 @@ def _git(repo, *args, input: bytes | None = None, env=None) -> str:
 
 def commit_files(store, base: str, files: dict, message: str) -> str:
     """A direct child of base whose tree is base's plus exactly these regular files. No working tree is touched."""
-    index = Path(tempfile.mkdtemp()) / "index"
+    scratch = Path(tempfile.mkdtemp())
+    index = scratch / "index"
     env = {"GIT_INDEX_FILE": str(index), "GIT_AUTHOR_NAME": "standard-agent", "GIT_AUTHOR_EMAIL": "agent@standard",
            "GIT_COMMITTER_NAME": "standard-agent", "GIT_COMMITTER_EMAIL": "agent@standard",
            "GIT_AUTHOR_DATE": "1970-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "1970-01-01T00:00:00Z"}
-    _git(store, "read-tree", base, env=env)
-    for path, content in sorted(files.items()):
-        blob = _git(store, "hash-object", "-w", "--stdin", input=content)
-        _git(store, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env)
-    tree = _git(store, "write-tree", env=env)
-    head = _git(store, "commit-tree", tree, "-p", base, "-m", message, env=env)
+    try:
+        _git(store, "read-tree", base, env=env)
+        for path, content in sorted(files.items()):
+            blob = _git(store, "hash-object", "-w", "--stdin", input=content)
+            listed = _git(store, "ls-tree", base, "--", path).split()
+            mode = "100755" if listed[:1] == ["100755"] else "100644"   # an edited script stays executable
+            _git(store, "update-index", "--add", "--cacheinfo", f"{mode},{blob},{path}", env=env)
+        tree = _git(store, "write-tree", env=env)
+        head = _git(store, "commit-tree", tree, "-p", base, "-m", message, env=env)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     _git(store, "update-ref", f"refs/standard/proposals/{head}", head)
     return head
 

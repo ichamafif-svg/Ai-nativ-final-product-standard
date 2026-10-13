@@ -190,8 +190,7 @@ class Host:
                                                             "entries": entries}))
             if kind == "manifest":
                 return {"manifest": str(target / "commit.json")}
-            subprocess.run(["tar", "-x", "-C", str(target / "files")], input=_git(
-                self.repo, "archive", "--format=tar", arg, data=True), check=True, capture_output=True, timeout=300)
+            self._write_blobs({p: tuple(e) for p, e in entries.items()}, target / "files")
             return {"tree": str(target)}
         if kind == "evidence":
             return None if arg is None else {"bytes": self._copy(arg, work)}
@@ -203,6 +202,29 @@ class Host:
                                                              for at, d in points]}
             return out
         return arg
+
+    def _write_blobs(self, entries: dict, files: Path) -> None:
+        """Each regular blob byte for byte from the object store, never `git archive`: the measured tree's own
+        .gitattributes (export-ignore, export-subst) must not decide what its instrument sees (§7.3, M2-r2)."""
+        wanted = [(p, sha, mode) for p, (mode, kind, sha) in sorted(entries.items()) if kind == "blob" and mode != "120000"]
+        if not wanted:
+            return
+        out = subprocess.run(["git", "-C", str(self.repo), "cat-file", "--batch"],
+                             input="".join(f"{sha}\n" for _, sha, _ in wanted).encode(), capture_output=True,
+                             check=True, timeout=600).stdout
+        at = 0
+        for path, sha, mode in wanted:
+            header_end = out.index(b"\n", at)
+            got, kind, size = out[at:header_end].decode().split()
+            if got != sha or kind != "blob":
+                raise LookupError(f"object store answered {got} {kind} for {path}")
+            start = header_end + 1
+            dest = files / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(out[start:start + int(size)])
+            if mode == "100755":
+                dest.chmod(0o755)
+            at = start + int(size) + 1
 
     def _copy(self, digest: str, work: Path) -> str:
         target = work / "evidence" / digest.split(":", 1)[1]

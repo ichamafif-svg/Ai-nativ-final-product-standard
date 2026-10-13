@@ -9,8 +9,8 @@ in its own isolated runner, and compares the facts. It holds no key and signs no
 ledger, the evidence store and the repository can run it, on another machine, under another administrator.
 
 Each record ends in one of:
-    agrees       same facts (resource, property, status)
-    disagrees    different facts: the scanner signed what its programs do not compute from what it recorded
+    agrees       the ledger's signed facts are in the record, and the programs compute the record again
+    disagrees    the scanner signed a status its record does not hold, or the programs compute other facts
     programs     the record was made by other programs than these: replay with that release
     unreadable   the record or one of its inputs is missing or corrupt
 Exit code 1 when any record disagrees or is unreadable.
@@ -38,7 +38,8 @@ def facts(output: dict) -> set:
     return {tuple(f[:3]) for f in output.get("facts", [])}
 
 
-def replay(host: Host, record: str) -> dict:
+def replay(host: Host, record: str, signed=frozenset()) -> dict:
+    """signed: the (resource, property, status) the ledger admitted with this record as artifact."""
     try:
         rec = json.loads(host.evidence.get(record))
         if rec.get("bt") == "observe":                      # D38: a boundary transaction names its run record
@@ -54,23 +55,31 @@ def replay(host: Host, record: str) -> dict:
     if "error" in again:
         return {"record": record, "job": rec["job"], "result": "unreadable", "why": again["error"][:300]}
     before, after = facts(rec["output"]), facts(again)
-    if before == after:
-        return {"record": record, "job": rec["job"], "result": "agrees", "facts": len(before)}
-    return {"record": record, "job": rec["job"], "result": "disagrees",
-            "signed": sorted(before - after), "computed": sorted(after - before)}
+    unrecorded = set(signed) - before
+    if before == after and not unrecorded:
+        return {"record": record, "job": rec["job"], "result": "agrees", "facts": len(before),
+                "ledger": len(set(signed))}
+    return {"record": record, "job": rec["job"], "result": "disagrees", "ledger_not_in_record": sorted(unrecorded),
+            "recorded": sorted(before - after), "computed": sorted(after - before)}
 
 
-def records(config: Path, limit: int) -> list:
-    """The run records the latest measurements in the ledger name, newest first."""
+def ledger(config: Path, limit: int) -> dict:
+    """{artifact: {(resource, property, status)}}: what the latest measurements in the ledger signed, newest first."""
     c, base = tomllib.loads(config.read_text()), config.parent
     resolve = lambda p: (base / p).resolve()
     journal = Journal(resolve(c["ledger"]["journal"]), Kernel(RELEASE, code_digest()),
                       PinStore(resolve(c["ledger"]["pins"])), c["ledger"]["genesis"])
-    seen = []
+    out = {}
     for o in sorted(journal.snapshot()["observations"].values(), key=lambda o: -o["at"]):
-        if o.get("artifact") and o["artifact"] not in seen and not o["artifact"].endswith("0" * 64):
-            seen.append(o["artifact"])
-    return seen[:limit]
+        artifact = o.get("artifact")
+        if artifact and not artifact.endswith("0" * 64) and (artifact in out or len(out) < limit):
+            out.setdefault(artifact, set()).add((o["resource"], o["property"], o["status"]))
+    return out
+
+
+def records(config: Path, limit: int) -> list:
+    """The run records the latest measurements in the ledger name, newest first."""
+    return list(ledger(config, limit))
 
 
 def host_for(config: Path) -> Host:
@@ -92,7 +101,8 @@ def main(argv=None) -> int:
     a = parser.parse_args(argv)
     config = Path(a.config).resolve()
     host = host_for(config)
-    out = [replay(host, r) for r in (a.records or records(config, a.limit))]
+    signed = ledger(config, a.limit if not a.records else 10 ** 6)
+    out = [replay(host, r, signed.get(r, frozenset())) for r in (a.records or list(signed)[:a.limit])]
     print(json.dumps(out, indent=2))
     return 1 if any(r["result"] in ("disagrees", "unreadable") for r in out) else 0
 

@@ -93,6 +93,30 @@ class DirTree(Tree):
         return (self.files / path).read_bytes()
 
 
+def write_blobs(repo, entries: dict, files: Path) -> None:
+    """Every regular blob of a tree, byte for byte from the object store. `git archive` would apply the measured
+    tree's own .gitattributes (export-ignore, export-subst): the subject would decide what its instrument sees."""
+    wanted = [(p, sha, mode) for p, (mode, kind, sha) in sorted(entries.items()) if kind == "blob" and mode != "120000"]
+    if not wanted:
+        return
+    out = subprocess.run(["git", "-C", str(repo), "cat-file", "--batch"], input="".join(f"{sha}\n" for _, sha, _ in wanted).encode(),
+                         capture_output=True, check=True, timeout=600).stdout
+    at = 0
+    for path, sha, mode in wanted:
+        header_end = out.index(b"\n", at)
+        got, kind, size = out[at:header_end].decode().split()
+        if got != sha or kind != "blob":
+            raise RuntimeError(f"object store answered {got} {kind} for {path}")
+        start = header_end + 1
+        data = out[start:start + int(size)]
+        at = start + int(size) + 1
+        dest = files / path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        if mode == "100755":
+            dest.chmod(0o755)
+
+
 def export(repo, commit: str, target) -> DirTree:
     """A commit of a repository as the host exports it for a program (U and tests use the same shape)."""
     target = Path(target)
@@ -102,7 +126,5 @@ def export(repo, commit: str, target) -> DirTree:
             "message": git(repo, "log", "-1", "--format=%B", tree.commit),
             "entries": {p: list(e) for p, e in tree.entries.items()}}
     (target / "commit.json").write_text(json.dumps(meta))
-    archive = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", tree.commit], capture_output=True,
-                             check=True, timeout=300).stdout
-    subprocess.run(["tar", "-x", "-C", str(target / "files")], input=archive, check=True, capture_output=True)
+    write_blobs(repo, tree.entries, target / "files")
     return DirTree(target)

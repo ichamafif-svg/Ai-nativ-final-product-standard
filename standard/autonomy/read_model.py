@@ -274,8 +274,8 @@ class ReadModel:
                  "operator_configuration")
         for resource, entity in self.view.get("entities", {}).items():
             node(f"entity:{resource}", "entity", entity, "admitted_journal")
-            if entity.get("type") in self.law.get("entities", {}):
-                edge(f"entity:{resource}", "instantiates", f"law:entities/{entity['type']}",
+            if entity.get("type") in self.law.get("resources", {}):
+                edge(f"entity:{resource}", "instantiates", f"law:resources/{entity['type']}",
                      "admitted_journal", "recorded")
         for resource, properties in self.view.get("transitions", {}).items():
             node(f"transition:{resource}", "transition_facts", properties, "admitted_journal")

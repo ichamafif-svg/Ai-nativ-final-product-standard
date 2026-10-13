@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -36,7 +35,7 @@ from standard.surface.read_views import git
 
 STATIC = Path(__file__).with_name("static")
 SHA = re.compile(r"[0-9a-f]{40}")
-HOLDERS = {"reviewer": "h3", "officer": "h2", "engineer": "h1", "product": "h1"}           # the demo ceremony's grants to people (tools/ceremony.py)
+PEOPLE = ("reviewer", "officer", "engineer", "product", "steward")   # grants people sign under; holders come from the ledger
 MAX_BODY = 1 << 20
 
 
@@ -70,8 +69,7 @@ class Installation:
         agent = resolve(c.get("agent", {}).get("store", "agent/store")).parent
         self.findings, self.memory, self.proposals = base / "findings.json", agent / "memory.json", agent / "proposals.json"
         self.work_db = agent / "work.db"
-        self.grants = {name: {"id": gid, "holder": HOLDERS.get(name)} for name, gid in c["grants"].items()
-                       if name in HOLDERS}
+        self.grant_ids = {name: gid for name, gid in c["grants"].items() if name in PEOPLE}
         self.product = self.repo.name.removesuffix(".git")
         run = c.get("run", {})
         from .telemetry import Telemetry
@@ -86,6 +84,11 @@ class Installation:
         self.deploy_root = resolve(c["deploy"]["root"]) if c.get("deploy") else None
         hosted = c.get("hosting", {}).get("config")
         self.products = sorted(_toml(hosted).get("repositories", {})) if hosted else [self.product]
+
+    def people(self, view: dict | None = None) -> dict:
+        """The grants people sign under, with the holder the admitted journal names (never a hard-coded identity)."""
+        grants = (view or self.client.view()).get("grants", {})
+        return {name: {"id": gid, "holder": grants.get(gid, {}).get("holder")} for name, gid in self.grant_ids.items()}
 
     # ---- the product, whatever it is: requirements by domain and their state ---------------------------------
     def requirements(self, view: dict, findings: dict, model: ReadModel | None = None) -> list:
@@ -204,7 +207,7 @@ class Installation:
             "law": {"targets": [{k: t.get(k) for k in ("id", "resource", "property", "expect", "coverage", "repair",
                                                         "human", "due_ms")} for t in law["targets"]],
                     "conditions": law["conditions"], "ops": sorted(law["ops"])},
-            "signing": {"domain": view["prefix"]["genesis"], "as_of": health["as_of"], "grants": self.grants},
+            "signing": {"domain": view["prefix"]["genesis"], "as_of": health["as_of"], "grants": self.people(view)},
         }
 
     def autonomy(self, requirements: list) -> dict:
@@ -389,7 +392,7 @@ class Installation:
                 "slos": self.flagged(findings, policy),
                 "probes": findings.get("run:probes", {}).get("details", []), "configured": self.deploy_root is not None,
                 "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
-                            "grant": self.grants.get("engineer")}}
+                            "grant": self.people(view).get("engineer")}}
 
     def live(self, findings: dict, view: dict | None = None) -> dict:
         """What production runs, as the scanner signed it, the switches the guard made (D30), and the decisions an
@@ -414,7 +417,7 @@ class Installation:
                                 if self.canary_state(history) else None),
                             "rollback": offered("run:service:all/", "previous"),
                             "restart": f"run:process:all/{current}/{len(restarts) + 1}" if current else None},
-                "grant": self.grants.get("engineer")}
+                "grant": self.people(view).get("engineer")}
 
     def acts(self, policy) -> str:
         """What Standard does alone in production, in the engineers' current settings (D31)."""
@@ -432,9 +435,11 @@ class Installation:
         """The release on a share of traffic, if any: which, since when, on what share."""
         if not self.deploy_root:
             return None
-        try:
-            release = Path(os.readlink(self.deploy_root / "canary")).name
+        try:                                                # the register is a small file, not a link (bt/register.py)
+            release = (self.deploy_root / "canary").read_text().strip()
         except OSError:
+            return None
+        if not SHA.fullmatch(release):
             return None
         start = next((h for h in reversed(history) if h.get("op") == "canary" and h.get("to") == release), {})
         return {"release": release, "since": start.get("at"), "percent": start.get("percent")}
@@ -514,8 +519,8 @@ class Installation:
         return {"alerts": out, "open": len(loud), "untaken": sum(1 for a in loud if not a["taken"]),
                 "unattended": sum(1 for a in loud if a["unattended"]), "silenced": len(live) - len(loud),
                 "ack_ms": self.ACK_MS, "signing": {"domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"],
-                                                   "grant": self.grants.get("reviewer"),
-                                                   "engineer": self.grants.get("engineer")}}
+                                                   "grant": self.people(view).get("reviewer"),
+                                                   "engineer": self.people(view).get("engineer")}}
 
     def dossier(self, head: str) -> dict:
         if not SHA.fullmatch(head):

@@ -132,7 +132,8 @@ def qualify(config_path) -> list:
                      "that the kernel's namespaces and sudo are themselves sound"))
     try:                                                    # D37: the signed measures replay from their records
         from tools import replay
-        results = [replay.replay(replay.host_for(path), r) for r in replay.records(path, 5)]
+        signed = replay.ledger(path, 5)
+        results = [replay.replay(replay.host_for(path), r, facts) for r, facts in signed.items()]
         bad = [r for r in results if r["result"] != "agrees"]
         observed = bad or f"{len(results)} latest records agree" if results else "no measurement recorded yet"
     except Exception as exc:

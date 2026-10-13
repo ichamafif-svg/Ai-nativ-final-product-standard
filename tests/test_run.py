@@ -454,12 +454,17 @@ class Production(unittest.TestCase):
             # D37: every signed measure is a pure function of its run record; anyone can run it again.
             from tools import replay
             config = install / "standard.toml"
-            recorded = replay.records(config, 200)
+            signed = replay.ledger(config, 200)
+            recorded = list(signed)
             jobs = {}
             for r in recorded:
-                result = replay.replay(replay.host_for(config), r)
+                result = replay.replay(replay.host_for(config), r, signed[r])
                 self.assertEqual(result["result"], "agrees", result)
+                self.assertGreater(result["ledger"], 0)
                 jobs[result["job"]] = jobs.get(result["job"], 0) + 1
+            lying = replay.replay(replay.host_for(config), recorded[0],     # review, medium 13: the ledger itself
+                                  {*signed[recorded[0]], ("run:service:all", "slo", "forged")})
+            self.assertEqual(lying["ledger_not_in_record"], [("run:service:all", "slo", "forged")])
             self.assertIn("production", jobs)
             host = replay.host_for(config)                                    # a record whose answer was forged
             bt = json.loads(host.evidence.get(next(r for r in recorded if b'"production"' in host.evidence.get(r))))

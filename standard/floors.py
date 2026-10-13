@@ -182,6 +182,7 @@ FLOORS = {
         "remediate-autonomous": {"all": [{"observed": ["tests", "green", "real"]},
                                          {"observed": ["reproduced", "yes", "real"]}]},
         "remediate-reviewed": {"all": [{"observed": ["tests", "green", "real"]},
+                                       {"observed": ["regressions", "none", "real"]},
                                        {"observed": ["review", "approved", "real", "human"]}]},
         # A client's work never lands on its author's word: main's own tests, no new gap on any floor target, and a
         # signed human review, always.

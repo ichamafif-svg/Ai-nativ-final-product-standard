@@ -169,6 +169,7 @@ def remediation(inp: dict) -> list:
         return []
     _, area, item = targets[tid]["resource"].split(":", 2)
     facts["tests"] = suite.tests_report(base, head, install=inp.get("install", False))
+    facts["regressions"] = _regressions(base, head, inp, data)       # a reviewed repair opens no other gap
     return [[f"repo:{area}:{item}/{base.commit}/{head.commit}", p, s, d] for p, (s, d) in facts.items()]
 
 

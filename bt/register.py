@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import re
 import subprocess
 import time
@@ -55,24 +56,49 @@ class Registers:
     def read(self) -> dict:
         return {"current": self.current(), "canary": self.canary(), "history": self.history()}
 
+    def _sync_dir(self) -> None:
+        fd = os.open(self.root, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
     def _set(self, name: str, value: str | None, key: str) -> None:
         tmp = self.root / f".{name}-{key}"
-        tmp.write_text(f"{value or ''}\n")
+        with open(tmp, "w") as f:
+            f.write(f"{value or ''}\n")
+            f.flush()
+            os.fsync(f.fileno())
         tmp.chmod(0o644)
         tmp.replace(self.root / name)                       # atomic
+        self._sync_dir()                                    # durable before the move is reported
+
+    def _shows(self, writes: dict) -> bool:
+        return all(self.get(n) == (v or None) for n, v in writes.items())
 
     def _move(self, op: str, frm: str, to: str, key: str, writes: dict, expect: dict, **extra) -> str:
+        """History first and durable, then the registers, durable: a key absent from the history never moved, and a
+        key in it either shows in the registers or is completed here, under the same lock, if nothing moved since."""
         self.root.mkdir(parents=True, exist_ok=True)
         self.root.chmod(0o755)
         with open(self.root / ".lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if self.moved(key):
-                return "ok"                                 # this very move, already made (a retry after an unknown)
+                if self._shows(writes):
+                    return "ok"                             # this very move, already made
+                if any(self.get(n) != v for n, v in expect.items()):
+                    return "unknown"                        # recorded, interrupted, and production moved since
+                for name, value in writes.items():          # recorded then interrupted: finish exactly this move
+                    self._set(name, value, key)
+                return "ok"
             if any(self.get(n) != v for n, v in expect.items()):
                 return "failed"                             # the compare-and-swap refused: production moved
-            with open(self.log, "a") as f:                  # the history first: a key absent there never moved
+            with open(self.log, "a") as f:
                 f.write(json.dumps({"at": self.clock(), "op": op, "from": frm, "to": to, "key": key, **extra}) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
             self.log.chmod(0o644)
+            self._sync_dir()
             for name, value in writes.items():
                 self._set(name, value, key)
         return "ok"

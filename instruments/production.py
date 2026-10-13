@@ -313,7 +313,6 @@ def release_facts(live: str | None, main: str, history: list, good: set, now_ms:
 
 
 
-FAILING, FAST = 0.05, 14.4      # what breaks run:service:all slo (the target; rights are the law's bounds)
 PREMISES = ("candidate", "previous", "proven", "live", "running", "good")
 START_GRACE_S = 90
 

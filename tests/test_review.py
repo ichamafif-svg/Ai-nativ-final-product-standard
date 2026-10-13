@@ -56,6 +56,7 @@ class HumanReview(unittest.TestCase):
         self.base, self.head = "a" * 40, "b" * 40
         self.res = f"repo:code:secrets/{self.base}/{self.head}"
         L.measure("scanner", self.scanner, self.res, "tests", "green")
+        L.measure("scanner", self.scanner, self.res, "regressions", "none")
 
     def intent(self):
         return dict(under=self.agent, op="remediate",
@@ -194,6 +195,141 @@ class MeasurementOrder(unittest.TestCase):
         L.submit("measurement", "scanner", at=t + 10, status="red", measured_at=t + 10, **fields)
         self.assertEqual(L.refused("measurement", "scanner", at=t + 11, status="green", measured_at=t, **fields),
                          "PROV.STALE")
+
+
+class DurableRegisters(unittest.TestCase):
+    """Review, medium 11: history and registers were not durable, and a recorded key read as 'ok' without its move."""
+
+    def registers(self):
+        import json
+        import tempfile
+        from bt.register import Registers
+        root = Path(tempfile.mkdtemp())
+        r = Registers(root / "repo", root / "run")
+        (root / "run").mkdir()
+        (root / "run" / "current").write_text("a" * 40 + "\n")
+        r._crash = lambda key, to: (root / "run" / "history.jsonl").write_text(
+            json.dumps({"at": 1, "op": "deploy", "from": "a" * 40, "to": to, "key": key}) + "\n")
+        return r
+
+    def test_a_recorded_but_interrupted_move_is_finished_once(self):
+        r = self.registers()
+        r._crash("k1", "b" * 40)                          # crash: history written, register not
+        self.assertEqual(r._move("deploy", "a" * 40, "b" * 40, "k1", {"current": "b" * 40}, {"current": "a" * 40}), "ok")
+        self.assertEqual(r.current(), "b" * 40)
+
+    def test_a_recorded_move_never_overrides_a_later_one(self):
+        r = self.registers()
+        r._crash("k1", "b" * 40)
+        (r.root / "current").write_text("c" * 40 + "\n")   # production moved since
+        self.assertEqual(r._move("deploy", "a" * 40, "b" * 40, "k1", {"current": "b" * 40}, {"current": "a" * 40}),
+                         "unknown")
+        self.assertEqual(r.current(), "c" * 40)
+
+
+class HealthFold(unittest.TestCase):
+    """Review, medium 12: the gateway thread and the operator loop folded the same state concurrently."""
+
+    def test_concurrent_health_reads_agree(self):
+        import threading
+        from bt.service import TrustedService
+
+        class Journal:
+            def __init__(self, L):
+                self.kernel, self.L = L.kernel, L
+
+            def entries(self):
+                return list(self.L.entries)
+        L = Ledger()
+        for _ in range(40):
+            L.checkpoint()
+        service = TrustedService.__new__(TrustedService)
+        from kernel import Accountability
+        service.journal, service.accountability = Journal(L), Accountability(L.kernel)
+        service._fold_lock = threading.Lock()
+        results, errors = [], []
+
+        def read():
+            try:
+                results.append(service.health()["size"])
+            except Exception as exc:                        # noqa: BLE001
+                errors.append(exc)
+        threads = [threading.Thread(target=read) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(set(results), {L.state["size"]})
+
+
+def repository(files: dict, links=()):
+    import subprocess
+    import tempfile
+    root = Path(tempfile.mkdtemp())
+    run = lambda *a: subprocess.run(["git", "-C", str(root), *a], check=True, capture_output=True)
+    run("init", "-q", "-b", "main")
+    for path, data in files.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_bytes(data)
+    for link, target in links:
+        (root / link).symlink_to(target)
+    run("add", "-A")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c")
+    return root
+
+
+class Instruments(unittest.TestCase):
+    """Review, medium 10 and lows: what the subject controls, what a base hides, what blocks forever."""
+
+    def export(self, root):
+        import tempfile
+        from instruments.tree import export
+        return export(root, "main", Path(tempfile.mkdtemp()) / "t")
+
+    def test_gitattributes_cannot_hide_a_file_from_the_instruments(self):
+        from instruments import probes
+        root = repository({".gitattributes": b"leak.py export-ignore\n",
+                           "leak.py": b'token = "ghp_' + b"a" * 36 + b'"\n'})
+        self.assertTrue(probes.verdict("none", probes.secrets(self.export(root))).startswith("found:"))
+
+    def test_a_symbolic_link_is_declared_never_a_permanent_gap(self):
+        from instruments import probes
+        root = repository({"app.py": b"x = 1\n"}, links=[("alias.py", "app.py")])
+        m = probes.secrets(self.export(root))
+        self.assertEqual(probes.verdict("none", m), "none")
+        self.assertIn("alias.py: symbolic link, excluded", m.details)
+
+    def test_an_empty_exact_lock_is_measured(self):
+        from instruments import probes
+        from instruments.data import EMPTY
+        tree = self.export(repository({"requirements.txt": b"# nothing\n"}))
+        self.assertEqual(probes.verdict("current", probes.sbom(tree)), "current")
+        self.assertEqual(probes.verdict("none", probes.vulns(tree, {"data": EMPTY})), "none")
+
+    def test_swapping_one_finding_for_another_is_a_regression(self):
+        from instruments import probes
+        key = lambda c: b'token = "ghp_' + bytes([c]) * 36 + b'"\n'
+        base = self.export(repository({"a.py": key(97), "b.py": b"x = 1\n"}))
+        head = self.export(repository({"a.py": b"x = 1\n", "b.py": key(98)}))
+        status, why = probes.regressions(base, head, {"secrets": {"expect": "none"}}, {})
+        self.assertEqual(status, "found:1", why)
+
+    def test_an_uncovered_base_does_not_hide_a_new_finding(self):
+        from instruments import probes
+        base = self.export(repository({"a.py": b"x = 1\n", "big.bin": b"0" * (probes.MAX_FILE + 1)}))
+        head = self.export(repository({"a.py": b'token = "ghp_' + b"a" * 36 + b'"\n',
+                                       "big.bin": b"0" * (probes.MAX_FILE + 1)}))
+        self.assertTrue(probes.verdict("none", probes.secrets(base)).startswith("uncovered"))
+        status, why = probes.regressions(base, head, {"secrets": {"expect": "none"}}, {})
+        self.assertEqual(status, "found:1", why)
+
+    def test_a_moved_line_is_not_a_new_finding(self):
+        from instruments import probes
+        key = b'token = "ghp_' + b"a" * 36 + b'"\n'
+        base = self.export(repository({"a.py": key}))
+        head = self.export(repository({"a.py": b"# moved\n" + key}))
+        self.assertEqual(probes.regressions(base, head, {"secrets": {"expect": "none"}}, {})[0], "none")
 
 
 if __name__ == "__main__":

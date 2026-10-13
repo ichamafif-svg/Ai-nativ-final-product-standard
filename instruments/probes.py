@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,14 @@ WORKFLOW = re.compile(r"\.github/workflows/[^/]+\.ya?ml|(.*/)?action\.ya?ml")
 
 
 # ---- probes: snapshot -> Measure ------------------------------------------------------------------------------------
+NO_DEPENDENCY = "<no dependency>"
+
+
+def deps_universe(pins: dict) -> frozenset:
+    """An empty, exact lock is a measured fact (nothing to audit), not an empty universe."""
+    return frozenset(pins) or frozenset({NO_DEPENDENCY})
+
+
 def lock(tree) -> dict:
     present = [m for m in OTHER_MANIFESTS if m in tree.paths()]
     if "pyproject.toml" in tree.paths() and re.search(rb"(?m)^\s*(dependencies|requires)\s*=", tree.read("pyproject.toml")):
@@ -45,9 +54,16 @@ def lock(tree) -> dict:
 
 
 def secrets(tree) -> Measure:
-    files, covered, hits, where = tree.paths(), set(), [], []
+    """Every tracked regular file is in the universe; a symbolic link is not content and is declared as excluded
+    (its target is another tracked path or outside the repository); an unreadable file is uncovered, alone."""
+    links = sorted(p for p in tree.paths() if tree.entries[p][0] == "120000")
+    files, covered, hits, where = tree.paths() - set(links), set(), [], [f"{p}: symbolic link, excluded" for p in links]
     for p in sorted(files):
-        data = tree.read(p)
+        try:
+            data = tree.read(p)
+        except OSError:
+            where.append(f"{p}: unreadable, not covered")
+            continue
         if len(data) < MAX_FILE:
             covered.add(p)
             for rule, rx in enumerate(SECRETS):
@@ -62,7 +78,9 @@ def sbom(tree) -> Measure:
     listed = set()
     if "sbom.json" in tree.paths():
         listed = {(c["name"], c["version"]) for c in json.loads(tree.read("sbom.json"))["components"]}
-    return Measure(frozenset(pins), frozenset(pins), tuple(n for n, v in sorted(pins.items()) if (n, v) not in listed))
+    stale = sorted(f"{n}=={v} listed, not pinned" for n, v in listed - set(pins.items()))
+    return Measure(deps_universe(pins), deps_universe(pins),
+                   tuple(n for n, v in sorted(pins.items()) if (n, v) not in listed) + tuple(stale))
 
 
 def _uses(tree) -> tuple[list, list]:
@@ -82,8 +100,8 @@ def actions(tree, ctx) -> Measure:
 def vulns(tree, ctx) -> Measure:
     """Covered: every pin the pinned advisory snapshot audited. Findings: their advisories."""
     pins, adv = lock(tree), ctx["data"].advisories
-    covered = {n for n, v in pins.items() if f"{n}=={v}" in adv}
-    return Measure(frozenset(pins), frozenset(covered),
+    covered = {n for n, v in pins.items() if f"{n}=={v}" in adv} | ({NO_DEPENDENCY} if not pins else set())
+    return Measure(deps_universe(pins), frozenset(covered),
                    tuple(a["id"] for n, v in sorted(pins.items()) for a in adv.get(f"{n}=={v}", [])))
 
 
@@ -94,7 +112,7 @@ def licenses(tree, ctx) -> Measure:
     """The license expression of each exact pin, interpreted by a pinned policy, never by substring (R14)."""
     pins, pkgs = lock(tree), ctx["data"].packages
     covered = {n for n in pins if n in pkgs}
-    return Measure(frozenset(pins), frozenset(covered),
+    return Measure(deps_universe(pins), frozenset(covered | ({NO_DEPENDENCY} if not pins else set())),
                    tuple(n for n in sorted(covered) if pkgs[n].get("license") not in PERMISSIVE))
 
 
@@ -102,19 +120,21 @@ def deps_age(tree, ctx) -> Measure:
     pins, pkgs = lock(tree), ctx["data"].packages
     major = lambda v: int(v.split(".")[0]) if v.split(".")[0].isdigit() else None
     covered = {n for n in pins if n in pkgs and major(pins[n]) is not None and major(pkgs[n]["latest"]) is not None}
-    return Measure(frozenset(pins), frozenset(covered),
+    covered |= {NO_DEPENDENCY} if not pins else set()
+    return Measure(deps_universe(pins), frozenset(covered),
                    tuple(n for n in sorted(covered) if major(pkgs[n]["latest"]) > major(pins[n])))
 
 
 def sast(tree, ctx) -> Measure:
     """bandit on the snapshot's Python files, `# nosec` ignored: the measured code does not configure its instrument."""
     files = sorted(p for p in tree.paths() if p.endswith(".py"))
-    work = Path(tempfile.mkdtemp())
-    for p in files:
-        (work / p).parent.mkdir(parents=True, exist_ok=True)
-        (work / p).write_bytes(tree.read(p))
-    r = subprocess.run([sys.executable, "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", *files],
-                       cwd=work, capture_output=True, timeout=900)
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        for p in files:
+            (work / p).parent.mkdir(parents=True, exist_ok=True)
+            (work / p).write_bytes(tree.read(p))
+        r = subprocess.run([sys.executable, "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", "--", *files],
+                           cwd=work, capture_output=True, timeout=900)
     data = json.loads(r.stdout)
     covered = {k.removeprefix("./") for k in data["metrics"] if k != "_totals"} - {e["filename"] for e in data["errors"]}
     high = [x for x in data["results"] if x["issue_severity"] == "HIGH"]
@@ -158,6 +178,7 @@ COUNT = re.compile(r"found:(\d+)")
 
 
 def _worse(expect: str, before: str, after: str) -> bool:
+    """Verdict-level comparison, kept for the agent's own precheck (U); the instrument compares measures."""
     if after == expect or after == before:
         return False
     if before == expect or after.startswith("uncovered"):
@@ -166,9 +187,34 @@ def _worse(expect: str, before: str, after: str) -> bool:
     return bool(b and a and int(a[1]) > int(b[1]))
 
 
+LINE_NUMBER = re.compile(r"^([^:\s]+):\d+:")
+
+
+def _signature(m) -> Counter:
+    """What a measure found, independent of where lines moved: located details without their line, else findings."""
+    if m.details:
+        return Counter(LINE_NUMBER.sub(r"\1:", str(d)) for d in m.details if not str(d).endswith(("excluded",)))
+    return Counter(map(str, m.findings))
+
+
+def worse(before, after) -> list:
+    """Why a head is worse than its base on one target, comparing measures, not verdicts: an error where there was
+    none, an element left uncovered that was covered, or a finding the base did not have. Empty: not worse."""
+    if isinstance(after, BaseException):
+        same = isinstance(before, BaseException) and type(before) is type(after)
+        return [] if same else [f"{type(after).__name__}: {str(after)[:200]}"]
+    if isinstance(before, BaseException):
+        before = Measure(after.universe, frozenset())      # nothing was known on the base: every finding is new
+    lost = sorted((after.universe - after.covered) - (before.universe - before.covered))
+    new = sorted((_signature(after) - _signature(before)).elements())
+    return [f"uncovered {x}" for x in lost[:5]] + [f"new {x}" for x in new[:10]]
+
+
 def regressions(b, h, targets: dict, ctx: dict, follow_ups=frozenset()) -> tuple[str, list]:
-    """`none` only if no floor target measured on tree h is worse than on tree b. A target a recipe closes on the next
-    pass (`follow_ups`: a new pin makes the SBOM stale) is not a regression of the contribution."""
+    """`none` only if no floor target measured on tree h is worse than on tree b: no new error, no newly uncovered
+    element, no new finding (a moved line is not new). A base that was uncovered or failing does not hide what the
+    head adds. A target a recipe closes on the next pass (`follow_ups`: a new pin makes the SBOM stale) is not a
+    regression of the contribution."""
     try:
         found = []
         for tid in LOCAL_PROBES:
@@ -180,13 +226,9 @@ def regressions(b, h, targets: dict, ctx: dict, follow_ups=frozenset()) -> tuple
                     measures.append(PROBES[tid](tree, ctx))
                 except Exception as exc:
                     measures.append(exc)
-            before, after = (verdict(targets[tid]["expect"], m) for m in measures)
-            if _worse(targets[tid]["expect"], before, after):
-                m = measures[1]
-                where = [] if isinstance(m, BaseException) else list(m.details or map(str, m.findings))[:10]
-                found.append(f"{tid}: {before} -> {after} {where}")
+            why = worse(*measures)
+            if why:
+                found.append(f"{tid}: {'; '.join(why)}")
         return verdict("none", Measure(frozenset({"floors"}), frozenset({"floors"}), tuple(found))), found
     except Exception as exc:                               # an exception is a measure: nothing was covered
         return verdict("none", exc), [f"{type(exc).__name__}: {str(exc)[:300]}"]
-
-

@@ -141,7 +141,8 @@ class Construction(unittest.TestCase):
             self.assertEqual(entity("r-mul")["state"], "delivered")
             from tools import replay                                                       # D37: the facts replay, isolated
             config = install / "standard.toml"
-            results = [replay.replay(replay.host_for(config), r) for r in replay.records(config, 200)]
+            signed = replay.ledger(config, 200)
+            results = [replay.replay(replay.host_for(config), r, facts) for r, facts in signed.items()]
             self.assertEqual({r["result"] for r in results}, {"agrees"}, results)
             self.assertTrue({"feature", "request"} <= {r["job"] for r in results})
         finally:

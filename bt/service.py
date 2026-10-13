@@ -6,6 +6,8 @@ qualifies exactly the T contracts it depends on; a missing contract stops that o
 """
 from __future__ import annotations
 
+import threading
+
 from kernel import Accountability, apply, digest, empty
 from kernel.accountability import empty as accountability_empty
 from kernel.floor0 import line_state
@@ -29,6 +31,7 @@ class TrustedService:
         self.reconciliation, self.delivery = reconciliation, delivery
         self._last_now = -1
         self.accountability = Accountability(journal.kernel)
+        self._fold_lock = threading.Lock()                # the gateway thread and the operator loop both read health
 
     # ---- trust ------------------------------------------------------------------------------------------------------
     def _require(self, need) -> int | None:
@@ -85,7 +88,8 @@ class TrustedService:
         law = self.journal.kernel.law_of(state)
         transitions = {}                                    # facts on exact transitions: tests, review, regressions…
         for key, ob in state["observations"].items():
-            resource, prop, _ = key.rsplit("|", 2)
+            resource, rest = key.split("|", 1)                # a resource and an author never hold "|"
+            prop = rest.rsplit("|", 1)[0]
             if "/" in resource:
                 transitions.setdefault(resource, {})[prop] = ob["status"]
         return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
@@ -121,14 +125,22 @@ class TrustedService:
     def health(self, *, required_at=None) -> dict:
         """The accountability fold, kept across calls: only entries not yet folded are judged again. If the journal
         no longer extends what was folded, the fold restarts from genesis."""
+        with self._fold_lock:
+            return self._health(required_at)
+
+    def _health(self, required_at) -> dict:
         kernel, entries = self.journal.kernel, self.journal.entries()
         a, ks, n = getattr(self, "_fold", (None, None, 0))
         if a is None or n > len(entries) or (n and digest(entries[n - 1]) != ks["head"]):
             a, ks, n = accountability_empty(), empty(), 0
-        for entry in entries[n:]:
-            record, delta = kernel.decide(ks, entry)
-            apply(ks, delta)
-            self.accountability.feed(a, ks, record)
+        try:
+            for entry in entries[n:]:
+                record, delta = kernel.decide(ks, entry)
+                apply(ks, delta)
+                self.accountability.feed(a, ks, record)
+        except BaseException:
+            self._fold = (None, None, 0)                    # a half-applied fold is never reused
+            raise
         self._fold = (a, ks, len(entries))
         verdict = self.accountability.health(a, ks, required_at=required_at)
         return {**verdict, "head": ks["head"], "size": ks["size"]}

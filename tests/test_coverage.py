@@ -45,7 +45,7 @@ class Vulnerabilities(Route):
         self.land(rounds=2)
         self.assertEqual(sh(self.repo, "git", "show", "main:requirements.txt"), "packaging==24.2")
         self.assertEqual(self.status("repo:deps:vulns", "high"), "none")
-        self.assertEqual(self.status("repo:supply:sbom", "state"), "found:1")      # the next gap is visible
+        self.assertEqual(self.status("repo:supply:sbom", "state"), "found:2")      # the next gap: new pin missing, old one stale
 
     def test_a_stale_snapshot_is_uncovered_never_green(self):
         self.t += 2 * 86_400_000
