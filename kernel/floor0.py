@@ -8,23 +8,26 @@ from __future__ import annotations
 from .canon import digest
 
 FLOOR0 = (
-    ("F0-1", "No single actor: human quorum k >= MIN_HUMANS, at least k+2 humans, and enough witnesses. "
-             "Recovery remains conditional on their response."),
+    ("F0-1", "The agent holds no authority of its own. Every widening is stated by a human of the root and signed by "
+             "its threshold k >= MIN_HUMANS of humans; time is stated by the law's witness quorum. One human with one "
+             "agent is the minimum; a team raises k, the witness quorum and the delays in its law."),
     ("F0-2", "For every critical property, name its controls, common dependencies and covered failures. A safety "
              "disagreement blocks the effect; an integrity mismatch blocks the affected boundary. A local stop is not "
              "an unsigned ledger mutation."),
-    ("F0-3", "Code and floors are genesis-bound. The client law changes only by quorum, witnessed delay and activation, "
-             "never weakening the release floors; capability chains only narrow. A law constrains only kinds that act, "
-             "attest or attenuate: never a restriction, a witness or the widening protocol."),
+    ("F0-3", "Code and floors are genesis-bound. The client law changes only by widening, never weakening the release "
+             "floors; capability chains only narrow. A law constrains only kinds that act, attest or attenuate: never a "
+             "restriction, a witness or the widening protocol."),
     ("F0-4", "Every canonical state transition is caused by exactly one signed entry. Admission depends only on the "
              "admitted prefix and the pinned law and code."),
-    ("F0-5", "Every kind has one polarity. Genesis establishes the initial externally pinned root by quorum. Later "
-             "widening needs a human quorum, an attested delay, then explicit quorum activation. Other polarities only "
-             "restrict, attenuate, act under capability, attest or witness."),
+    ("F0-5", "Every kind has one polarity. Genesis establishes the initial externally pinned root. A widening takes "
+             "effect with its own entry, unless the law declares a delay for its kind: then it waits that witnessed "
+             "delay and an explicit activation, and may be vetoed meanwhile. Other polarities only restrict, "
+             "attenuate, act under capability, attest or witness."),
     ("F0-6", "Time only expires or lapses authority; it never grants it. Only witness quorum advances the attested "
              "anchor; ordinary entry timestamps are monotone and bounded ahead of that anchor. A restriction may share "
              "the last instant, so no timestamp can starve it."),
-    ("F0-7", "Lifting a unilateral restriction is a widening. k+1 humans may override a veto after its delay."),
+    ("F0-7", "Lifting a unilateral restriction is a widening. Where widening waits, k+1 humans may override a veto "
+             "after twice its delay."),
     ("F0-8", "A fact permits an action only while freshly attested by a chain sharing no holder with the actor. Every "
              "permitting fact carries its provenance label: observations, closures, open instances and gates. Absence "
              "of a fact never permits it."),
@@ -37,21 +40,24 @@ FLOOR0 = (
     ("F0-11", "Outside admission, each declared target lacking fresh independent proof has a stable obligation and "
               "deadline; overdue gaps record escalation to root humans. Accountability never authorizes. Recording "
               "escalation does not prove delivery or repair."),
+    ("F0-12", "Every op declares its routes: autonomous routes read measured facts only, and the human route needs a "
+              "human's decision on the exact resource. An effect proceeds only while one route in force holds, from "
+              "intent to departure. A law may turn autonomous routes off, never the human route."),
 )
 
-MIN_HUMANS = 2
-MIN_WITNESSES = 2
-MIN_DELAY_MS = 3_600_000          # a widening waits at least one hour of witnessed time
+MIN_HUMANS = 1
+MIN_WITNESSES = 1
+MIN_DELAY_MS = 0                  # a widening takes effect at once unless the law asks it to wait
 MAX_AHEAD_MS = 300_000            # no statement runs more than five minutes ahead of the last witnessed time
 DISPATCH_MS = 300_000             # a reservation leaves within five minutes, or never
+DECISION = ("observed", ("decision", "approve", "real", "human"))   # the one atom a human route must carry (F0-12)
 
-KINDS = ("human", "agent", "service", "oracle", "guard", "witness", "sentinel")
+KINDS = ("human", "agent", "service", "oracle", "guard", "witness")
 
 POLARITY = {
     "genesis": "widen", "rotate": "widen", "grant": "widen", "unfreeze": "widen", "law": "widen", "activate": "widen",
     "delegate": "attenuate",
-    "veto": "restrict", "revoke": "restrict", "freeze": "restrict", "flag": "restrict", "heartbeat": "restrict",
-    "invalidate": "restrict",
+    "veto": "restrict", "revoke": "restrict", "freeze": "restrict", "invalidate": "restrict",
     "checkpoint": "witness",
     "intent": "act", "token": "act", "reservation": "act", "execution": "act", "resource": "act", "transition": "act",
     "reconciliation": "attest", "observation": "attest", "measurement": "attest",
@@ -59,10 +65,7 @@ POLARITY = {
 CONSTRAINABLE = ("act", "attest", "attenuate")   # the only polarities a law may block (F0-3)
 
 # Who may restrict alone. "revoke" is also open to any holder along the revoked chain.
-RESTRICT_BY = {
-    "veto": ("human",), "revoke": ("human",), "freeze": ("human", "sentinel"), "flag": ("human", "sentinel"),
-    "heartbeat": ("sentinel",), "invalidate": ("human", "oracle"),
-}
+RESTRICT_BY = {"veto": ("human",), "revoke": ("human",), "freeze": ("human",), "invalidate": ("human", "oracle")}
 
 # The effect line (§8.1): (kind, result) -> (states it may leave, state it enters). "expired" is a reservation past
 # DISPATCH_MS: no guard may send it any more, so only then may a reconciler settle it.
@@ -94,6 +97,7 @@ def floor0_digest() -> str:
         "restrict_by": {k: list(v) for k, v in RESTRICT_BY.items()},
         "constants": {"MIN_HUMANS": MIN_HUMANS, "MIN_WITNESSES": MIN_WITNESSES, "MIN_DELAY_MS": MIN_DELAY_MS,
                       "MAX_AHEAD_MS": MAX_AHEAD_MS, "DISPATCH_MS": DISPATCH_MS, "LAPSE": list(LAPSE),
-                      "KINDS": list(KINDS), "CONSTRAINABLE": list(CONSTRAINABLE)},
+                      "KINDS": list(KINDS), "CONSTRAINABLE": list(CONSTRAINABLE),
+                      "DECISION": [DECISION[0], list(DECISION[1])]},
         "line": [[k, r, list(f), t] for (k, r), (f, t) in LINE.items()],
     })

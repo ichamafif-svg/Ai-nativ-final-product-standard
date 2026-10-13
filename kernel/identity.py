@@ -166,8 +166,8 @@ def _webauthn(key: dict, message: bytes, signature: dict) -> bool:
 
 # ---- the root -------------------------------------------------------------------------------------------------------
 def check_root(root) -> None:
-    """A root is {threshold, identities}: known kinds, canonical keys never repeated, and F0-1 (k >= MIN_HUMANS,
-    at least k + 2 humans). Raises IdentityError."""
+    """A root is {threshold, identities}: known kinds, canonical keys never repeated, and F0-1 (k >= MIN_HUMANS
+    humans can sign). Raises IdentityError."""
     if not isinstance(root, dict) or set(root) != {"threshold", "identities"}:
         raise IdentityError("a root is {threshold, identities}")
     ids = root["identities"]
@@ -195,8 +195,8 @@ def check_root(root) -> None:
                 raise IdentityError(f"{ident}: bad or repeated key")
             seen.add(kid)
     k = root["threshold"]
-    if type(k) is not int or k < MIN_HUMANS or len(humans(root)) < k + 2:
-        raise IdentityError(f"F0-1: a quorum of at least {MIN_HUMANS} humans and two more humans enrolled")
+    if type(k) is not int or k < MIN_HUMANS or len(humans(root)) < k:
+        raise IdentityError(f"F0-1: a threshold of at least {MIN_HUMANS} human, and that many humans enrolled")
 
 
 def humans(root) -> set:
