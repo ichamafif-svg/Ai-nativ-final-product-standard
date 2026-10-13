@@ -1216,6 +1216,26 @@ Le dépôt canonique `lab` part d'un commit Git vide sur `main` : aucun produit,
 
 Après le délai FLOOR-0 d'une heure, `bash /opt/standard/tools/install_server.sh activate` active les capacités proposées, sépare garde et agent, démarre opérateur, agent et interface sur `127.0.0.1:8080`, puis écrit `/srv/standard/qualification.json`. Accéder à l'interface par un tunnel SSH. Une nouvelle version suit le même parcours depuis un nouveau commit poussé : remplacement explicite, nouvelle genèse, délai, vérification. Ce laboratoire valide le comportement de bout en bout observable, **pas** l'indépendance d'un quorum, des témoins, de l'anti-rollback ou de l'évaluation.
 
+**Mode opératoire pour un autre agent.** Le VPS IONOS possède le compte `standard-preview` (clé SSH, sans `sudo`) et un checkout de `refactor/kernel-bt-clean` dans `/home/standard-preview/standard-src`. Obtenir l'adresse du VPS auprès du propriétaire, vérifier sa clé d'hôte hors bande avant la première connexion et ne jamais mettre de mot de passe, clé privée ou jeton dans le dépôt, la documentation ou les commandes journalisées. Le checkout et GitHub servent à préparer une release ; `/opt/standard` est une copie de commit, non un lieu d'édition. Les autres données du VPS sont à préserver. Pour mettre à jour la source et installer une nouvelle genèse, avec accord explicite du propriétaire pour l'action root :
+
+```sh
+ssh standard-preview@<VPS_IP>
+git -C /home/standard-preview/standard-src status --short --branch
+git -C /home/standard-preview/standard-src pull --ff-only
+git -C /home/standard-preview/standard-src rev-parse HEAD
+su -c 'bash /home/standard-preview/standard-src/tools/install_server.sh'
+```
+
+L'installateur vérifie lui-même que ce commit est la tête poussée de la branche et refuse les chemins non marqués. Il imprime l'heure minimale d'activation ; ne pas la devancer. Après cette heure, dans une nouvelle session SSH :
+
+```sh
+su -c 'bash /opt/standard/tools/install_server.sh activate'
+curl -fsS http://127.0.0.1:8080/api/state
+systemctl is-active standard-operator standard-agent standard-web
+```
+
+Depuis le poste local, `ssh -L 8080:127.0.0.1:8080 standard-preview@<VPS_IP>` donne accès à `http://127.0.0.1:8080/` sans ouvrir le port web au public. En cas d'échec, lire `journalctl -u standard-operator -u standard-agent -u standard-web` et `/srv/standard/qualification.json` avec l'identité appropriée ; ne pas transformer un échec en `PASS` manuel. Avant l'activation, l'interface et l'agent ne sont pas encore lancés. Même après activation, le dépôt vide ne produit aucune métrique RUN et T06 refuse l'exécution des candidats faute de confinement système de fichiers. Une réinstallation remplace seulement ce laboratoire, perd son état et relance le délai FLOOR-0. Tout mot de passe partagé hors canal sûr doit être renouvelé par son propriétaire.
+
 **Héberger les dépôts clients (D23).** `python tools/host.py create hosting.toml NAME --from PATH --guard-user standard-guard --gate-user standard-gate` crée le dépôt canonique (à la garde) et sa boîte de dépôt (à la passerelle). `python tools/host.py authorize hosting.toml NAME alice --key alice.pub --write --gate-user standard-gate` donne à une clé SSH une commande forcée vers `bt/hosting.py` : `git fetch` lit le canonique, `git push` n'écrit que dans la boîte, sous `refs/heads/alice/*`. Pas de shell, pas d'autre dépôt, une seule réponse de refus qui ne dit pas ce qui existe. L'installation pointe sur le canonique (`ceremony.py init DIR --repo …/repos/NAME.git`) et déclare `[hosting] config, gate_user` pour que `qualify.py` le vérifie. Ce que les clients poussent atteint `main` par l'opération `integrate` des floors (D24) : la ressource `repo:contrib:<contributeur>/<base>/<head>` ne s'ouvre qu'avec `tests = green` (la suite de `main` contre le code de la contribution, mesurée par le scanner), `regressions = none` (toutes les sondes locales des floors sur `main` puis sur la contribution : aucune cible ne doit empirer, sauf un suivi qu'une recette referme seule, comme un SBOM périmé par une nouvelle dépendance ; D26) **et** `review = approved` signé par un humain relecteur (`python -m standard.surface review contrib:alice BASE HEAD --identity h3 --key … --under <grant reviewer>`). L'agent soumet l'intention, la loi refuse jusqu'à ce que les deux faits existent, la garde fait le même CAS que pour `remediate`. Une contribution est un seul commit posé sur le `main` courant : l'auteur rebase et squash.
 
 En git local, T07 est tenu par le noyau de l'hôte : l'agent ne peut ni verrouiller `refs/heads/main`, ni lire la clé de la garde, ni ouvrir le journal. La garde ne lance jamais git *dans* le store de l'agent (elle le lit de l'extérieur par `ls-remote`/`fetch`), pour que la configuration git écrite par U ne s'exécute jamais sous l'identité de la garde. Restent hors preuve : root, les règles sudo qui permettent de devenir la garde, et le processus de la garde lui-même.
