@@ -27,8 +27,8 @@ class RepoMap:
         for path in sorted(p for p in tree.paths() if p.endswith(".py")):
             try:
                 module = ast.parse(tree.read(path))
-            except (SyntaxError, ValueError):
-                self.modules[path] = ["<does not parse>"]
+            except (SyntaxError, ValueError, FileNotFoundError, UnicodeDecodeError):
+                self.modules[path] = ["<uninspectable Python source>"]
                 continue
             defs = []
             for node in module.body:

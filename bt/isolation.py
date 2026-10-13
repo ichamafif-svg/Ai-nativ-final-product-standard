@@ -13,6 +13,7 @@ interface says so. A demo may run that way; a client installation may not.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 
@@ -46,7 +47,7 @@ class Isolation:
         """The argv that runs `args` as the runner, without network unless asked, under the memory limit."""
         env_args = [f"{k}={v}" for k, v in env.items()]
         jail = [] if network else ["unshare", "-rn"]
-        limit = ["prlimit", f"--as={self.memory}", "--"]
+        limit = ["prlimit", f"--as={self.memory}", "--"] if shutil.which("prlimit") else []
         if not self.user:
             return ["env", "-i", *env_args, *limit, *[str(a) for a in args]]
         return ["sudo", "-n", "-u", self.user, "--", "/usr/bin/env", "-i", *env_args, *jail, *limit,

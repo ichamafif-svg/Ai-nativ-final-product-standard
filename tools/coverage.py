@@ -13,9 +13,9 @@ import json
 
 from instruments.data import EMPTY
 from instruments.jobs import JOBS
-from instruments.probes import PROBES
 from instruments.recipes import recipes_for
 from standard.autonomy.agent import TASKS, WRITE_SCOPE
+from standard.autonomy.read_model import measurement_for
 from standard.floors import CONTRACTS, FLOORS
 
 
@@ -28,19 +28,18 @@ def inventory(targets=None) -> list[dict]:
     rows = []
     for target in FLOORS["targets"] if targets is None else targets:
         tid, resource = target["id"], target["resource"]
-        method, measure, condition = None, "MISSING", ""
-        if tid == "inventory" and floors_job:
-            method, measure = "instruments.probes.inventory", "REGISTERED"
+        registered = measurement_for(target, FLOORS)
+        kind, method, condition = registered["kind"], registered["method"], ""
+        measure = ("REGISTERED" if kind == "registered_probe" and floors_job else
+                   "CONDITIONAL" if kind == "conditional_program" and production_job else
+                   "MANUAL" if kind == "manual" else "MISSING")
+        if measure == "MISSING":
+            method = None
+        elif tid == "inventory":
             condition = "Readable tracked entries; not semantic, language or submodule coverage."
-        elif tid in PROBES and floors_job:
-            method, measure = f"instruments.probes.PROBES[{tid}]", "REGISTERED"
-        elif (resource, target["property"]) in {
-            ("run:sources:all", "coverage"), ("run:service:all", "slo"), ("run:release:all", "lag")
-        } and production_job:
-            method, measure = "instruments.production.measure", "CONDITIONAL"
+        elif measure == "CONDITIONAL":
             condition = "Requires configured sources or deployment; sources are attested inputs."
-        elif "@compliance_officer" in target.get("sources", []):
-            method, measure = "signed human attestation", "MANUAL"
+        elif measure == "MANUAL":
             condition = "No automated assessment of the asserted organisational control."
         repair = target.get("repair")
         if repair == "remediate":

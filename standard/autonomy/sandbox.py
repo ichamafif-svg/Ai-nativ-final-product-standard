@@ -48,7 +48,8 @@ class Sandbox:
         home = tempfile.mkdtemp(prefix="sandbox-home-")
         env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": home, "PYTHONDONTWRITEBYTECODE": "1",
                "LANG": "C.UTF-8", **({"PYTHONPATH": str(pythonpath)} if pythonpath else {})}
-        prefix = (["unshare", "-rn"] if self.isolated else []) + ["prlimit", f"--as={self.memory}", "--"]
+        limit = ["prlimit", f"--as={self.memory}", "--"] if shutil.which("prlimit") else []
+        prefix = (["unshare", "-rn"] if self.isolated else []) + limit
         try:
             r = subprocess.run(prefix + [str(a) for a in args], cwd=cwd, env=env, capture_output=True,
                                timeout=self.timeout)

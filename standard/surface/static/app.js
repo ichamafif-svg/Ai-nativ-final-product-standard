@@ -58,6 +58,8 @@ const levelTag = (lv) => `<span class="state ${LEVEL[lv][0]}"><i></i>${LEVEL[lv]
 const VALUES = { met: "tenu", behind: "en retard", none: "aucun", current: "à jour", complete: "complète", green: "au vert", red: "en échec", all: "toutes",
   compliant: "conformes", "guard-only": "garde seule" };
 function measure(r) {
+  if (r.diagnostic_alignment === "stale") return "diagnostic périmé ; preuve à relire";
+  if (r.diagnostic_conflict) return r.state === "held" ? "preuve tenue ; diagnostic divergent" : "diagnostic vert ; preuve attendue";
   if (!r.measured) return r.state === "held" ? "prouvée" : r.state === "attest" ? "attestation attendue" : "en attente";
   if (r.measured.startsWith("uncovered")) return "aucun instrument ici";
   const found = /^found:(\d+)$/.exec(r.measured);
@@ -70,12 +72,13 @@ function subject(s) {
 
 // ---- routing --------------------------------------------------------------------------------------------------------
 const ROUTES = {
-  run: ["Run", "run"], alerts: ["Alertes", "run"], objectives: ["Objectifs et règles", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
+  standard: ["Standard", "standard"],
+  run: ["Run", "run"], alerts: ["Alertes", "run"], objectives: ["Objectifs et réglages", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
   contributions: ["Contributions", "build"], requests: ["Demandes", "build"],
   reviews: ["Revues", "both"], proofs: ["Preuves", "both"], settings: ["Réglages", "both"],
 };
 let state = null, signer = null, alerting = null;
-const route = () => (location.hash.slice(2) in ROUTES ? location.hash.slice(2) : "run");
+const route = () => (location.hash.slice(2) in ROUTES ? location.hash.slice(2) : "standard");
 window.addEventListener("hashchange", () => render());
 
 const features = () => state.build.requests.flatMap((r) => r.features);
@@ -91,6 +94,7 @@ function frame() {
   const link = (id) => `<a href="#/${id}" ${id === here ? 'aria-current="page"' : ""}><span>${ROUTES[id][0]}</span>${badge(id)}</a>`;
   document.title = untaken ? `(${untaken}) Standard` : "Standard";
   $("#nav").innerHTML = `
+    <div class="group">Niveau</div>${link("standard")}
     <div class="group">Exploitation</div>${link("run")}${link("alerts")}${link("objectives")}${link("autonomy")}${link("compliance")}${link("activity")}
     <div class="group">Construction</div>${link("contributions")}${link("requests")}
     <div class="group">Gouvernance</div>${link("reviews")}${link("proofs")}${link("settings")}`;
@@ -98,7 +102,8 @@ function frame() {
   $("#product").innerHTML = `<div class="mark">${esc(state.product.slice(0, 1).toUpperCase())}</div><div>
     ${others ? `<select aria-label="Produit">${state.products.map((p) => `<option ${p === state.product ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`
       : `<b>${esc(state.product)}</b>`}<span>${state.assessment === "INDEPENDENT" ? "Évalué indépendamment" : "Démonstration"}</span></div>`;
-  const env = ROUTES[here][1] === "build" ? `<span class="env build">Construction</span>` : `<span class="env run">Production</span>`;
+  const env = ROUTES[here][1] === "build" ? `<span class="env build">Construction</span>`
+    : ROUTES[here][1] === "standard" ? `<span class="env standard">Standard commun</span>` : `<span class="env run">Production</span>`;
   $("#top").innerHTML = `<span class="crumb"><b>${esc(state.product)}</b>  /  ${ROUTES[here][0]}</span>${env}
     <span class="spacer"></span><span class="sha" title="Commit en production">main ${short(state.main)}</span>`;
   $("#who").innerHTML = signer ? `Connecté pour signer en tant que <b>${esc(signer.identity)}</b>` : `Aucune clé de signature dans ce navigateur`;
@@ -121,12 +126,13 @@ async function refresh() {
 function render() {
   if (!state) return;
   frame();
-  const views = { run: runView, alerts: alertsView, objectives: objectivesView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
+  const views = { standard: standardView, run: runView, alerts: alertsView, objectives: objectivesView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
   $("#view").innerHTML = banner() + views[route()]();
   if (route() === "run") loadRun();
   if (route() === "objectives") loadObjectives();
   if (route() === "settings") bindSettings();
   document.querySelectorAll("[data-review]").forEach((b) => b.addEventListener("click", () => openReview(b.dataset.review)));
+  document.querySelectorAll("[data-agent-context]").forEach((b) => b.addEventListener("click", () => openAgentContext(b.dataset.agentContext, b.dataset.id)));
   document.querySelectorAll("[data-ack]").forEach((b) => b.addEventListener("click", () => take(b)));
 }
 
@@ -135,6 +141,88 @@ function counts() {
   const by = (s) => state.requirements.filter((r) => r.state === s).length;
   return { total: state.requirements.length, held: by("held"), gap: by("gap"), escalated: by("escalated"),
     attest: by("attest"), unmeasured: by("unmeasured") };
+}
+
+function standardLevel(c) {
+  const ratio = c.held / Math.max(c.total, 1);
+  if (c.escalated) return ["escalated", "Dette critique", "Une échéance Standard est dépassée : le système ne masque pas le retard, il l'escalade."];
+  if (ratio === 1) return ["held", "Auditable", "Toutes les exigences Standard visibles ici disposent d'une preuve ou d'une attestation fraîche."];
+  if (ratio >= 0.85 && !c.unmeasured) return ["gap", "Maintenu", "Le socle est largement tenu ; la montée dépend surtout des écarts et attestations restants."];
+  if (ratio >= 0.55) return ["gap", "Sous contrôle", "Le système mesure le terrain et pousse les écarts vers réparation, preuve ou personne responsable."];
+  return ["pending", "Observé", "Standard commence par rendre les trous visibles : rien n'est considéré conforme par silence."];
+}
+
+function blockers(limit = 6) {
+  const order = { escalated: 0, gap: 1, attest: 2, unmeasured: 3, pending: 4, held: 5 };
+  return [...state.requirements].filter((r) => r.state !== "held")
+    .sort((a, b) => order[a.state] - order[b.state] || a.id.localeCompare(b.id)).slice(0, limit);
+}
+
+function autonomyBuckets() {
+  const reqs = Object.fromEntries(state.requirements.map((r) => [r.id, r]));
+  const rows = state.autonomy.requirements.map((a) => ({ ...a, req: reqs[a.id] })).filter((a) => a.req);
+  return {
+    alone: rows.filter((a) => a.level === "autonomous" && ["gap", "pending"].includes(a.req.state)),
+    prepare: rows.filter((a) => a.level === "supervised" && a.req.state !== "held"),
+    people: rows.filter((a) => a.level === "human" && a.req.state !== "held"),
+    waiting: rows.filter((a) => a.blocked || a.req.state === "unmeasured"),
+  };
+}
+
+function auditReadings() {
+  return (state.external_references || []).map(({ label, mapping }) => {
+    const rs = state.requirements.filter((r) => r.projections?.includes(label));
+    const held = rs.filter((r) => r.state === "held").length;
+    return { label, mapping, held, total: rs.length };
+  });
+}
+
+function standardView() {
+  const c = counts(), lv = standardLevel(c), buckets = autonomyBuckets(), blocked = blockers();
+  const pctHeld = Math.round((100 * c.held) / Math.max(c.total, 1));
+  return `<div class="stdhead">
+      <div class="hero"><i class="beacon ${lv[0] === "held" ? "" : lv[0] === "escalated" ? "esc" : "gap"}"></i><div>
+        <h1>Niveau Standard : ${lv[1]}</h1>
+        <p class="lede">${esc(lv[2])}</p></div></div>
+      <div class="standard-score"><b>${pctHeld}<small>%</small></b><span>${c.held} exigences tenues sur ${c.total}</span></div>
+    </div>
+    <section class="stdgrid">
+      <div class="stdpanel">
+        <h2>Ce qui empêche de monter</h2>
+        ${blocked.length ? `<div class="stdlist">${blocked.map((r) => `<a href="#/compliance"><span class="state ${r.state}"><i></i>${STATES[r.state]}</span><b>${esc(name(r.id))}</b><small>${esc(measure(r))}</small></a>`).join("")}</div>`
+          : `<div class="clear">Aucun bloqueur visible : les preuves et attestations sont à jour.</div>`}
+      </div>
+      <div class="stdpanel">
+        <h2>Ce que l'agent peut faire</h2>
+        <div class="stdnums">
+          <a href="#/autonomy"><b>${buckets.alone.length}</b><span>agir seul</span></a>
+          <a href="#/reviews"><b>${buckets.prepare.length}</b><span>préparer puis revue</span></a>
+          <a href="#/compliance"><b>${buckets.people.length}</b><span>humain requis</span></a>
+          <a href="#/proofs"><b>${buckets.waiting.length}</b><span>preuve attendue</span></a>
+        </div>
+        <p class="small quiet">L'agent monte le client vers le même Standard commun : il répare quand la preuve suffit, prépare quand il faut juger, et laisse visible ce qu'il ne peut pas signer.</p>
+        <div class="decide compact"><button class="btn" data-agent-context="patrol" data-id="wide">Contexte de patrouille</button>
+          <button class="btn" data-agent-context="surface" data-id="wide">Carte loi/code</button>
+          <span class="small quiet">Le contexte prépare une recherche ; aucune analyse n'est lancée ici.</span></div>
+      </div>
+      <div class="stdpanel">
+        <h2>Cycle de montée</h2>
+        <ol class="ladder">
+          <li><b>Écart</b><span>une exigence Standard manque de preuve fraîche</span></li>
+          <li><b>Obligation</b><span>la dette reste ouverte avec échéance</span></li>
+          <li><b>Travail</b><span>agent, revue ou personne responsable</span></li>
+          <li><b>Preuve</b><span>instrument indépendant ou attestation</span></li>
+          <li><b>Admission</b><span>le noyau ferme ou refuse, jamais l'interface</span></li>
+        </ol>
+      </div>
+      <div class="stdpanel">
+        <h2>Lectures audit</h2>
+        <div class="auditread">${auditReadings().map((r) => `<a href="#/proofs"><b>${esc(r.label)}</b><span>${r.mapping === "not_established" ? "non cartographié" : `${r.held}/${r.total} cibles tenues`}</span><i style="width:${r.mapping === "not_established" ? 0 : Math.round((100 * r.held) / Math.max(r.total, 1))}%"></i></a>`).join("")}</div>
+        <p class="small quiet">Projections par thème uniquement. Aucune correspondance contrôle par contrôle ni certification.</p>
+      </div>
+    </section>
+    <section><h2>Carte du Standard</h2>${map()}</section>
+    <section class="cols"><div><h2>À traiter maintenant</h2>${todo()}</div><div><h2>Derniers mouvements</h2>${feed(8)}</div></section>`;
 }
 
 function map() {
@@ -557,13 +645,13 @@ const TOGGLES = {
   freeze: ["Gel des mises en production", "Plus aucune mise en production automatique ; les retours arrière restent possibles."],
 };
 const TABS = [["slos", "SLO et budgets"], ["alerting", "Alertes"], ["release", "Mise en production"], ["health", "Santé immédiate"],
-  ["components", "Composants"], ["probes", "Sondes"], ["silences", "Silences"], ["code", "Règles en code"], ["history", "Historique"]];
+  ["components", "Composants"], ["probes", "Sondes"], ["silences", "Silences"], ["code", "Réglages en code"], ["history", "Historique"]];
 const DAYNAMES = { mon: "lun", tue: "mar", wed: "mer", thu: "jeu", fri: "ven", sat: "sam", sun: "dim" };
 const ZONES = ["UTC", "Europe/Paris", "Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Asia/Tokyo", "Asia/Singapore"];
 let settingsData = null, objTab = localGet("objtab") || "slos";
 function objectivesView() {
-  return `<h1>Objectifs et règles</h1><p class="lede">Ce que la production doit tenir, comment on est prévenu et ce que Standard a le droit d'y faire seul.
-    Tout vit dans <span class="sha">standard/rules.json</span>, dans le dépôt : chaque changement fait ici est ce fichier, signé une fois, commité par l'agent et intégré par la loi.
+  return `<h1>Objectifs et réglages</h1><p class="lede">Ce que la production doit tenir, comment on est prévenu et ce que Standard a le droit d'y faire seul.
+    Les réglages système vivent dans <span class="sha">standard/rules.json</span>, dans le dépôt : chaque changement fait ici est ce fichier, signé une fois, commité par l'agent et intégré par la loi.
     <b>Appliqué dès l'intégration, dans les bornes de la loi : un réglage qui demande moins que la loi ne permet rien de plus à l'agent.</b></p>
     <div class="tabs" role="tablist">${TABS.map(([id, label]) => `<button role="tab" data-objtab="${id}" aria-selected="${id === objTab}">${label}</button>`).join("")}</div>
     <div id="obj"><p class="quiet">Chargement</p></div>`;
@@ -692,7 +780,7 @@ async function loadObjectives() {
           <select id="md" ${dis}><option value="30">30 min</option><option value="60" selected>1 h</option><option value="240">4 h</option><option value="1440">24 h</option></select>
           <input class="num" id="mr" type="text" placeholder="raison" ${dis}><button class="btn primary" id="madd" ${dis}>Silencer</button></div><div class="sp"></div></div></div>`;
     },
-    code: () => `<p class="small quiet">Le fichier <span class="sha">standard/rules.json</span> de la branche principale${s.rules_file ? "" : " (pas encore créé : les valeurs par défaut s'appliquent)"}. Modifiez-le ici et signez-le une fois, ou changez-le par une contribution relue, comme du code. Les silences n'y figurent pas : ils sont signés à part.</p>
+    code: () => `<p class="small quiet">Le fichier de réglages système <span class="sha">standard/rules.json</span> de la branche principale${s.rules_file ? "" : " (pas encore créé : les valeurs par défaut s'appliquent)"}. Modifiez-le ici et signez-le une fois, ou changez-le par une contribution relue, comme du code. Les silences n'y figurent pas : ils sont signés à part.</p>
       <textarea id="code" spellcheck="false" ${dis}>${esc(JSON.stringify(p.document, null, 2))}</textarea>
       <div class="decide"><button class="btn" id="codediff" ${dis}>Comparer</button><a class="btn" id="codedl" download="standard-rules.json" href="data:application/json,${encodeURIComponent(JSON.stringify(p.document, null, 2))}">Télécharger</a></div><div id="diff"></div>`,
     history: () => `<div class="rows">${p.history.map((h) => `<div class="rowi"><div class="main"><b>${esc(label(h.setting, h.value))}</b>
@@ -712,20 +800,20 @@ async function loadObjectives() {
         ${!fresh ? `<button class="btn danger" data-sloff="${sid}" ${dis}>Retirer</button>` : ""}</div><div class="preview" id="pv-${sid}"></div></div>`;
   }
 
-  $("#obj").innerHTML = `${(s.rules_landing || []).filter((x) => x.state !== "admitted").map((x) => `<div class="note warn">Changement de règles signé, en cours d'intégration : ${esc(x.state || "commit en préparation")}</div>`).join("")}
-    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour modifier ces règles.</div>`
-      : !can ? `<div class="note warn">Seul ${esc(s.signing.grant?.holder || "l'ingénieur habilité")} peut modifier ces règles.</div>` : ""}
+  $("#obj").innerHTML = `${(s.rules_landing || []).filter((x) => x.state !== "admitted").map((x) => `<div class="note warn">Changement de réglages signé, en cours d'intégration : ${esc(x.state || "commit en préparation")}</div>`).join("")}
+    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour modifier ces réglages.</div>`
+      : !can ? `<div class="note warn">Seul ${esc(s.signing.grant?.holder || "l'ingénieur habilité")} peut modifier ces réglages.</div>` : ""}
     ${tabs[objTab]()}<p id="objmsg" class="small quiet"></p>`;
   document.querySelectorAll("[data-objtab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.objtab === objTab)));
 
   const at = () => Math.max(Date.now(), s.signing.as_of + 1);
-  // D35: every rule lives in standard/rules.json on main. A change here is the whole new file, stored by digest and
+  // D35: every system setting lives in standard/rules.json on main. A change here is the whole new file, stored by digest and
   // signed once; the agent commits exactly that file and the law lands it after the scanner's checks. Silences
   // alone are signed statements, applied at once.
   const signRules = async (doc, el) => {
-    $("#objmsg").textContent = "Signature du nouveau standard/rules.json dans ce navigateur";
+    $("#objmsg").textContent = "Signature des nouveaux réglages système dans ce navigateur";
     try {
-      const r = await fetch("/api/rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ document: doc }) });
+      const r = await fetch("/api/system-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ document: doc }) });
       const stored = await r.json();
       if (!r.ok) throw new Error(stored.error);
       await signFact(s.signing.domain, at(), s.signing.grant, `repo:config:rules/${stored.base}`, "rules", stored.digest);
@@ -866,18 +954,19 @@ function fact(text, tone) {
   return `<span class="fact ${tone}"><i></i>${esc(text)}</span>`;
 }
 
-const auto = (id) => state.standard.autonomy.requirements.find((a) => a.id === id);
+const auto = (id) => state.autonomy.requirements.find((a) => a.id === id);
 
 function requirementTables() {
   return `${DOMAINS.map(([label, test]) => {
       const rs = state.requirements.filter(test);
-      return rs.length ? `<section><h2>${label}</h2><table class="table req"><colgroup><col><col style="width:150px"><col style="width:190px"><col style="width:210px"></colgroup>
-        <thead><tr><th>Exigence</th><th>État</th><th>Mesure</th><th>Autonomie</th></tr></thead><tbody>
+      return rs.length ? `<section><h2>${label}</h2><table class="table req"><colgroup><col><col style="width:150px"><col style="width:190px"><col style="width:210px"><col style="width:120px"></colgroup>
+        <thead><tr><th>Exigence</th><th>État</th><th>Mesure</th><th>Autonomie</th><th></th></tr></thead><tbody>
       ${rs.map((r) => `<tr><td><div class="name">${esc(name(r.id))}</div><div class="sub">${esc(r.property)} = ${esc(r.expect)}</div>
         ${r.where.length && r.state === "gap" ? `<ul class="where">${r.where.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}</td>
         <td><span class="state ${r.state}"><i></i>${STATES[r.state]}</span></td>
         <td class="sub">${esc(measure(r))}</td>
-        <td>${levelTag(auto(r.id).level)}<div class="sub">${LEVEL[auto(r.id).level][2]}</div></td></tr>`).join("")}</tbody></table></section>` : "";
+        <td>${auto(r.id) ? `${levelTag(auto(r.id).level)}<div class="sub">${LEVEL[auto(r.id).level][2]}</div>` : `<span class="state pending"><i></i>Non classée</span>`}</td>
+        <td><button class="btn tiny" data-agent-context="target" data-id="${esc(r.id)}">Contexte</button></td></tr>`).join("")}</tbody></table></section>` : "";
     }).join("")}`;
 }
 
@@ -944,6 +1033,8 @@ function requests() {
         ${contributions.map((c) => `<div class="rowi"><div class="main"><b>Contribution de ${esc(c.author)}</b> <span class="sha">${short(c.head)}</span>
           <div class="facts">${fact(c.facts.acceptance === "green" ? "Contrat tenu" : c.facts.acceptance ? `Contrat : ${c.facts.acceptance}` : "Contrat en mesure", c.facts.acceptance === "green" ? "ok" : c.facts.acceptance ? "bad" : "")}</div></div>
           <button class="btn" data-review="${esc(c.resource)}">Détails</button></div>`).join("")}</div>` : ""}
+      <div class="decide compact"><button class="btn" data-agent-context="request" data-id="${esc(r.id)}">Contexte agent</button>
+        <span class="small quiet">Dossier lisible par l'agent et par vous : demande, loi, réglages système, preuves et limites.</span></div>
       ${r.state === "proposed" || r.state === "contracted" ? `<div class="decide">
         ${r.state === "proposed" ? `<button class="btn primary" data-contract="${esc(r.resource)}" ${can && r.facts.contract === "red" ? "" : "disabled"}>Signer le contrat</button>` : ""}
         <button class="btn danger" data-withdraw="${esc(r.resource)}" ${can ? "" : "disabled"}>Retirer</button>
@@ -1074,6 +1165,51 @@ document.addEventListener("click", (e) => {
   const cell = e.target.closest("[data-req]");
   if (cell) location.hash = "#/compliance";
 });
+
+// ---- agent context --------------------------------------------------------------------------------------------------
+const bullets = (xs) => `<ul class="ctxbullets">${(xs || []).map((x) => `<li>${esc(x)}</li>`).join("") || `<li class="quiet">Aucun élément publié</li>`}</ul>`;
+const jsonBlock = (v) => `<pre>${esc(JSON.stringify(v ?? {}, null, 2))}</pre>`;
+
+async function openAgentContext(kind, id) {
+  const dlg = $("#dlg"), body = $("#dlgbody");
+  body.innerHTML = `<p class="quiet">Chargement du contexte agent</p>`;
+  dlg.showModal();
+  let ctx;
+  try {
+    const r = await fetch(`/api/agent-context?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`, { cache: "no-store" });
+    ctx = await r.json();
+    if (!r.ok || ctx.error) throw new Error(ctx.error || r.statusText);
+  } catch (err) {
+    body.innerHTML = `<div class="note bad">Contexte indisponible : ${esc(err.message)}</div><footer><button class="btn" id="close">Fermer</button></footer>`;
+    $("#close").onclick = () => dlg.close();
+    return;
+  }
+  const isRequest = ctx.kind === "request";
+  const isPatrol = ctx.kind === "patrol";
+  const isSurface = ctx.kind === "surface";
+  body.innerHTML = `<h2>Contexte agent · ${esc(ctx.title || ctx.id)}</h2>
+    <p class="small quiet">Dossier de lecture. Rien ici n'autorise : seules les signatures admises par le noyau comptent.</p>
+    <div class="ctxgrid">
+      <section class="ctxcard"><h3>Decision packet</h3>${jsonBlock(ctx.decision)}</section>
+      <section class="ctxcard"><h3>Mission</h3>${jsonBlock(ctx.mission)}</section>
+      <section class="ctxcard"><h3>Law trace</h3>${jsonBlock(ctx.law_trace || ctx.law)}</section>
+      <section class="ctxcard"><h3>Réglages système</h3>${jsonBlock(ctx.system_settings)}</section>
+      <section class="ctxcard"><h3>Proof plan</h3>${jsonBlock(ctx.proof_plan || ctx.proof)}</section>
+      <section class="ctxcard"><h3>Ce que l'agent peut faire</h3>${bullets(ctx.agent?.can)}<h3>Interdit</h3>${bullets(ctx.agent?.cannot)}</section>
+      <section class="ctxcard"><h3>Admission</h3>${jsonBlock(ctx.admission)}</section>
+      ${isPatrol ? `<section class="ctxcard"><h3>Effective law</h3>${jsonBlock(ctx.effective_law)}</section>
+      <section class="ctxcard"><h3>Weak spots</h3>${jsonBlock(ctx.weak_spots)}</section>
+      <section class="ctxcard"><h3>Known findings</h3>${jsonBlock(ctx.known_findings)}</section>
+      <section class="ctxcard"><h3>Expected output</h3>${jsonBlock(ctx.expected_output)}</section>` : ""}
+      ${isSurface ? `<section class="ctxcard"><h3>Périmètre et sources</h3>${jsonBlock({scope: ctx.scope, inputs: ctx.inputs})}</section>
+      <section class="ctxcard"><h3>Résumé</h3>${jsonBlock(ctx.summary)}</section>
+      <section class="ctxcard"><h3>Certification</h3>${jsonBlock(ctx.certification)}</section>
+      <section class="ctxcard wide"><h3>Bindings loi / code / preuve</h3>${jsonBlock(ctx.entries)}</section>` : ""}
+    </div>
+    ${isRequest ? `<details class="ctxdoc"><summary>Spec et contrat signés</summary><h3>Spec</h3><pre>${esc(ctx.request?.spec || "")}</pre><h3>Contrat</h3><pre>${esc(ctx.request?.contract || "")}</pre></details>` : ""}
+    <footer><span class="small quiet spacer">Préfixe ${esc(ctx.basis?.size)} · loi <span class="sha">${esc(String(ctx.law_digest || "").slice(7, 23))}</span></span><button class="btn" id="close">Fermer</button></footer>`;
+  $("#close").onclick = () => dlg.close();
+}
 
 // ---- reviewing and signing -----------------------------------------------------------------------------------------
 async function openReview(resource) {

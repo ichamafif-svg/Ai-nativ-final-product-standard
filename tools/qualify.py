@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 import time
 import sys
-import tomllib
+import toml_compat as tomllib
 from pathlib import Path
 from contextlib import closing
 
@@ -185,7 +185,7 @@ def qualify(config_path) -> list:
                          "root, sudo rules that let someone become the guard, and the guard process itself"))
     if "hosting" in c:                                     # D23: clients reach repositories only through the gate
         import pwd
-        import tomllib as toml
+        import toml_compat as toml
         gate, guard = pwd.getpwnam(c["hosting"]["gate_user"]), pwd.getpwnam(sep["guard_user"]) if sep else None
         hosted = toml.loads(Path(c["hosting"]["config"]).read_text())["repositories"]
         bad = [n for n, r in hosted.items() if guard is None or Path(r["inbox"]).stat().st_uid == guard.pw_uid

@@ -151,13 +151,13 @@ class Agent:
             raise AgentError("custom repair scopes must be configured lists of relative path patterns")
         self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources)
 
-    def investigate(self, view, task, base, findings=None):
-        from .context import render_context, task_context
+    def investigate(self, view, task, base, findings=None, settings=None, *, model=None):
+        from .context import model_packet, task_context
         tree = Snapshot(self.store, base)
         prompt = ("Find a way to serve this missing need. Inspect, research, reuse or experiment with a tool. "
                   "Return a summary and proposed tool files if useful, the required independent verification and any "
                   "operator action. Do not claim the requirement is closed or register a new trusted instrument.\n"
-                  + render_context(task_context(view, task, findings)))
+                  + model_packet(task_context(view, task, findings, settings=settings, model=model)))
         try:
             return self.research.dialogue(prompt, tree, key=task["id"])
         except ResearchError as exc:

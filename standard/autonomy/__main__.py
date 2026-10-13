@@ -1,6 +1,7 @@
 """The agent process (U), separate from the operator process:
 
     python -m standard.autonomy run standard.toml [interval-seconds]
+    python -m standard.autonomy patrol standard.toml [focus]
 
 It reads the agent's own key, the gateway socket, the proposals store and, optionally, the Claude API key file. It
 never reads the journal, the pins, the guard's key or the provider token.
@@ -12,7 +13,7 @@ import json
 import subprocess
 import sys
 import time
-import tomllib
+import toml_compat as tomllib
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -53,6 +54,13 @@ def build(config_path) -> tuple[Cycle, callable]:
         main = lambda: git(store, "ls-remote", "origin", "refs/heads/main").split()[0]
         refresh = lambda: git(store, "fetch", "-q", "origin", "+refs/heads/main:refs/heads/main")
         publish = lambda head: git(store, "push", "-q", "origin", f"{head}:refs/heads/standard/proposals/{head}")
+    def system_settings() -> dict:                        # D35/D36: system settings as main carries them
+        shown = subprocess.run(["git", "-C", str(store), "show", "refs/heads/main:standard/rules.json"],
+                               capture_output=True, text=True, timeout=60)
+        try:
+            return json.loads(shown.stdout) if shown.returncode == 0 else {}
+        except ValueError:
+            return {}
     data = c.get("data")
     api = agent_cfg.get("api_key_file")
     llm = Gate.from_config(c["llm"], resolve, store.parent / "egress.log") if c.get("llm") else None
@@ -64,7 +72,8 @@ def build(config_path) -> tuple[Cycle, callable]:
     cycle = Cycle(GatewayClient(resolve(c["socket"]["path"])), WorkEngine(store.parent / "work.db"), agent, routes,
                   clock=lambda: int(time.time() * 1000), main=main, state_path=store.parent / "proposals.json",
                   findings=path.parent / "findings.json",
-                  memory=Memory(store.parent / "memory.json", budget=int(agent_cfg.get("attempts", 3))))
+                  memory=Memory(store.parent / "memory.json", budget=int(agent_cfg.get("attempts", 3))),
+                  settings=system_settings)
     if repo.get("inbox") and "agent_integrate" in c["grants"]:
         from .contributions import Integrator
         integrator = Integrator(cycle.service, signer, c["grants"]["agent_integrate"], resolve(repo["inbox"]),
@@ -87,20 +96,14 @@ def build(config_path) -> tuple[Cycle, callable]:
                                                   if k in c["grants"]}, store,
                           resolve(c.get("build", {}).get("store", "requests")), main=main,
                           clock=lambda: cycle.clock(), notes=store.parent / "requests.json", llm=agent.llm,
-                          data=agent.data, research_sources=agent_cfg.get("research_sources"))
+                          data=agent.data, research_sources=agent_cfg.get("research_sources"),
+                          settings=system_settings)
         run_build = cycle.run
         cycle.run = lambda mode="RUN": {**run_build(mode), "build": builder.run()}
     if switches:                                          # D30: production follows main, and steps back on a breach
         from .release import Releaser
-        def rules() -> dict:                              # D36: the engineers' settings, as main carries them
-            shown = subprocess.run(["git", "-C", str(store), "show", "refs/heads/main:standard/rules.json"],
-                                   capture_output=True, text=True, timeout=60)
-            try:
-                return json.loads(shown.stdout) if shown.returncode == 0 else {}
-            except ValueError:
-                return {}
         releaser = Releaser(cycle.service, signer, switches, clock=lambda: cycle.clock(),
-                            notes=store.parent / "releases.json", rules=rules)
+                            notes=store.parent / "releases.json", rules=system_settings)
         run_release = cycle.run
         cycle.run = lambda mode="RUN": {**run_release(mode), "release": releaser.run()}
     return cycle, refresh
@@ -108,10 +111,19 @@ def build(config_path) -> tuple[Cycle, callable]:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) < 2 or argv[0] != "run":
-        print("usage: python -m standard.autonomy run standard.toml [interval-seconds]")
+    if len(argv) < 2 or argv[0] not in ("run", "patrol"):
+        print("usage: python -m standard.autonomy (run|patrol) standard.toml [interval-seconds|focus]")
         return 2
     cycle, refresh = build(argv[1])
+    if argv[0] == "patrol":
+        from .patrol import run_patrol
+        try:
+            refresh()
+            print(json.dumps(run_patrol(cycle, focus=argv[2] if len(argv) > 2 else None)))
+            return 0
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": str(exc)}))
+            return 2
     interval = float(argv[2]) if len(argv) > 2 else 60.0
     while True:
         try:

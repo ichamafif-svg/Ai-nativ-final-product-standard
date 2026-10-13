@@ -11,17 +11,26 @@ from types import SimpleNamespace
 
 from instruments import jobs, probes, suite
 from instruments.tree import Measure, Snapshot, export, verdict
+from bt.assessment import TrustUnavailable
+from bt.service import TrustedService
+from standard.runtime.operator import Instruments
 from standard.autonomy.agent import Agent, AgentError, in_scope
 from standard.autonomy.build import Builder
 from standard.autonomy.context import render_context, task_context
 from standard.autonomy.cycle import Cycle
+from standard.autonomy.drift import gap_dossiers, patrol_context, propose_patrol, propose_reading
+from standard.autonomy.drift_map import target_state
+from standard.autonomy.law_surface import law_surface_map, projection_labels
 from standard.autonomy.llm import Gate, Provider
+from standard.autonomy.patrol import run_patrol
+from standard.autonomy.read_model import ReadModel
 from standard.autonomy.precheck import precheck, suite as agent_suite
 from standard.autonomy.projection import installed_routes, project
 from standard.autonomy.research import NoRedirect, Research, ResearchError
 from standard.autonomy.sandbox import Result
 from standard.autonomy.work import WorkEngine
 from standard.floors import FLOORS
+from standard.surface.web import Installation
 from test_agent import Signer, store_with
 from test_install import Clock
 from test_maintenance import demo_repository, FILES
@@ -103,6 +112,34 @@ class Reports(unittest.TestCase):
         self.assertEqual(facts[0][:3], [f'repo:client:custom/{base}/{head}', 'tests', 'green'])
 
 
+class CoherentView(unittest.TestCase):
+    def test_instrument_plan_rejects_a_different_journal_prefix(self):
+        instruments = Instruments.__new__(Instruments)
+        instruments.service = SimpleNamespace(journal=SimpleNamespace(snapshot=lambda: {'size': 2, 'head': 'new'}))
+        with self.assertRaisesRegex(RuntimeError, 'prefix changed'):
+            instruments.subjects({'prefix': {'size': 1, 'head': 'old'}})
+
+    def test_service_retries_a_moving_prefix_and_never_mixes_health_with_law(self):
+        snapshots = iter([{'size': 1, 'head': 'old'}, {'size': 2, 'head': 'new'}])
+        state = lambda prefix: {**prefix, 'domain': 'g', 'observations': {}, 'grants': {}, 'entities': {}}
+        service = TrustedService.__new__(TrustedService)
+        service._require = lambda contracts: 1
+        service.journal = SimpleNamespace(snapshot=lambda: state(next(snapshots)),
+                                          kernel=SimpleNamespace(law_of=lambda s: SimpleNamespace(digest='law', raw={})))
+        service.health = lambda **kwargs: {'head': 'new', 'size': 2, 'state': 'IN_PROGRESS'}
+        service.assessment = lambda: 'SELF_ASSESSED'
+        view = service.view()
+        self.assertEqual((view['prefix']['size'], view['health']['size']), (2, 2))
+
+    def test_service_fails_closed_if_prefix_keeps_moving(self):
+        service = TrustedService.__new__(TrustedService)
+        service._require = lambda contracts: 1
+        service.journal = SimpleNamespace(snapshot=lambda: {'size': 1, 'head': 'old'})
+        service.health = lambda **kwargs: {'head': 'new', 'size': 2}
+        with self.assertRaises(TrustUnavailable):
+            service.view()
+
+
 class ContextAndRoutes(unittest.TestCase):
     def view(self, target):
         law = {**FLOORS, 'targets': [target], 'conditions': {**FLOORS['conditions'],
@@ -116,6 +153,66 @@ class ContextAndRoutes(unittest.TestCase):
         return {**next(t for t in FLOORS['targets'] if t['id'] == 'ci'),
                 'id': 'client-specific', 'resource': 'repo:client:custom'}
 
+    def test_read_model_contains_all_law_and_keeps_candidate_links_uncertain(self):
+        view = self.view(self.target())
+        view['facts'] = [{'id': 'fact-1', 'resource': 'repo:client:custom',
+                          'property': 'status', 'status': 'red', 'author': 'scanner', 'at': 2}]
+        findings = {'repo:client:custom|status': {'status': 'red', 'details': ['client.py:7:rule']}}
+        model = ReadModel(view, findings, installed_routes(), lambda contracts: None,
+                          settings={'global': {'objective': 99.9}}, main='commit-1')
+        graph = model.graph()
+        self.assertEqual(graph['schema'], 'standard-read-model/v1')
+        for section in ('ops', 'conditions', 'resources', 'instruments', 'targets', 'obligations'):
+            self.assertTrue(any(node.startswith(f'law:{section}') for node in graph['declarations']))
+        self.assertIn('settings:main', graph['declarations'])
+        self.assertIn('floor0:F0-1', graph['declarations'])
+        self.assertIn('external:OWASP Agentic Top 10 2026', graph['declarations'])
+        self.assertEqual(graph['declarations']['external:OWASP Agentic Top 10 2026']['value']['mapping'],
+                         'not_established')
+        self.assertFalse(any(e['to'] == 'external:OWASP Agentic Top 10 2026' for e in graph['relations']))
+        code = next(e for e in graph['relations'] if e['relation'] == 'possible_code_location')
+        self.assertEqual((code['to'], code['status'], code['origin']),
+                         ('code:client.py:7', 'candidate', 'diagnostic_finding'))
+        self.assertTrue(any(e['relation'] == 'has_debt' and e['status'] == 'constitutional'
+                            for e in graph['relations']))
+        self.assertTrue(all(e['from'] in graph['declarations'] and e['to'] in graph['declarations']
+                            for e in graph['relations']))
+
+    def test_read_model_rejects_mixed_journal_prefixes(self):
+        view = self.view(self.target())
+        view['health'].update(head='other', size=1)
+        with self.assertRaisesRegex(ValueError, 'different journal prefixes'):
+            ReadModel(view)
+
+    def test_read_model_links_transitions_entities_and_constitutional_proof(self):
+        view = self.view(self.target())
+        view['transitions'] = {'repo:feature:r1/base/head': {'tests': 'green'}}
+        view['facts'] = [{'id': 'f1', 'resource': 'repo:feature:r1/base/head', 'property': 'tests',
+                          'status': 'green', 'author': 'scanner', 'at': 2}]
+        view['entities'] = {'build:request/r1': {'type': 'request', 'state': 'open'}}
+        view['health']['proven'] = [{'target': 'client-specific'}]
+        graph = ReadModel(view).graph()
+        self.assertIn('transition:repo:feature:r1/base/head|tests', graph['declarations'])
+        self.assertIn('entity:build:request/r1', graph['declarations'])
+        self.assertIn('proof:client-specific', graph['declarations'])
+        self.assertTrue(any(edge['from'] == 'fact:f1' and edge['relation'] == 'contributes_to'
+                            for edge in graph['relations']))
+        self.assertTrue(any(edge['to'] == 'proof:client-specific' and edge['status'] == 'constitutional'
+                            for edge in graph['relations']))
+
+    def test_stale_diagnostic_remains_visible_but_cannot_classify_current_debt(self):
+        view = self.view(self.target())
+        finding = {'repo:client:custom|status': {'status': 'red', 'details': ['client.py:7:rule'],
+                                                 'measure_ref': 'sha256:old', 'input_main': 'old-commit'}}
+        model = ReadModel(view, finding, main='current-commit')
+        row = model.targets()[0]
+        self.assertEqual((row['state'], row['diagnostic_alignment']), ('open', 'stale'))
+        self.assertEqual(next(e['status'] for e in model.graph()['relations']
+                              if e['relation'] == 'diagnosed_by'), 'stale')
+        finding['repo:client:custom|status'].update(input_main='current-commit', law_digest_at_read='law')
+        self.assertEqual(ReadModel(view, finding, main='current-commit').targets()[0]['diagnostic_alignment'],
+                         'same_declared_inputs')
+
     def test_unknown_target_gets_research_without_a_false_repair_route(self):
         view = self.view(self.target())
         plan = project(view, installed_routes(), lambda needs: None)
@@ -128,12 +225,144 @@ class ContextAndRoutes(unittest.TestCase):
     def test_shared_context_includes_client_conditions_and_missing_routes(self):
         view = self.view(self.target())
         view['grants'] = {'cap': {'holder': 'agent', 'state': 'active', 'resources': ['repo:client:*']}}
-        task = project(view, installed_routes(), lambda needs: None)['tasks'][0]
+        task = next(t for t in project(view, installed_routes(), lambda needs: None)['tasks']
+                    if t['need'] == 'repair')
         context = task_context(view, task)
         self.assertEqual(context['basis'], view['prefix'])
+        self.assertEqual(context['decision']['resource'], task['resource'])
+        self.assertIn('law_trace', context)
+        self.assertIn('proof_plan', context)
+        self.assertIn('autonomy', context)
         self.assertIn('client-custom-name', render_context(context))
         self.assertIn('Information only', render_context(context))
         self.assertEqual(context['grants'], view['grants'])
+        self.assertEqual(context['decision']['status'], 'needs_route')
+
+    def test_proof_plan_reads_admitted_status_and_keeps_operation_alternatives_separate(self):
+        view = self.view(self.target())
+        view['facts'] = [{'property': 'tests', 'status': 'green', 'resource': 'repo:client:custom'}]
+        task = {'id': 'repair', 'need': 'repair', 'op': 'remediate', 'resource': 'repo:client:custom',
+                'target': 'client-specific', 'state': 'AVAILABLE'}
+        packet = task_context(view, task)
+        options = {a['condition']: a for a in packet['proof_plan']['alternatives']}
+        self.assertEqual(packet['proof_plan']['observed']['tests'], 'green')
+        self.assertFalse(options['remediate-autonomous']['mismatch'])
+        self.assertIn('reproduced', {x['name'] for x in options['remediate-autonomous']['missing']})
+        self.assertIn('review', {x['name'] for x in options['remediate-reviewed']['missing']})
+
+    def test_a_diagnostic_green_cannot_override_an_open_constitutional_debt(self):
+        target = self.target()
+        self.assertEqual(target_state(target, {'status': target['expect']}, [{'state': 'open'}], set()), 'open')
+        self.assertEqual(target_state(target, {'status': 'red'}, [], {target['id']}), 'held')
+        view = self.view(target)
+        view['health']['proven'] = []
+        finding = {'repo:client:custom|status': {'status': target['expect'], 'details': []}}
+        rows = Installation.__new__(Installation).requirements(view, finding)
+        self.assertEqual(rows[0]['state'], 'pending')
+        self.assertTrue(rows[0]['diagnostic_conflict'])
+        view['health']['open'] = []
+        view['health']['proven'] = [{'target': target['id']}]
+        self.assertEqual(Installation.__new__(Installation).requirements(view, finding)[0]['state'], 'held')
+
+    def test_drift_controller_maps_gap_to_law_route_and_proof_without_authority(self):
+        view = self.view(self.target())
+        finding = {'repo:client:custom|status': {'status': 'red', 'details': ['client.py:7:rule']}}
+        dossier = gap_dossiers(view, finding, installed_routes(), lambda needs: None)[0]
+        self.assertEqual(dossier['id'], 'client-specific')
+        self.assertEqual(dossier['state'], 'gap')
+        self.assertEqual(dossier['law']['resource'], 'repo:client:custom')
+        self.assertEqual(dossier['drift']['where'], ['client.py:7:rule'])
+        self.assertEqual(dossier['route']['state'], 'NO_ROUTE')
+        self.assertIn('llm_reading', dossier['methods'])
+        self.assertIn('Dossier only', dossier['authority'])
+
+    def test_llm_drift_reading_is_a_proposal_only(self):
+        sent = []
+        class Research_:
+            def dialogue(self, prompt, tree, key):
+                sent.append((prompt, key))
+                return {'hypothesis': 'config drift', 'suggested_files': ['client.py'],
+                        'suggested_fix': 'inspect the failing branch', 'confidence': 'low',
+                        'requires_human': True, 'facts': ['not accepted']}
+        reply = propose_reading({'id': 'client-specific'}, object(), Research_())
+        self.assertEqual(sorted(reply), sorted(['hypothesis', 'suggested_files', 'suggested_fix',
+                                               'confidence', 'requires_human']))
+        self.assertNotIn('facts', reply)
+        self.assertIn('cannot certify evidence', sent[0][0])
+
+    def test_law_patrol_context_carries_full_law_and_weak_spots_without_a_drift_map_requirement(self):
+        view = self.view(self.target())
+        context = patrol_context(view, {}, installed_routes(), lambda needs: None, settings={'run': {'slo': 99.9}})
+        self.assertEqual(context['kind'], 'law-patrol')
+        self.assertEqual(context['mode'], 'wide')
+        self.assertEqual(context['effective_law'], view['law']['effective'])
+        self.assertEqual(context['system_settings'], {'run': {'slo': 99.9}})
+        self.assertNotIn('rules', context)
+        self.assertTrue(context['weak_spots'])
+        self.assertIn('Exploratory patrol only', context['authority'])
+
+    def test_law_patrol_llm_returns_suspicions_only(self):
+        sent = []
+        class Research_:
+            def dialogue(self, prompt, tree, key):
+                sent.append((prompt, key))
+                return {'suspicions': [{'law_ref': 'target:client-specific', 'surface': 'repo:client',
+                                        'why': 'custom parser is not covered', 'evidence_seen': ['client.py'],
+                                        'determinism_gap': 'no probe', 'needs': ['new instrument'],
+                                        'suggested_action': 'add a scanner', 'confidence': 'medium',
+                                        'facts': ['not allowed']}],
+                        'facts': ['not allowed']}
+        reply = propose_patrol({'focus': None, 'authority': 'Exploratory patrol only.'}, object(), Research_())
+        self.assertEqual(reply['suspicions'][0]['authority'], 'proposal_only')
+        self.assertNotIn('facts', reply['suspicions'][0])
+        self.assertIn('complete effective law', sent[0][0])
+
+    def test_agent_patrol_runs_read_only_and_records_its_advisory_result(self):
+        root = Path(tempfile.mkdtemp())
+        (root / 'store').mkdir()
+        calls = []
+        class Research_:
+            def dialogue(self, prompt, tree, *, key, allowed_actions):
+                calls.append((key, allowed_actions))
+                return {'suspicions': [{'law_ref': 'target:client-specific', 'why': 'possible blind spot',
+                                        'facts': ['forbidden']}]}
+        view = self.view(self.target())
+        cycle = SimpleNamespace(agent=SimpleNamespace(llm=object(), research=Research_(), store=root / 'store'),
+                                service=SimpleNamespace(view=lambda: view, qualify=lambda contracts: None),
+                                main=lambda: 'main-head', _findings=lambda: {}, routes=installed_routes(),
+                                settings=lambda: {'global': {'objective': 99.9}})
+        with patch('standard.autonomy.patrol.Snapshot', return_value=SimpleNamespace(commit='main-head')):
+            result = run_patrol(cycle)
+        self.assertEqual(calls[0][1], ('read', 'search'))
+        self.assertEqual(result['suspicions'][0]['authority'], 'proposal_only')
+        self.assertNotIn('facts', result['suspicions'][0])
+        self.assertEqual(len((root / 'patrol-results.jsonl').read_text().splitlines()), 1)
+
+    def test_law_surface_map_binds_law_to_code_evidence_and_unknowns_without_certification(self):
+        view = self.view(self.target())
+        finding = {'repo:client:custom|status': {'status': 'red', 'details': ['client.py:7:rule']}}
+        context = law_surface_map(view, finding, installed_routes(), lambda needs: None,
+                                  settings={'global': {'objective': 99.9}})
+        entry = context['entries'][0]
+        self.assertEqual(context['kind'], 'law-surface-map')
+        self.assertFalse(context['certification']['certifies'])
+        self.assertEqual(context['system_settings'], {'global': {'objective': 99.9}})
+        self.assertEqual(entry['law']['resource'], 'repo:client:custom')
+        self.assertEqual(entry['code']['locations'][0]['path'], 'client.py')
+        self.assertEqual(entry['code']['locations'][0]['line'], 7)
+        self.assertTrue(entry['unknowns'])
+        self.assertEqual(entry['human_validation']['status'], 'not_recorded')
+        self.assertFalse(entry['human_validation']['recording_available'])
+
+    def test_floor_measurement_and_framework_projection_have_one_mapping(self):
+        ci = next(t for t in FLOORS['targets'] if t['id'] == 'ci')
+        view = self.view(ci)
+        packet = law_surface_map(view, {}, installed_routes(), lambda needs: None)
+        entry = packet['entries'][0]
+        self.assertEqual(entry['instrumentation']['measurement']['method'], 'instruments.probes.PROBES[ci]')
+        self.assertEqual(entry['instrumentation']['instruments'], [])
+        self.assertEqual([p['framework'] for p in entry['compliance_projection']], projection_labels(ci))
+        self.assertEqual(packet['summary']['with_code_locations'], 0)
 
     def test_cycle_research_does_not_submit_or_close_the_obligation(self):
         view = self.view(self.target())
@@ -142,7 +371,7 @@ class ContextAndRoutes(unittest.TestCase):
             def qualify(self, contracts): return None
             def admit(self, statement): raise AssertionError('research cannot admit anything')
         class Agent_:
-            def investigate(self, current, task, base, findings):
+            def investigate(self, current, task, base, findings, settings=None):
                 return {'summary': 'propose an external verifier', 'proposal': {'files': {'tools/check.py': 'pass'}}}
         root = Path(tempfile.mkdtemp())
         engine = WorkEngine(root / 'work.db')
@@ -169,9 +398,13 @@ class ContextAndRoutes(unittest.TestCase):
             def intent(self, *args): return {'intent': 'example'}
         root = Path(tempfile.mkdtemp())
         cycle = Cycle(Service(), WorkEngine(root / 'work.db'), Agent_(), installed_routes(), clock=lambda: 2,
-                      main=lambda: 'base', state_path=root / 'proposals.json')
+                      main=lambda: 'base', state_path=root / 'proposals.json',
+                      settings=lambda: {'global': {'objective': 99.9}})
         self.assertEqual(cycle.run()['submitted']['ci'], 'admitted')
-        self.assertIn('client-custom-name', sent[0])
+        packet = json.loads(sent[0])
+        self.assertEqual(packet['schema'], 'standard-agent-context/v1')
+        self.assertIn('client-custom-name', packet['packet']['effective_law']['conditions'])
+        self.assertEqual(packet['packet']['system_settings']['global']['objective'], 99.9)
 
     def test_generic_precheck_does_not_claim_an_unmeasured_target_fixed(self):
         store, base = store_with(FILES)
@@ -214,6 +447,16 @@ class ResearchTools(unittest.TestCase):
         self.assertIn('return a + b', prompts[2])
         self.assertIn('agent notes only', research.notes.read_text())
         self.assertFalse((tree.repo.parent / 'tools/check.py').exists())
+
+    def test_patrol_research_refuses_fetch_even_when_the_model_requests_it(self):
+        research, tree, prompts = self.setup_research([
+            {'action': 'fetch', 'source': 'configured'}, {'suspicions': []}])
+        with patch.object(research, 'act') as act:
+            result = research.dialogue('patrol', tree, allowed_actions=('read', 'search'))
+        act.assert_not_called()
+        self.assertEqual(result, {'suspicions': []})
+        self.assertNotIn('experiment', prompts[0])
+        self.assertIn('this pass permits only read, search', prompts[1])
 
     def test_host_reads_unknown_urls_and_shells_are_refused(self):
         research, tree, _ = self.setup_research([])

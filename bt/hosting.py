@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-import tomllib
+import toml_compat as tomllib
 from pathlib import Path
 
 COMMAND = re.compile(r"(git-upload-pack|git-receive-pack) '/?([a-z0-9][a-z0-9._-]{0,63}?)(?:\.git)?/?'")

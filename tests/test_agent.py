@@ -182,7 +182,7 @@ class Memory_(unittest.TestCase):
     def test_the_cycle_abandons_after_the_budget_and_stops_trying(self):
         class Service:
             def view(self):
-                return {"law": {"effective": {"targets": [TARGETS["ci"]]}}, "health": {"as_of": 0},
+                return {"law": {"digest": "test-law", "effective": {"targets": [TARGETS["ci"]]}}, "health": {"as_of": 0},
                         "prefix": {"genesis": "g"}}
 
             def qualify(self, *a):
@@ -206,10 +206,10 @@ class Memory_(unittest.TestCase):
             def craft(self, *a, **kw):
                 raise AgentError("nothing passes")
 
-        import standard.autonomy.cycle as cycle_module
-        real = cycle_module.project
-        cycle_module.project = lambda view, routes, qualify, mode: {"state": "IN_PROGRESS", "tasks": []}
-        self.addCleanup(setattr, cycle_module, "project", real)              # never leak into the next test
+        from standard.autonomy.read_model import ReadModel
+        real = ReadModel.plan
+        ReadModel.plan = lambda self, mode="RUN": {"state": "IN_PROGRESS", "tasks": []}
+        self.addCleanup(setattr, ReadModel, "plan", real)              # never leak into the next test
         root = Path(tempfile.mkdtemp())
         cycle = Cycle(Service(), Engine(), Failing(), [], clock=lambda: 1, main=lambda: "b1",
                       state_path=root / "proposals.json", memory=Memory(root / "memory.json", budget=2))

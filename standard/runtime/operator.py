@@ -84,8 +84,11 @@ class Instruments:
                         "message": git(self.repo, "log", "-1", "--format=%B", head)})
         return out
 
-    def subjects(self) -> dict:
-        state, view = self.service.journal.snapshot(), self.service.view()
+    def subjects(self, view=None) -> dict:
+        view = view or self.service.view()
+        state = self.service.journal.snapshot()
+        if (state["size"], state["head"]) != (view["prefix"]["size"], view["prefix"]["head"]):
+            raise RuntimeError("instrument plan: journal prefix changed during subject capture")
         return {"main": self._main(), "anchor": self.anchor, "now": self.instrument.clock(),
                 "targets": view["law"]["effective"]["targets"], "install": self.install,
                 "proposals": self._commits(self.proposals, "refs/standard/proposals/*") if self.proposals else [],
@@ -110,7 +113,7 @@ class Instruments:
         self.boundary.capture(me, self.host.observe(self.sources, self.fetch))
         view = self.service.view()
         domain, law = view["prefix"]["genesis"], view["law"]["effective"]
-        plan = self.boundary.observe(self.host, me, "plan", {"subjects": {"value": self.subjects()}}, cache=False)
+        plan = self.boundary.observe(self.host, me, "plan", {"subjects": {"value": self.subjects(view)}}, cache=False)
         if "error" in plan:
             raise RuntimeError(f"plan: {plan['error']}")
         admitted, errors, refused = 0, {}, []
@@ -121,17 +124,21 @@ class Instruments:
             if "error" in out:
                 errors[job["job"]] = out["error"]
                 continue
+            main_input = job["inputs"].get("main", {})
+            provenance = {"measure_ref": out["ref"],
+                          "input_main": main_input.get("commit") or main_input.get("value"),
+                          "law_digest_at_read": view["law"]["digest"]}
             refused += [f"{job['job']}: {r} {p} {st}" for r, p, st, _ in out["refused"]]
             if live:
                 extra = out["extra"]
                 self.served, self.fetch, self.canary_percent = extra["served"], extra["fetch"], extra["canary_percent"]
                 self.instrument.findings.update({
-                    "run:components": {"status": "", "details": extra["components"]},
-                    "run:slos": {"status": "", "details": extra["slos"]},
-                    "run:probes": {"status": str(len(extra["probes"])), "details": extra["probes"]},
-                    "run:sources:all|coverage": {"status": "", "details": extra["silent"]}})
+                    "run:components": {"status": "", "details": extra["components"], **provenance},
+                    "run:slos": {"status": "", "details": extra["slos"], **provenance},
+                    "run:probes": {"status": str(len(extra["probes"])), "details": extra["probes"], **provenance},
+                    "run:sources:all|coverage": {"status": "", "details": extra["silent"], **provenance}})
             for resource, prop, status, details in out["facts"]:
-                self.instrument.findings[f"{resource}|{prop}"] = {"status": status, "details": details}
+                self.instrument.findings[f"{resource}|{prop}"] = {"status": status, "details": details, **provenance}
                 if self._due(law, resource, prop, status):
                     self.service.admit(self.instrument.observation(domain, resource, prop, status, out["ref"],
                                                                    out["method"]))

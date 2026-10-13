@@ -16,7 +16,7 @@ import os
 import sys
 import threading
 import time
-import tomllib
+import toml_compat as tomllib
 import uuid
 from pathlib import Path
 

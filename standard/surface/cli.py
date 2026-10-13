@@ -3,6 +3,10 @@
     python -m standard.surface [--socket PATH] status            the verdict and what is known at the current prefix
     python -m standard.surface [--socket PATH] tasks             the work the law asks for, most urgent first
     python -m standard.surface [--socket PATH] context TASK_ID   one task: its debt, its law, the T its routes need
+    python -m standard.surface [--socket PATH] drift [TARGET]    gap/drift dossiers: law, finding, route and proof
+    python -m standard.surface [--socket PATH] patrol [FOCUS]    exploratory law-patrol context, wide or targeted
+    python -m standard.surface [--socket PATH] law-surface [FOCUS] map law to code, instruments and unknowns
+    python -m standard.surface [--socket PATH] read-model [--repo PATH] whole derived reading graph
     python -m standard.surface [--socket PATH] law SECTION/ID    one declaration of the effective law (floors or client)
     python -m standard.surface review TARGET BASE HEAD --identity ID --key FILE --under GRANT [--changes-requested]
     python -m standard.surface attest TARGET --identity ID --key FILE --under GRANT
@@ -12,8 +16,9 @@
                                                     decide run:release:all/FROM/TO approved
     python -m standard.surface dossier HEAD --repo PATH          what a reviewer reads before signing: the agent's dossier
 
-`--findings FILE` adds the instruments' findings (where the gap is) to `context`; `--memory FILE` adds to `tasks` the
-obligations the agent gave up on. Both are information, never facts.
+`--findings FILE` adds the instruments' findings (where the gap is) to `context`; `--settings FILE` adds the system
+settings document; `--memory FILE` adds to `tasks` the obligations the agent gave up on. All are information, never
+facts.
 
 Plain text bound to the prefix and the law digest. It reads through the admission gateway only: nothing printed
 here is a permission, and a signed envelope is the only thing an agent can submit.
@@ -24,9 +29,14 @@ import argparse
 import json
 import os
 import sys
+from typing import Optional
 
-from standard.autonomy.projection import installed_routes, project
+from standard.autonomy.projection import installed_routes
 from standard.autonomy.context import render_context, task_context
+from standard.autonomy.drift_map import gap_dossiers
+from standard.autonomy.law_surface import law_surface_map
+from standard.autonomy.patrol import patrol_context
+from standard.autonomy.read_model import ReadModel
 from bt.gateway import GatewayClient
 
 DEFAULT_SOCKET = os.environ.get("STANDARD_SOCKET", "/run/standard/admission.sock")
@@ -57,11 +67,12 @@ def tasks(view: dict, plan: dict) -> str:
     return "\n".join(lines) if plan["tasks"] else lines[0] + "\nno open work"
 
 
-def context(view: dict, plan: dict, task_id: str, findings: dict | None = None) -> str:
+def context(view: dict, plan: dict, task_id: str, findings: dict | None = None, settings: dict | None = None,
+            model: ReadModel | None = None) -> str:
     task = next((t for t in plan["tasks"] if t["id"] == task_id), None)
     if task is None:
         return f"no task {task_id} at this prefix"
-    return render_context(task_context(view, task, findings))
+    return render_context(task_context(view, task, findings, settings=settings, model=model))
 
 
 def dossier(repo, head: str) -> str:
@@ -89,11 +100,31 @@ def declaration(view: dict, ref: str) -> str:
     return _header(view) + "\n" + (json.dumps(value, indent=2, sort_keys=True) if value is not None else f"no {ref}")
 
 
+def drift(view: dict, routes, qualify, findings: dict, settings: dict, ref: Optional[str] = None,
+          model: ReadModel | None = None) -> str:
+    dossiers = gap_dossiers(view, findings, routes, qualify, settings=settings, model=model)
+    if ref:
+        dossiers = [d for d in dossiers if d["id"] == ref]
+    return _header(view) + "\n" + json.dumps(dossiers, indent=2, sort_keys=True)
+
+
+def patrol(view: dict, routes, qualify, findings: dict, settings: dict, ref: Optional[str] = None,
+           model: ReadModel | None = None) -> str:
+    context = patrol_context(view, findings, routes, qualify, settings=settings, focus=ref, model=model)
+    return _header(view) + "\n" + json.dumps(context, indent=2, sort_keys=True)
+
+
+def law_surface(view: dict, routes, qualify, findings: dict, settings: dict, ref: Optional[str] = None,
+                model: ReadModel | None = None) -> str:
+    context = law_surface_map(view, findings, routes, qualify, settings=settings, focus=ref, model=model)
+    return _header(view) + "\n" + json.dumps(context, indent=2, sort_keys=True)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m standard.surface")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
-    parser.add_argument("command", choices=("status", "tasks", "context", "law", "review", "attest", "dossier", "set",
-                                                       "decide"))
+    parser.add_argument("command", choices=("status", "tasks", "context", "drift", "patrol", "law-surface", "read-model", "law",
+                                            "review", "attest", "dossier", "set", "decide"))
     parser.add_argument("ref", nargs="?")
     parser.add_argument("base", nargs="?")
     parser.add_argument("head", nargs="?")
@@ -102,6 +133,7 @@ def main(argv=None) -> int:
     parser.add_argument("--under")
     parser.add_argument("--changes-requested", action="store_true")
     parser.add_argument("--findings")
+    parser.add_argument("--settings")
     parser.add_argument("--memory")
     parser.add_argument("--repo")
     args = parser.parse_args(argv)
@@ -137,14 +169,35 @@ def main(argv=None) -> int:
             print(f"refused: {exc}")
             return 1
         return 0
-    plan = project(view, DEFAULT_ROUTES, client.qualify)
+    findings = json.loads(open(args.findings).read()) if args.findings else {}
+    settings = json.loads(open(args.settings).read()) if args.settings else {}
+    code_index = None
+    if args.command == "read-model" and args.repo:
+        from instruments.tree import Snapshot
+        from standard.autonomy.repomap import RepoMap
+        import subprocess
+        main = subprocess.run(["git", "-C", args.repo, "rev-parse", "main"], check=True,
+                              capture_output=True, text=True).stdout.strip()
+        code_index = RepoMap(Snapshot(args.repo, main))
+    else:
+        main = None
+    model = ReadModel(view, findings, DEFAULT_ROUTES, client.qualify, settings=settings,
+                      main=main, code_index=code_index)
+    plan = model.plan()
     if args.command == "status":
         print(status(view))
     elif args.command == "tasks":
         print(tasks(view, plan) + (abandoned(json.loads(open(args.memory).read())) if args.memory else ""))
     elif args.command == "context":
-        print(context(view, plan, args.ref or (plan["tasks"][0]["id"] if plan["tasks"] else ""),
-                      json.loads(open(args.findings).read()) if args.findings else None))
+        print(context(view, plan, args.ref or (plan["tasks"][0]["id"] if plan["tasks"] else ""), findings, settings, model))
+    elif args.command == "drift":
+        print(drift(view, DEFAULT_ROUTES, client.qualify, findings, settings, args.ref, model))
+    elif args.command == "patrol":
+        print(patrol(view, DEFAULT_ROUTES, client.qualify, findings, settings, args.ref, model))
+    elif args.command == "law-surface":
+        print(law_surface(view, DEFAULT_ROUTES, client.qualify, findings, settings, args.ref, model))
+    elif args.command == "read-model":
+        print(json.dumps(model.graph(), indent=2, sort_keys=True))
     else:
         print(declaration(view, args.ref or ""))
     return 0

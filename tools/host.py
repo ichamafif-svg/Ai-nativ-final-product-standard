@@ -33,7 +33,7 @@ def git(*args, user=None) -> str:
 
 
 def load(path: Path) -> dict:
-    import tomllib
+    import toml_compat as tomllib
     return tomllib.loads(path.read_text()) if path.exists() else {"repositories": {}}
 
 

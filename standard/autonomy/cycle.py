@@ -14,14 +14,15 @@ from dataclasses import replace
 
 from .agent import Agent, AgentError, WRITE_SCOPE
 from .memory import Memory
-from .projection import Route, project
-from .context import render_context, task_context
+from .projection import Route
+from .context import model_packet, task_context
+from .read_model import ReadModel
 from .work import WorkEngine
 
 
 class Cycle:
     def __init__(self, service, engine: WorkEngine, agent: Agent, routes, *, clock, main, state_path,
-                 backoff_ms: int = 60_000, findings=None, memory: Memory | None = None):
+                 backoff_ms: int = 60_000, findings=None, memory: Memory | None = None, settings=lambda: {}):
         """main(): the maintained repository's current main commit (read-only). state_path: U's own notes.
         findings: the instruments' published findings (information, not facts). memory: the agent's attempts."""
         self.service, self.engine, self.agent, self.routes = service, engine, agent, tuple(routes)
@@ -35,6 +36,7 @@ class Cycle:
         self.clock, self.main, self.notes, self.backoff_ms = clock, main, Path(state_path), backoff_ms
         self.findings_path = Path(findings) if findings else None
         self.memory = memory or Memory(self.notes.with_name("memory.json"))
+        self.settings = settings
 
     def _proposals(self) -> dict:
         return json.loads(self.notes.read_text()) if self.notes.exists() else {}
@@ -50,11 +52,12 @@ class Cycle:
 
     def run(self, mode: str = "RUN") -> dict:
         view = self.service.view()
-        plan = project(view, self.routes, self.service.qualify, mode=mode)
+        findings, settings = self._findings(), self.settings()
+        model = ReadModel(view, findings, self.routes, self.service.qualify, settings=settings, main=self.main())
+        plan = model.plan(mode)
         self.engine.sync(plan)
         law = view["law"]["effective"]
         targets = {t["id"]: t for t in law["targets"]}
-        findings = self._findings()
         proposals, report = self._proposals(), {"state": plan["state"], "crafted": {}, "submitted": {}, "research": {}}
         now = self.clock()
         while (task := self.engine.claim(mode=mode, now=now, needs=("repair", "investigate"))) is not None:
@@ -66,7 +69,7 @@ class Cycle:
                     if self.memory.exhausted(memory_key, base):
                         report["research"][task["id"]] = {"blocked": "research budget exhausted; operator review needed"}
                     else:
-                        report["research"][task["id"]] = self.agent.investigate(view, task, base, findings)
+                        report["research"][task["id"]] = self.agent.investigate(view, task, base, findings, settings)
                         self.memory.record(memory_key, at=now, base=base, outcome="research",
                                            why=str(report["research"][task["id"]].get("summary", "proposal recorded")))
                 except (AgentError, OSError, ValueError) as exc:
@@ -90,9 +93,10 @@ class Cycle:
                     if key not in proposals:
                         head, route = self.agent.craft(tid, base, targets=targets, lessons=self.memory.lessons(tid),
                                                        finding=findings.get(f"{target['resource']}|{target['property']}"),
-                                                       law_text=render_context(task_context(view, {**task,
+                                                       law_text=model_packet(task_context(view, {**task,
                                                            "need": task.get("need", "repair"),
-                                                           "resource": target["resource"]}, findings)))
+                                                           "resource": target["resource"]}, findings,
+                                                           settings=settings, model=model)))
                         proposals[key] = {"target": tid, "area": area, "item": item, "base": base,
                                           "head": head, "route": route, "submitted": False}
                         report["crafted"][tid] = proposals[key]

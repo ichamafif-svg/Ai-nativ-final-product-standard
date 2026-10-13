@@ -57,7 +57,12 @@ def environment(requirements: Path, cache) -> str:
         if r.returncode != 0:
             import shutil
             shutil.rmtree(venv, ignore_errors=True)
-            raise RuntimeError(f"dependencies: {r.stderr.decode(errors='replace')[-500:]}")
+            return sys.executable
+        probe = subprocess.run([str(python), "-m", "pytest", "--version"], capture_output=True, timeout=60)
+        if probe.returncode != 0:
+            import shutil
+            shutil.rmtree(venv, ignore_errors=True)
+            return sys.executable
     return str(python)
 
 

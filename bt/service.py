@@ -75,7 +75,13 @@ class TrustedService:
     def view(self) -> dict:
         """The law and its debts at one checked prefix: data for U, never a permission."""
         now = self._require(TIMED)
-        state = self.journal.snapshot()
+        for _ in range(3):
+            state = self.journal.snapshot()
+            health = self.health(required_at=now)
+            if (health["size"], health["head"]) == (state["size"], state["head"]):
+                break
+        else:
+            raise TrustUnavailable("VIEW.PREFIX_CHANGED")
         law = self.journal.kernel.law_of(state)
         transitions = {}                                    # facts on exact transitions: tests, review, regressions…
         for key, ob in state["observations"].items():
@@ -83,7 +89,7 @@ class TrustedService:
             if "/" in resource:
                 transitions.setdefault(resource, {})[prop] = ob["status"]
         return {"prefix": {"size": state["size"], "head": state["head"], "genesis": state["domain"]},
-                "law": {"digest": law.digest, "effective": law.raw}, "health": self.health(required_at=now),
+                "law": {"digest": law.digest, "effective": law.raw}, "health": health,
                 "assessment": self.assessment(), "transitions": transitions,
                 # Public admitted declarations only: visibility of rights is never permission to exercise them.
                 "grants": state["grants"],

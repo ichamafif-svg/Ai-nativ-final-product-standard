@@ -56,6 +56,7 @@ nav a[aria-current="page"] { color: var(--ink); background: var(--surface); box-
 .env { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; }
 .env.run { background: var(--held-soft); color: var(--held); }
 .env.build { background: var(--accent-soft); color: var(--accent); }
+.env.standard { background: var(--ink); color: var(--canvas); }
 .spacer { flex: 1; }
 .sha { font: 12.5px var(--mono); color: var(--ink-2); }
 
@@ -74,6 +75,40 @@ section { margin-top: 44px; }
 .beacon.gap { background: var(--gap); box-shadow: 0 0 0 6px var(--gap-soft); }
 .beacon.esc { background: var(--esc); box-shadow: 0 0 0 6px var(--esc-soft); }
 .hero h1 { font-size: 40px; }
+
+/* ---- Standard level ---- */
+.stdhead { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 24px; align-items: start; }
+.standard-score { padding: 18px 20px; background: var(--surface); border-radius: var(--r-lg); box-shadow: 0 0 0 1px var(--hair); }
+.standard-score b { display: block; font-size: 42px; line-height: 1; letter-spacing: -0.02em; }
+.standard-score small { font-size: 20px; color: var(--ink-2); }
+.standard-score span { display: block; margin-top: 8px; color: var(--ink-2); font-size: 13px; }
+.stdgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.stdpanel { padding: 22px 24px; background: var(--surface); border-radius: var(--r-lg); box-shadow: 0 0 0 1px var(--hair); }
+.stdlist { display: flex; flex-direction: column; gap: 1px; }
+.stdlist a { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 4px 14px; align-items: baseline;
+  padding: 10px 0; border-top: 1px solid var(--hair); color: var(--ink); text-decoration: none; }
+.stdlist a:first-child { border-top: 0; }
+.stdlist b { font-weight: 600; }
+.stdlist small { grid-column: 2; color: var(--ink-2); font-size: 12.5px; }
+.stdnums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.stdnums a { padding: 14px 16px; border-radius: var(--r-md); background: var(--canvas); color: var(--ink);
+  text-decoration: none; box-shadow: inset 0 0 0 1px var(--hair); }
+.stdnums b { display: block; font-size: 26px; line-height: 1; }
+.stdnums span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--ink-2); }
+.ladder { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.ladder li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 4px 12px; padding: 9px 0; border-top: 1px solid var(--hair); }
+.ladder li:first-child { border-top: 0; }
+.ladder li::before { counter-increment: step; content: counter(step); grid-row: 1 / span 2; width: 22px; height: 22px;
+  display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: var(--canvas); font-size: 12px; font-weight: 700; }
+.ladder b { font-weight: 600; }
+.ladder span { color: var(--ink-2); font-size: 13px; }
+.auditread { display: flex; flex-direction: column; gap: 10px; }
+.auditread a { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 8px; padding: 13px 0 17px; color: var(--ink);
+  text-decoration: none; border-top: 1px solid var(--hair); overflow: hidden; }
+.auditread a:first-child { border-top: 0; }
+.auditread b { min-width: 0; overflow-wrap: anywhere; }
+.auditread span { color: var(--ink-2); font-size: 13px; text-align: right; }
+.auditread i { position: absolute; left: 0; bottom: 7px; height: 4px; border-radius: 2px; background: var(--held); }
 
 /* ---- the requirement map: the one memorable thing ---- */
 .map { display: grid; grid-template-columns: 220px 1fr auto; gap: 14px 24px; align-items: center; margin-top: 28px;
@@ -115,6 +150,7 @@ section { margin-top: 44px; }
 /* ---- buttons ---- */
 .btn { border: 0; cursor: pointer; text-decoration: none; display: inline-block; padding: 8px 14px; border-radius: 980px; font-size: 14px; font-weight: 500;
   background: var(--idle-soft); color: var(--ink); white-space: nowrap; }
+.btn.tiny { padding: 5px 10px; font-size: 12.5px; }
 .btn:hover { background: var(--hair); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); }
 .btn.primary:hover { filter: brightness(1.08); }
@@ -184,6 +220,7 @@ input[type=text] { width: 100%; max-width: 360px; padding: 9px 12px; border-radi
   .side nav { display: flex; flex-wrap: wrap; gap: 2px; } .group, .side-foot { display: none; }
   .top, main { padding-left: 16px; padding-right: 16px; }
   .cols { grid-template-columns: 1fr; }
+  .stdhead, .stdgrid { grid-template-columns: 1fr; }
   .map { grid-template-columns: 1fr; } .map .tally { text-align: left; }
   .hero h1 { font-size: 30px; }
 }
@@ -313,6 +350,7 @@ input.num[type=text] { width: 220px; } input.num.sm { width: 84px; }
 .switch input:checked + span { background: var(--held); } .switch input:checked + span::after { transform: translateX(18px); }
 .switch input:disabled + span { opacity: .5; cursor: not-allowed; }
 .decide { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 16px 20px; border-top: 1px solid var(--hair); }
+.decide.compact { padding: 12px 0 0; margin-top: 12px; }
 @media (max-width: 700px) { .set { grid-template-columns: 1fr; } .set .sv { justify-content: flex-start; } }
 .table.comps { table-layout: auto; } .table.comps td { white-space: nowrap; } .table.comps td:first-child { white-space: normal; }
 .tablewrap { overflow-x: auto; }
@@ -353,3 +391,14 @@ h3 { font-size: 15px; margin: 22px 0 10px; }
 textarea.code { width: 100%; min-height: 220px; font: 12.5px/1.55 var(--mono); padding: 12px 14px; border-radius: var(--r-md);
   border: 1px solid var(--hair-2); background: var(--surface); color: var(--ink); resize: vertical; }
 textarea.code.sm { min-height: 90px; font-family: var(--font); font-size: 14px; }
+
+/* agent context */
+.ctxgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+.ctxcard { margin: 0; padding: 16px 18px; border-radius: var(--r-md); background: var(--canvas); box-shadow: inset 0 0 0 1px var(--hair); }
+.ctxcard.wide { grid-column: 1 / -1; }
+.ctxcard h3, .ctxdoc h3 { margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
+.ctxcard pre { max-height: 260px; background: var(--surface); }
+.ctxbullets { margin: 0 0 14px; padding-left: 18px; color: var(--ink-2); font-size: 13.5px; }
+.ctxbullets li { margin: 4px 0; }
+.ctxdoc { margin-top: 16px; }
+@media (max-width: 800px) { .ctxgrid { grid-template-columns: 1fr; } }

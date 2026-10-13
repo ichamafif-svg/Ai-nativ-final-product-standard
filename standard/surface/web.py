@@ -18,14 +18,18 @@ import re
 import subprocess
 import sys
 import time
-import tomllib
+import toml_compat as tomllib
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from standard.autonomy.projection import installed_routes, project
+from standard.autonomy.projection import installed_routes
 from standard.autonomy.context import task_context
+from standard.autonomy.drift_map import gap_dossiers
+from standard.autonomy.read_model import ReadModel
+from standard.autonomy.law_surface import law_surface_map
+from standard.surface.contexts import agent_context as build_agent_context
 from instruments.data import EMPTY
 from bt.gateway import GatewayClient
 from instruments.recipes import recipes_for
@@ -91,48 +95,68 @@ class Installation:
         self.products = sorted(_toml(hosted).get("repositories", {})) if hosted else [self.product]
 
     # ---- the product, whatever it is: requirements by domain and their state ---------------------------------
-    def requirements(self, view: dict, findings: dict) -> list:
+    def requirements(self, view: dict, findings: dict, model: ReadModel | None = None) -> list:
         """One line per requirement of the effective law. held: proven or measured as expected; gap: measured off;
         unmeasured: no instrument could cover it here; attest: waits for a person's attestation; escalated: past due."""
-        health = view["health"]
-        proven = {p.get("target") for p in health["proven"]}
-        escalated = {e.get("target") for e in health["escalated"]}
-        opened = {o.get("target") for o in health["open"]}
+        model = model or ReadModel(view, findings)
         autonomous = set(recipes_for(EMPTY))
         out = []
-        for t in view["law"]["effective"]["targets"]:
-            f = findings.get(f"{t['resource']}|{t['property']}")
-            status = f["status"] if f else None
-            if t["id"] in escalated:
-                state = "escalated"
-            elif status == t["expect"] or (t["id"] in proven and t["id"] not in opened):
-                state = "held"
-            elif status and status.startswith("uncovered"):
-                state = "unmeasured"
-            elif status:
-                state = "gap"
-            elif t["resource"].startswith("org:") or t.get("human"):
-                state = "attest"
-            else:
-                state = "pending"
+        for row in model.targets():
+            t, f = row["target"], row["finding"]
+            status = f.get("status")
+            constitutional = row["state"]
+            state = {"attestation_due": "attest", "unknown": "pending", "open": "pending"}.get(
+                constitutional, constitutional)
             who = ("people" if t.get("human") or t["resource"].startswith("org:") else
                    "agent" if t["id"] in autonomous else "review" if t.get("repair") == "remediate" else "agent")
             out.append({"id": t["id"], "domain": t["resource"].split(":")[1], "resource": t["resource"],
                         "property": t["property"], "expect": t["expect"], "measured": status, "state": state,
+                        "diagnostic_conflict": row["diagnostic_conflict"],
+                        "diagnostic_alignment": row["diagnostic_alignment"],
+                        "projections": row["projections"],
                         "who": who, "where": [d.splitlines()[0][:200] for d in (f or {}).get("details", [])[:8]]})
         return out
 
     # ---- RUN: the product in production, maintained -----------------------------------------------------------
     def context(self, task_id: str) -> dict:
-        view = self.client.view()
-        plan = project(view, self.routes, self.client.qualify, mode="RUN")
+        view, findings = self.client.view(), _json(self.findings)
+        main = git(self.repo, "rev-parse", "main").strip()
+        model = self.read_model(view, findings, main)
+        plan = model.plan()
         task = next((t for t in plan["tasks"] if t["id"] == task_id), None)
         if task is None:
             raise ValueError("no task at this prefix")
-        return task_context(view, task, _json(self.findings))
+        return task_context(view, task, model=model)
 
-    def run(self, view: dict, findings: dict) -> dict:
-        plan = project(view, self.routes, self.client.qualify, mode="RUN")
+    def agent_context(self, kind: str, ident: str) -> dict:
+        """A human-readable dossier for the same context an agent works under. It is not authority."""
+        view, findings = self.client.view(), _json(self.findings)
+        main = git(self.repo, "rev-parse", "main").strip()
+        model = self.read_model(view, findings, main)
+        return build_agent_context(kind, ident, view=view, findings=findings, settings=model.settings,
+                                   routes=self.routes, qualify=self.client.qualify, requests=self.requests,
+                                   main=main, inputs=model.basis["inputs"], model=model)
+
+    def read_model(self, view: dict, findings: dict, main: str) -> ReadModel:
+        return ReadModel(view, findings, self.routes, self.client.qualify, settings=self.settings_doc(main),
+                         main=main, inputs=self.surface_inputs(main, findings))
+
+    def surface_inputs(self, main: str, findings: dict) -> dict:
+        import hashlib
+        content = json.dumps(findings, sort_keys=True, separators=(",", ":"), default=str).encode()
+        return {"findings": {"kind": "diagnostic_document", "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
+                             "association_to_prefix": "unverified"},
+                "settings": {"kind": "repository_file", "commit": main, "path": "standard/rules.json"}}
+
+    def law_surface(self, focus: str | None = None) -> dict:
+        view, findings = self.client.view(), _json(self.findings)
+        main = git(self.repo, "rev-parse", "main").strip()
+        model = self.read_model(view, findings, main)
+        return law_surface_map(view, model=model, focus=focus or None)
+
+    def run(self, view: dict, findings: dict, model: ReadModel | None = None) -> dict:
+        model = model or ReadModel(view, findings, self.routes, self.client.qualify)
+        plan = model.plan()
         targets = {t["id"]: t for t in view["law"]["effective"]["targets"]}
         repairs = []
         for p in _json(self.proposals).values():
@@ -144,11 +168,14 @@ class Installation:
                             "awaiting_review": p["route"] == "review" and facts.get("tests") == "green"
                             and facts.get("review") != "approved"})
         gaps = []
-        for t in targets.values():
-            f = findings.get(f"{t['resource']}|{t['property']}")
-            if f and f["status"] != t["expect"]:
-                gaps.append({"target": t["id"], "resource": t["resource"], "expect": t["expect"],
-                             "status": f["status"], "where": [d.splitlines()[0][:200] for d in f["details"][:8]],
+        for row in model.targets():
+            t, f = row["target"], row["finding"]
+            if f and f.get("status") != t["expect"]:
+                gaps.append({"kind": "diagnostic_candidate", "source": "published_findings",
+                             "authority": "informational; constitutional health decides debt and proof",
+                             "target": t["id"], "resource": t["resource"], "expect": t["expect"],
+                             "status": f["status"], "diagnostic_alignment": row["diagnostic_alignment"],
+                             "where": [d.splitlines()[0][:200] for d in f.get("details", [])[:8]],
                              "autonomous": t.get("repair") == "remediate" and t["id"] in ("sbom", "vulns", "actions"),
                              "human": bool(t.get("human"))})
         abandoned = [{"target": k, "dossier": v["abandoned"]["dossier"], "base": v["abandoned"]["base"]}
@@ -228,13 +255,15 @@ class Installation:
         import hashlib
         doc = body.get("document")
         if not isinstance(doc, dict):
-            raise ValueError("a rules document is a JSON object")
+            raise ValueError("a system settings document is a JSON object")
         doc = {k: v for k, v in doc.items() if k in ("global", "components", "slos", "probes")}
         data = (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()
         digest = hashlib.sha256(data).hexdigest()
         self.requests.mkdir(parents=True, exist_ok=True)
         (self.requests / digest).write_bytes(data)
         return {"digest": f"sha256:{digest}", "base": git(self.repo, "rev-parse", "main").strip()}
+
+    store_system_settings = store_rules
 
     def store_request(self, body: dict) -> dict:
         """Keep a request's specification and contract by digest; the person then signs the digests."""
@@ -258,6 +287,7 @@ class Installation:
         view = self.client.view()
         findings = _json(self.findings)
         main = git(self.repo, "rev-parse", "main").strip()
+        model = self.read_model(view, findings, main)
         law = view["law"]["effective"]
         health = view["health"]
         return {
@@ -266,9 +296,14 @@ class Installation:
                        "proven": len(health["proven"]), "as_of": health["as_of"]},
             "main": main, "history": self.history(),
             "product": self.product, "products": self.products,
-            "requirements": (reqs := self.requirements(view, findings)),
+            "requirements": (reqs := self.requirements(view, findings, model)),
+            "external_references": [{"label": name.removeprefix("external:"), "mapping": spec["value"]["mapping"]}
+                                    for name, spec in model.graph()["declarations"].items()
+                                    if name.startswith("external:")],
             "autonomy": self.autonomy(reqs),
-            "run": self.run(view, findings), "build": self.build(view, findings, main),
+            "drift": gap_dossiers(view, model=model),
+            "law_surface": law_surface_map(view, model=model)["summary"],
+            "run": self.run(view, findings, model), "build": self.build(view, findings, main),
             "law": {"targets": [{k: t.get(k) for k in ("id", "resource", "property", "expect", "coverage", "repair",
                                                         "human", "due_ms")} for t in law["targets"]],
                     "conditions": law["conditions"], "ops": sorted(law["ops"])},
@@ -351,6 +386,8 @@ class Installation:
         except ValueError:
             doc = {}
         return doc if isinstance(doc, dict) else {}
+
+    settings_doc = rules_doc
 
     def settle(self, view: dict | None = None):
         """The engineers' settings as main carries them, and the signed silences (D36), so that the console judges
@@ -626,6 +663,12 @@ def handler(inst: Installation):
                 if route == "/api/context":
                     query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                     return self._ok(inst.context(query.get("task", [""])[0]))
+                if route == "/api/agent-context":
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    return self._ok(inst.agent_context(query.get("kind", [""])[0], query.get("id", [""])[0]))
+                if route == "/api/law-surface":
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    return self._ok(inst.law_surface(query.get("focus", [""])[0]))
                 if route == "/api/alerts":
                     return self._ok(inst.alerts())
                 if route == "/api/settings":
@@ -650,17 +693,18 @@ def handler(inst: Installation):
                 return self._ok({"error": f"{type(exc).__name__}: {exc}"[:400]}, HTTPStatus.SERVICE_UNAVAILABLE)
 
         def do_POST(self):
-            if self.path not in ("/api/admit", "/api/requests", "/api/rules"):
+            if self.path not in ("/api/admit", "/api/requests", "/api/rules", "/api/system-settings"):
                 return self._ok({"error": "not found"}, HTTPStatus.NOT_FOUND)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self._ok({"error": "application/json only"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
             size = int(self.headers.get("Content-Length") or 0)
             if not 0 < size <= MAX_BODY:
                 return self._ok({"error": "bad length"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-            if self.path in ("/api/requests", "/api/rules"):   # D34, D35: store, nothing signed or admitted here
+            if self.path in ("/api/requests", "/api/rules", "/api/system-settings"):   # D34, D35: store only
                 try:
                     body = json.loads(self.rfile.read(size))
-                    return self._ok(inst.store_request(body) if self.path == "/api/requests" else inst.store_rules(body))
+                    return self._ok(inst.store_request(body) if self.path == "/api/requests"
+                                    else inst.store_system_settings(body))
                 except (ValueError, OSError) as exc:
                     return self._ok({"error": str(exc)[:300]}, HTTPStatus.BAD_REQUEST)
             try:

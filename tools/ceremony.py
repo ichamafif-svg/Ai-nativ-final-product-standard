@@ -177,13 +177,14 @@ path = "admission.sock"
 key = "agent/agent.key"
 store = "agent/store"
 {data_section}''')
-    print(f"constituted {d}: genesis {domain}. Activate the grants after {time.ctime((journal.snapshot()["last_at"] + 3_600_000) / 1000)}:")
+    activate_after = time.ctime((journal.snapshot()["last_at"] + 3_600_000) / 1000)
+    print(f"constituted {d}: genesis {domain}. Activate the grants after {activate_after}:")
     print(f"    python tools/ceremony.py activate {d}")
 
 
 def activate(args) -> None:
     d = Path(args.dir).resolve()
-    import tomllib
+    import toml_compat as tomllib
     c = tomllib.loads((d / "standard.toml").read_text())
     kernel = Kernel(RELEASE, code_digest())
     journal = Journal(d / c["ledger"]["journal"], kernel, PinStore(Path(c["ledger"]["pins"])), c["ledger"]["genesis"])
@@ -207,7 +208,7 @@ def separate(args) -> None:
     every key but the agent's; the agent owns only DIR/agent and reads the rest. The kernel of the host enforces it."""
     import grp
     import pwd
-    import tomllib
+    import toml_compat as tomllib
     d = Path(args.dir).resolve()
     c = tomllib.loads((d / "standard.toml").read_text())
     guard, agent = pwd.getpwnam(args.guard_user), pwd.getpwnam(args.agent_user)
