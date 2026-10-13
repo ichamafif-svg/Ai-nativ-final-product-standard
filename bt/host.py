@@ -227,6 +227,8 @@ class Host:
         return output, record
 
     def run(self, job: str, resolved: dict, *, network: bool = False) -> dict:
+        if self.isolation.isolated and not self.isolation.candidate_fs_confined and job not in ("plan", "production"):
+            return {"error": "candidate filesystem isolation unavailable"}
         work = Path(tempfile.mkdtemp(prefix="standard-run-"))
         try:
             inputs = {name: self.materialise(r, work, name) for name, r in resolved.items()}

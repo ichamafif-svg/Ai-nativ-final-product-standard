@@ -1,133 +1,58 @@
 #!/usr/bin/env bash
-# Install Standard on one Ubuntu 24.04 server (ARCHITECTURE.md §19.2, D22, D23). Run as root from the project folder:
-#
-#     bash tools/install_server.sh            phase 1: system, users, hosting, demo repository, ceremony (init)
-#     bash tools/install_server.sh activate   phase 2, at least one hour later (FLOOR-0): activate and start
-#
-# The interface listens on localhost only: reach it through an SSH tunnel.
-# DEMO installation: every human and witness key is on this server and the installation assesses itself. qualify.py
-# says so. What is physical here: the guard, the agent and the SSH gate are three Unix users, and only the guard
-# can move main.
+# Replace the disposable Standard laboratory on Ubuntu 24.04.
+# Run phase 1 from a pushed, clean checkout as root; run "activate" after FLOOR-0's delay.
+# Never use this installation to claim independent qualification or govern client data.
 set -euo pipefail
 
 CODE=/opt/standard
-HOSTING=/srv/standard/hosting
-INSTALL=/srv/standard/install
-PINS=/var/lib/standard-pins/pins.db
-PY=$CODE/venv/bin/python
+ROOT=/srv/standard
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
+PY="$CODE/venv/bin/python"
+MARKER=.standard-laboratory
 
-[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+[ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 
-say() { printf '\n== %s\n' "$*"; }
-
-phase1() {
-  say "system packages"
-  apt-get update -q
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip ufw util-linux apparmor bubblewrap >/dev/null
-  python3 -c 'import sys; assert sys.version_info >= (3, 11), "Standard requires Python 3.11 or newer"'
-
-  say "code in $CODE, its own Python environment"
-  if [ "$SRC" != "$CODE" ]; then rm -rf "$CODE"; mkdir -p "$CODE"; cp -a "$SRC"/. "$CODE"/; fi
-  python3 -m venv "$CODE/venv"
-  "$CODE/venv/bin/pip" install -q -r "$CODE/requirements.txt"
-  chown -R root:root "$CODE"; chmod -R a+rX,go-w "$CODE"
-
-  say "three Unix users: the guard (K/T), the agent (U), the SSH gate"
-  id standard-guard >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-guard
-  id standard-agent >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-agent
-  id standard-gate  >/dev/null 2>&1 || useradd -m -s /bin/sh -G standard-guard standard-gate
-  id standard-web   >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-web
-  usermod -p '*' standard-gate                     # key login only, no password
-
-  say "the agent's sandbox may open a network-less namespace (Ubuntu restricts it by default)"
-  cat > /etc/apparmor.d/standard-unshare <<'EOF'
-abi <abi/4.0>,
-include <tunables/global>
-profile standard-unshare /usr/bin/unshare flags=(unconfined) {
-  userns,
+lab_path() {
+  local path="$1"
+  [ ! -L "$path" ] || { echo "refusing symlink: $path" >&2; exit 1; }
+  if [ -e "$path" ] && [ ! -f "$path/$MARKER" ]; then
+    echo "refusing non-laboratory path: $path" >&2
+    exit 1
+  fi
 }
-EOF
-  apparmor_parser -r /etc/apparmor.d/standard-unshare || echo "WARNING: the sandbox will run without network isolation"
 
-  say "firewall: SSH only"
-  { ufw allow OpenSSH >/dev/null && ufw --force enable >/dev/null; } || echo "WARNING: firewall not enabled"
-
-  say "hosting: one repository (app) seeded from examples/demo/"
-  rm -rf /srv/standard; mkdir -p /srv/standard/seed "$HOSTING" "$(dirname "$PINS")"; chmod 755 /srv/standard "$HOSTING"
-  cp -a "$CODE/examples/demo/." /srv/standard/seed/
-  git -C /srv/standard/seed init -q -b main
-  git -C /srv/standard/seed add -A
-  git -C /srv/standard/seed -c user.name=Standard -c user.email=standard@localhost commit -qm "Demo repository"
-  for u in standard-guard standard-agent standard-gate; do rm -f "/home/$u/.gitconfig"; done
-  cd "$CODE"
-  "$PY" tools/host.py create "$HOSTING/hosting.toml" app --from /srv/standard/seed \
-        --guard-user standard-guard --gate-user standard-gate
-  git config --global --add safe.directory "$HOSTING/repos/app.git"
-  for r in "$HOSTING/repos/app.git" "$HOSTING/inbox/app.git"; do   # the interface reads both, from outside
-    runuser -u standard-web -- env HOME=/home/standard-web git config --global --add safe.directory "$r"
+stop_lab() {
+  for unit in standard-agent standard-web standard-operator; do
+    if systemctl is-active --quiet "$unit"; then
+      systemctl stop "$unit"
+      ! systemctl is-active --quiet "$unit" || { echo "could not stop $unit" >&2; exit 1; }
+    fi
   done
-  if [ -s /root/.ssh/authorized_keys ]; then
-    head -1 /root/.ssh/authorized_keys > /tmp/owner.pub
-    "$PY" tools/host.py authorize "$HOSTING/hosting.toml" app owner --key /tmp/owner.pub --write --gate-user standard-gate
-  fi
-
-  say "trusted data snapshot (OSV advisories, PyPI metadata, action commits), pinned by its digest"
-  "$PY" tools/refresh_data.py /srv/standard/seed/requirements.txt \
-        --actions actions/checkout@v4 actions/setup-python@v5 > /srv/standard/data.json \
-    || { echo "WARNING: no data snapshot: vulnerabilities and action pinning stay uncovered"; rm -f /srv/standard/data.json; }
-  chmod 644 /srv/standard/data.json 2>/dev/null || true
-
-  say "ceremony, phase 1"
-  DATA=(); [ -s /srv/standard/data.json ] && DATA=(--data /srv/standard/data.json)
-  "$PY" tools/ceremony.py init "$INSTALL" --repo "$HOSTING/repos/app.git" --inbox "$HOSTING/inbox/app.git" \
-        --pins "$PINS" "${DATA[@]}"
-  printf '\n[run]\nmetrics = ["http://127.0.0.1:9000/metrics"]\nslo = 99.9\nbase_url = "http://127.0.0.1:9000"\n' >> "$INSTALL/standard.toml"
-  # D30: the guard switches the live release (deploy, rollback); the product's user only reads it.
-  printf '\n[deploy]\nroot = "/srv/standard/deploy"\n' >> "$INSTALL/standard.toml"
-  # D33: contributors' code runs as an account without keys and without network, never as the guard.
-  id standard-runner >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin standard-runner
-  printf 'standard-guard ALL=(standard-runner) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/standard-runner
-  chmod 440 /etc/sudoers.d/standard-runner
-  printf '\n[tests]\ninstall = true\nrunner_user = "standard-runner"\n\n[hosting]\nconfig = "%s"\ngate_user = "standard-gate"\n' \
-         "$HOSTING/hosting.toml" >> "$INSTALL/standard.toml"
-
-  say "Claude API key (optional: Enter to skip; it is not shown and stays in a file only the agent can read)"
-  read -r -s -p "key: " KEY; echo
-  if [ -n "$KEY" ]; then
-    printf '%s' "$KEY" > "$INSTALL/claude.key"
-    printf '\n[llm.small]\nkind = "anthropic"\nmodel = "claude-haiku-5-5"\nkey_file = "claude.key"\n' >> "$INSTALL/standard.toml"
-    printf '\n[llm.frontier]\nkind = "anthropic"\nmodel = "claude-sonnet-5-5"\nkey_file = "claude.key"\n' >> "$INSTALL/standard.toml"
-  fi
-  unset KEY
-
-  say "SSH: keys only, once a key is installed"
-  if [ -s /root/.ssh/authorized_keys ]; then
-    printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' \
-      > /etc/ssh/sshd_config.d/10-standard.conf
-    systemctl reload ssh || echo "WARNING: reload ssh by hand: systemctl reload ssh"
-  else
-    echo "WARNING: no key in /root/.ssh/authorized_keys: password login stays on"
-  fi
-
-  echo
-  echo "Phase 1 done. FLOOR-0 makes the grants wait one hour. Then run:"
-  echo "    bash $CODE/tools/install_server.sh activate"
 }
 
-unit() {   # name user args
-  cat > "/etc/systemd/system/$1.service" <<EOF
+check_units() {
+  for unit in standard-agent standard-web standard-operator; do
+    if systemctl is-active --quiet "$unit"; then
+      echo "refusing active $unit without a laboratory marker" >&2
+      exit 1
+    fi
+  done
+}
+
+unit() {
+  local name="$1" user="$2" command="$3"
+  cat > "/etc/systemd/system/$name.service" <<EOF
 [Unit]
-Description=Standard $1
+Description=Standard laboratory $name
 After=network-online.target
 
 [Service]
-User=$2
-Group=$2
+User=$user
+Group=$user
 UMask=0027
-Environment=HOME=/home/$2
+Environment=HOME=/home/$user
 WorkingDirectory=$CODE
-ExecStart=$PY $3
+ExecStart=$PY $command
 Restart=on-failure
 RestartSec=10
 
@@ -136,43 +61,99 @@ WantedBy=multi-user.target
 EOF
 }
 
-phase2() {
-  cd "$CODE"
-  say "ceremony, phase 2"
-  "$PY" tools/ceremony.py activate "$INSTALL"
-  "$PY" tools/ceremony.py separate "$INSTALL" --guard-user standard-guard --agent-user standard-agent
-  if [ -f "$INSTALL/claude.key" ]; then
-    chown standard-agent:standard-agent "$INSTALL/claude.key"; chmod 600 "$INSTALL/claude.key"
-  fi
+install_lab() {
+  case "$SRC/" in "$CODE/"*) echo "run from a separate Git checkout" >&2; exit 1 ;; esac
+  local commit branch published
+  commit="$(git -C "$SRC" rev-parse --verify HEAD)"
+  branch="$(git -C "$SRC" symbolic-ref --quiet --short HEAD)"
+  published="$(git -C "$SRC" ls-remote --exit-code origin "refs/heads/$branch")"
+  [ "${published%%[[:space:]]*}" = "$commit" ] || {
+    echo "the checked-out commit is not the pushed branch tip" >&2; exit 1;
+  }
+  [ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ] || {
+    echo "push a clean commit before installing" >&2; exit 1;
+  }
+  lab_path "$CODE"
+  lab_path "$ROOT"
+  if [ -f "$CODE/$MARKER" ] && [ -f "$ROOT/$MARKER" ]; then stop_lab; else check_units; fi
 
-  say "two services: the operator (guard) and the agent"
-  unit standard-operator standard-guard "-m standard.runtime serve $INSTALL/standard.toml 30"
-  unit standard-agent standard-agent "-m standard.autonomy run $INSTALL/standard.toml 60"
-  unit standard-web standard-web "-m standard.surface.web $INSTALL/standard.toml --bind 127.0.0.1 --port 8080"
-  # DEMO: the demo product's API and steady traffic, so that Run shows real metrics.
-  id standard-demo >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-demo
-  install -d -o standard-guard -g standard-guard -m 0755 /srv/standard/deploy
-  install -d -o standard-demo -g standard-demo -m 0750 /srv/standard/data      # the product's data, not the guard's
-  unit standard-demo-service standard-demo "$CODE/tools/run_release.py /srv/standard/deploy 9000 --repo $HOSTING/repos/app.git --data /srv/standard/data"
-  unit standard-demo-load standard-demo "$CODE/examples/load.py http://127.0.0.1:9000 20"
+  apt-get update -q
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip util-linux bubblewrap curl >/dev/null
+  python3 -c 'import sys; assert sys.version_info >= (3, 11)'
+
+  rm -rf -- "$CODE" "$ROOT"
+  install -d -m 0755 "$CODE" "$ROOT" "$ROOT/seed" "$ROOT/hosting"
+  touch "$CODE/$MARKER" "$ROOT/$MARKER"
+  git -C "$SRC" archive "$commit" | tar -x -C "$CODE"
+  printf '%s\n' "$commit" > "$CODE/LAB_COMMIT"
+  python3 -m venv "$CODE/venv"
+  "$PY" -m pip install -q -r "$CODE/requirements.txt"
+  chown -R root:root "$CODE"
+  chmod -R a+rX,go-w "$CODE"
+
+  id standard-guard >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-guard
+  id standard-agent >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-agent
+  id standard-gate  >/dev/null 2>&1 || useradd -m -s /bin/sh -G standard-guard standard-gate
+  id standard-web   >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-web
+  id standard-runner >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin standard-runner
+
+  git -C "$ROOT/seed" init -q -b main
+  git -C "$ROOT/seed" -c user.name=Standard -c user.email=lab@localhost \
+    commit --allow-empty -qm "Empty laboratory repository"
+  "$PY" "$CODE/tools/host.py" create "$ROOT/hosting/hosting.toml" lab --from "$ROOT/seed" \
+    --guard-user standard-guard --gate-user standard-gate
+  git config --global --add safe.directory "$ROOT/hosting/repos/lab.git"
+  runuser -u standard-web -- env HOME=/home/standard-web git config --global --add safe.directory \
+    "$ROOT/hosting/repos/lab.git"
+
+  cd "$CODE"
+  "$PY" tools/ceremony.py init "$ROOT/install" --repo "$ROOT/hosting/repos/lab.git" \
+    --inbox "$ROOT/hosting/inbox/lab.git" --pins "$ROOT/pins/pins.db"
+  cat >> "$ROOT/install/standard.toml" <<EOF
+
+[tests]
+install = false
+runner_user = "standard-runner"
+
+[hosting]
+config = "$ROOT/hosting/hosting.toml"
+gate_user = "standard-gate"
+EOF
+  echo "LABORATORY ONLY: one host holds simulated human and witness keys; qualification must fail."
+  echo "Commit: $(cat "$CODE/LAB_COMMIT")"
+  echo "Wait for FLOOR-0, then run: bash $CODE/tools/install_server.sh activate"
+}
+
+activate_lab() {
+  lab_path "$CODE"
+  lab_path "$ROOT"
+  [ -f "$CODE/$MARKER" ] && [ -f "$ROOT/$MARKER" ] || exit 1
+  cd "$CODE"
+  "$PY" tools/ceremony.py activate "$ROOT/install"
+  "$PY" tools/ceremony.py separate "$ROOT/install" --guard-user standard-guard --agent-user standard-agent
+  printf 'standard-guard ALL=(standard-runner) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/standard-runner
+  chmod 440 /etc/sudoers.d/standard-runner
+
+  unit standard-operator standard-guard "-m standard.runtime serve $ROOT/install/standard.toml 30"
+  unit standard-agent standard-agent "-m standard.autonomy run $ROOT/install/standard.toml 60"
+  unit standard-web standard-web "-m standard.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
   systemctl enable --now standard-operator
-  sleep 5
-  systemctl enable --now standard-agent
-  systemctl enable --now standard-web
-  systemctl enable --now standard-demo-service standard-demo-load
-
-  say "qualification"
-  "$PY" tools/qualify.py "$INSTALL/standard.toml" | "$PY" -c \
-    'import json,sys; [print(p["result"], "|", p["probe"]) for p in json.load(sys.stdin)]' || true
-  echo
-  echo "Interface: from your computer, ssh -L 8080:localhost:8080 root@<this server>, then open http://localhost:8080"
-  echo "Follow:  journalctl -fu standard-agent    journalctl -fu standard-operator"
-  echo "Status:  cd $CODE && $PY -m surface --socket $INSTALL/admission.sock status"
+  systemctl enable --now standard-agent standard-web
+  local ready=0
+  for _ in {1..15}; do
+    if curl -fsS http://127.0.0.1:8080/api/state >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+  done
+  [ "$ready" = 1 ] || { echo "web interface did not become ready" >&2; exit 1; }
+  "$PY" tools/qualify.py "$ROOT/install/standard.toml" > "$ROOT/qualification.json" || true
+  "$PY" -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1])), list)' "$ROOT/qualification.json"
+  echo "LABORATORY ONLY: qualification is recorded in $ROOT/qualification.json, not claimed."
+  echo "Use an SSH tunnel to localhost:8080; the interface is not publicly exposed."
 }
 
 case "${1:-}" in
-  "") phase1 ;;
-  activate) phase2 ;;
-  *) echo "usage: $0 [activate]"; exit 2 ;;
+  "") install_lab ;;
+  activate) activate_lab ;;
+  *) echo "usage: $0 [activate]" >&2; exit 2 ;;
 esac

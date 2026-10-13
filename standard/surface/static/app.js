@@ -102,7 +102,7 @@ function frame() {
   const others = state.products.length > 1;
   $("#product").innerHTML = `<div class="mark">${esc(state.product.slice(0, 1).toUpperCase())}</div><div>
     ${others ? `<select aria-label="Produit">${state.products.map((p) => `<option ${p === state.product ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`
-      : `<b>${esc(state.product)}</b>`}<span>${state.assessment === "INDEPENDENT" ? "Évalué indépendamment" : "Démonstration"}</span></div>`;
+      : `<b>${esc(state.product)}</b>`}<span>${state.assessment === "INDEPENDENT" ? "Évalué indépendamment" : "Laboratoire non qualifié"}</span></div>`;
   const env = ROUTES[here][1] === "build" ? `<span class="env build">Construction</span>`
     : ROUTES[here][1] === "standard" ? `<span class="env standard">Standard commun</span>` : `<span class="env run">Production</span>`;
   $("#top").innerHTML = `<span class="crumb"><b>${esc(state.product)}</b>  /  ${ROUTES[here][0]}</span>${env}
@@ -811,7 +811,7 @@ function proofs() {
       <div class="panel"><h2>Journal</h2><p class="small quiet">Entrées : ${state.prefix.size}</p>
         <p class="small quiet">Tête : <span class="sha">${esc(state.prefix.head.slice(7, 23))}</span></p>
         <p class="small quiet">Loi : <span class="sha">${esc(state.law_digest.slice(7, 23))}</span></p>
-        <p class="small quiet">${state.assessment === "INDEPENDENT" ? "Installation évaluée par un tiers indépendant." : "Installation auto-évaluée : ces preuves ne valent pas certification."}</p></div>
+        <p class="small quiet">${state.assessment === "INDEPENDENT" ? "Installation évaluée par un tiers indépendant." : "Laboratoire auto-évalué : quorum et témoins simulés, garanties physiques non qualifiées."}</p></div>
       <div class="panel"><h2>Couverture</h2><p class="small quiet">${c.held} exigences tenues sur ${c.total}, ${c.attest} attestations attendues, ${c.unmeasured} non mesurées sur cette installation.</p>
         <button class="btn" id="export">Télécharger le rapport</button></div>
     </section>`;

@@ -8,8 +8,8 @@ memory limit and a deadline. The tree it runs on is a fresh copy, world-readable
 output directory. Installing dependencies is a separate step, as the same user, with network, from wheels only.
 
 This boundary does not yet confine the runner's filesystem, and installation of candidate dependencies is a
-separate networked step. `isolated` means user separation only; it is not a complete candidate-code jail.
-Qualification must not report T06 as complete on this implementation.
+separate networked step. The host refuses candidate jobs while this is incomplete; `isolated` means user separation
+only, not a complete candidate-code jail. Qualification must not report T06 as complete on this implementation.
 """
 from __future__ import annotations
 
