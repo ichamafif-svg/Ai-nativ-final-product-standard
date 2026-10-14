@@ -2,7 +2,6 @@
 may act alone, the engineers' settings restrain it further; the agent deploys main and rolls back a release that broke
 the service, and a release rolled back is never deployed again: that gap goes to people."""
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -23,8 +22,12 @@ import standard.autonomy.__main__ as agent_process  # noqa: E402
 import standard.runtime.daemon as daemon  # noqa: E402
 import instruments.production as runtime  # noqa: E402
 from bt.register import Registers  # noqa: E402
-from standard.autonomy import release  # noqa: E402
-from standard.autonomy.policy import Policy, history, law_bounds  # noqa: E402
+from fixture import client_law  # noqa: E402
+from kernel import Kernel  # noqa: E402
+from standard.floors import RELEASE  # noqa: E402
+from standard.autonomy.loop import tactic  # noqa: E402
+from standard.autonomy.moves import moves  # noqa: E402
+from standard.autonomy.rules import Rules as RulesView, RulesError, change  # noqa: E402
 from instruments.production import component_id, evaluate  # noqa: E402
 from bt.gateway import AdmissionGateway  # noqa: E402
 
@@ -76,6 +79,7 @@ class Facts(unittest.TestCase):
         self.assertEqual(f[("run:release:all", "lag")], "behind")
         self.assertEqual(f[(f"run:release:all/{A}/{B}", "candidate")], "yes")
         self.assertEqual(f[(f"run:release:all/{A}/{B}", "budget_pct")], "80.000")
+        self.assertEqual(f[(f"run:release:all/{A}/{B}", "window")], "open")
         self.assertEqual(f[(f"run:canary:all/{A}/{B}", "candidate")], "yes")       # or on a share of traffic first
         f = facts_of(A, B, [{"at": 0, "op": "rollback", "from": B, "to": A}], set(), 0, N)
         self.assertNotIn((f"run:release:all/{A}/{B}", "candidate"), f)
@@ -118,7 +122,7 @@ class Facts(unittest.TestCase):
         self.assertAlmostEqual(assessed["failing_pct"], 100 / 3)                     # 100 failed of 300 in the window
 
     def test_probes_see_what_the_product_does_not_report(self):
-        m = runtime.measures({"global": {"base_url": "http://shop"},
+        m = runtime.measures({"base_url": "http://shop",
                               "probes": {"p-a": {"spec": "GET /health 200"}, "p-b": {"spec": "rm -rf /"}}})
         self.assertEqual([tuple(x) for x in m["probes"]], [("p-a", "GET", "/health", 200)])
         metrics = Metrics()
@@ -132,106 +136,120 @@ class Facts(unittest.TestCase):
         self.assertEqual([c["kind"] for c in assessed["components"] if c["error_rate"]], ["probe"])
 
 
-class Decide(unittest.TestCase):
-    """D36: the agent's restraint, from the engineers' settings, inside the law's bounds."""
+class Moves(unittest.TestCase):
+    """D36: production moves under the rules in force: the routes decide, the agent's tactics can only hold back."""
 
-    def view(self, **facts):
+    def view(self, facts, now=10_000_000, **rules):
+        law = Kernel(RELEASE, "x").load(client_law(**rules)).raw
+        return {"law": {"effective": law}, "identities": {"scanner": "service", "h1": "human"}, "now": now,
+                "facts": [{"resource": r, "property": p, "status": s, "author": "scanner", "at": now}
+                          for r, f in facts.items() for p, s in f.items()],
+                "transitions": facts, "played": {}, "frozen": []}
+
+    def move(self, view, resource):
+        return next(m for m in moves(view) if m["resource"] == resource)
+
+    def back(self, **facts):
         return {f"run:service:all/{B}/{A}": {"previous": "yes", "proven": "yes", "switched_min": "2", "burn_fast": "0",
                                             "failing_pct": "0", "unanswered_s": "0", "migrations_crossed": "0", **facts}}
 
     def test_a_rollback_right_after_a_switch_that_broke_the_service(self):
-        decide = lambda facts, doc={}: release.decide(self.view(**facts), Policy(doc), 0)
-        self.assertEqual(decide({})[0], [])
-        self.assertEqual(decide({"burn_fast": "20.000"})[0],
-                         [("rollback", f"run:service:all/{B}/{A}", "agent_rollback")])
-        self.assertEqual(decide({"failing_pct": "40"})[0],
-                         [("rollback", f"run:service:all/{B}/{A}", "agent_rollback_failing")])
-        self.assertEqual(decide({"unanswered_s": "120", "switched_min": "300"})[0][0][2], "agent_rollback_unanswered")
-        actions, why = decide({"failing_pct": "40", "switched_min": "45"})
-        self.assertEqual((actions, "not attributable" in why["rollback"]), ([], True))      # horizon 30 min
-        actions, why = decide({"failing_pct": "40"}, {"global": {"auto_rollback": "off"}})
-        self.assertIn("engineer decides", why["rollback"])
-        actions, why = decide({"failing_pct": "40", "migrations_crossed": "1"}, {"global": {"compatible_migrations": "off"}})
-        self.assertIn("compatible migration", why["rollback"])
-        actions, why = decide({"failing_pct": "40", "proven": "no"})
-        self.assertIn("known", why["rollback"])
-        self.assertEqual(decide({"failing_pct": "6"}, {"global": {"failing": "10"}})[0], [])  # engineers ask for more
+        r = f"run:service:all/{B}/{A}"
+        status = lambda facts, **rules: self.move(self.view(self.back(**facts), **rules), r)
+        self.assertEqual(status({})["status"], "yours")
+        self.assertFalse(status({})["wanted"])                                   # nothing broke: nobody is asked
+        self.assertEqual((status({"burn_fast": "20.000"})["status"], status({"burn_fast": "20.000"})["route"]),
+                         ("ready", "burn"))
+        self.assertEqual(status({"failing_pct": "40"})["route"], "failing")
+        self.assertEqual(status({"unanswered_s": "120", "switched_min": "300"})["route"], "unanswered")
+        late = status({"failing_pct": "40", "switched_min": "45"})                # past the rules' 30 min horizon
+        self.assertEqual((late["status"], late["wanted"]), ("yours", False))
+        off = status({"failing_pct": "40"}, routes={"rollback": []})              # the rules keep it for the human
+        self.assertEqual((off["status"], off["wanted"], off["turned_off"]), ("yours", True, ["failing"]))
+        migrating = status({"failing_pct": "40", "migrations_crossed": "1"}, settings={"rollback_migrations": 0})
+        self.assertNotEqual(migrating["status"], "ready")
+        self.assertNotEqual(status({"failing_pct": "40", "proven": "no"})["status"], "ready")
+        self.assertNotEqual(status({"failing_pct": "6"}, settings={"failing": 10})["status"], "ready")
 
-    def test_a_restart_only_when_allowed_away_from_a_switch_and_within_budget(self):
+    def test_a_restart_is_yours_until_the_rules_give_it_and_never_right_after_a_switch(self):
         r = f"run:process:all/{B}/2"
-        view = lambda **f: {r: {"live": "yes", "switched_min": "600", "failing_pct": "40", "burn_fast": "0",
-                                "restarts_last_hour": "0", **f}}
-        on = {"global": {"auto_restart": "on", "restarts_per_hour": "1"}}
-        self.assertIn("off", release.decide(view(), Policy({}), 0)[1]["restart"])
-        self.assertEqual(release.decide(view(), Policy(on), 0)[0], [("restart", r, "agent_restart")])
-        self.assertIn("budget", release.decide(view(restarts_last_hour="1"), Policy(on), 0)[1]["restart"])
-        self.assertIn("follows a switch", release.decide(view(switched_min="3"), Policy(on), 0)[1]["restart"])
+        facts = lambda **f: {r: {"live": "yes", "switched_min": "600", "failing_pct": "40", "burn_fast": "0",
+                                 "restarts_last_hour": "0", **f}}
+        mine = self.move(self.view(facts()), r)
+        self.assertEqual((mine["status"], mine["wanted"]), ("yours", True))      # recommended rules: yours
+        on = {"routes": {"restart": ["failing", "burn"]}, "settings": {"restarts_per_hour": 0}}
+        self.assertEqual(self.move(self.view(facts(), **on), r)["status"], "ready")
+        self.assertNotEqual(self.move(self.view(facts(restarts_last_hour="1"), **on), r)["status"], "ready")
+        view = self.view(facts(switched_min="3"), **on)
+        self.assertIn("follows a switch", tactic(view, self.move(view, r)))
 
-    def test_deploy_in_the_window_unfrozen_with_budget_left_or_start_a_canary(self):
-        r = f"run:release:all/{A}/{B}"
-        view = {r: {"candidate": "yes", "budget_pct": "10.000"}, f"run:canary:all/{A}/{B}": {"candidate": "yes"}}
-        self.assertEqual(release.decide(view, Policy({}), 0)[0], [("deploy", r, "agent_deploy")])
-        self.assertIn("approves", release.decide(view, Policy({"global": {"auto_deploy": "off"}}), 0)[1]["deploy"])
-        self.assertIn("budget", release.decide(view, Policy({"global": {"freeze_below": "25"}}), 0)[1]["deploy"])
-        self.assertEqual(release.decide(view, Policy({"global": {"strategy": "canary"}}), 0)[0],
-                         [("canary", f"run:canary:all/{A}/{B}", "agent_canary")])
-        policy = Policy({"global": {"deploy_days": "mon,tue,wed,thu,fri", "deploy_hours": "09-18", "deploy_tz": "Europe/Paris"}})
-        saturday = 1_791_619_200_000                                                  # 2026-10-10 10:00 Paris
-        self.assertIn("window", release.decide(view, policy, saturday)[1]["deploy"])
-        self.assertEqual(release.decide(view, policy, saturday + 2 * 86_400_000)[0][0][0], "deploy")   # Monday
-        view[r]["approved"] = "yes"
-        self.assertEqual(release.decide(view, Policy({"global": {"auto_deploy": "off"}}), 0)[0],
-                         [("deploy", r, "agent_deploy_reviewed")])
+    def test_deploy_in_the_window_with_budget_left_or_start_a_canary(self):
+        r, c = f"run:release:all/{A}/{B}", f"run:canary:all/{A}/{B}"
+        facts = lambda **f: {r: {"candidate": "yes", "budget_pct": "10.000", "window": "open", **f},
+                             c: {"candidate": "yes", "budget_pct": "10.000", "window": "open", **f}}
+        self.assertEqual(self.move(self.view(facts()), r)["route"], "direct")
+        self.assertEqual(self.move(self.view(facts(window="closed")), r)["status"], "yours")
+        self.assertEqual(self.move(self.view(facts(), settings={"freeze_below": 25}), r)["status"], "yours")
+        self.assertEqual(self.move(self.view(facts(), routes={"deploy": []}), r)["status"], "yours")
+        view = self.view(facts())
+        self.assertEqual(tactic(view, self.move(view, c)), "the rules deploy directly")
+        view = self.view(facts(), routes={"deploy": ["promote"]})                 # strategy canary, in the rules
+        self.assertIsNone(tactic(view, self.move(view, c)))
+        self.assertEqual(self.move(view, c)["status"], "ready")
 
     def test_a_canary_bakes_and_is_promoted_a_worse_one_is_taken_out(self):
         r, abort = f"run:release:all/{A}/{B}", f"run:canary:abort/{A}/{B}"
-        canary = {"global": {"strategy": "canary"}}
-        view = lambda **f: {r: {"candidate": "yes", "canary_error_delta": "0.100", "canary_requests": "500",
-                                "canary_baked_min": "11", "canary_p99_ms": "100", "live_p99_ms": "100", **f},
-                            abort: {"running": "yes"}}
-        self.assertEqual(release.decide(view(), Policy(canary), 0)[0], [("deploy", r, "agent_promote")])
-        actions, why = release.decide(view(canary_baked_min="3"), Policy(canary), 0)
-        self.assertEqual((actions, "baking" in why["canary"]), ([], True))
-        self.assertEqual(release.decide(view(canary_error_delta="5.000", canary_baked_min="2"), Policy(canary), 0)[0],
-                         [("abort", abort, "agent_abort")])
-        noise = view(canary_error_delta="1.527", canary_error_pct="3.5", live_error_pct="2.0", canary_requests="301",
-                     live_requests="2700", canary_baked_min="2")              # what the live demo saw by chance
-        self.assertEqual(release.decide(noise, Policy(canary), 0)[0], [])
-        broken = view(canary_error_delta="28.000", canary_error_pct="30", live_error_pct="2", canary_requests="60",
-                      live_requests="600", canary_baked_min="1")
-        self.assertEqual(release.decide(broken, Policy(canary), 0)[0], [("abort", abort, "agent_abort")])
-        moved = {**view(), r: {"candidate": "no"}}
-        self.assertEqual(release.decide(moved, Policy(canary), 0)[0], [("abort", abort, "agent_abort")])
+        canary = {"routes": {"deploy": ["promote"]}}
+        facts = lambda **f: {r: {"candidate": "yes", "canary_error_delta": "0.100", "canary_requests": "500",
+                                 "canary_baked_min": "11", "canary_p99_ms": "100", "live_p99_ms": "100", **f},
+                             abort: {"running": "yes"}}
+        self.assertEqual(self.move(self.view(facts(), **canary), r)["route"], "promote")
+        self.assertNotEqual(self.move(self.view(facts(canary_baked_min="3"), **canary), r)["status"], "ready")
+        hold = lambda **f: tactic((v := self.view(facts(**f), **canary)), self.move(v, abort))
+        self.assertEqual(hold(), "the canary holds")
+        self.assertIsNone(hold(canary_error_delta="5.000", canary_baked_min="2", canary_error_pct="5.1",
+                               live_error_pct="0.1", live_requests="5000"))
+        self.assertEqual(hold(canary_error_delta="1.527", canary_error_pct="3.5", live_error_pct="2.0",
+                              canary_requests="301", live_requests="2700", canary_baked_min="2"),
+                         "the canary holds")                                     # what a live demo saw by chance
+        self.assertIsNone(hold(candidate="no"))                                  # main moved on: taken out
 
 
-class Settings(unittest.TestCase):
-    """The engineers' settings: the rules file on main, within bounds, and signed silences."""
+class Rules(unittest.TestCase):
+    """The rules of the game: one document in the journal, each value checked, the socle's bounds kept."""
 
-    def test_only_valid_settings_are_read(self):
-        policy = Policy({"global": {"objective": "120", "auto_deploy": "off"}, "probes": {"p-x": {"spec": "rm -rf /"}}})
-        self.assertEqual((policy.get("objective"), policy.get("auto_deploy")), (99.9, "off"))
-        self.assertEqual([i["setting"] for i in policy.ignored], ["global/objective", "p-x/spec"])
-        policy = Policy({}, transitions={"run:policy/m-x/until": {"value": "99999999999999"},
-                                         "run:policy/m-x/target_of": {"value": "all"}})
-        self.assertEqual(policy.silences(2_000)["m-x"]["target_of"], "all")
+    def test_only_valid_settings_are_drafted(self):
+        client = client_law()
+        for bad in ({"objective": "120"}, {"deploy_tz": "Mars/Olympus"}, {"deploy_hours": "18-09"}):
+            with self.assertRaises(RulesError):
+                change(client, settings=bad)
+        with self.assertRaises(RulesError):
+            change(client, sections={"probes": {"p-x": {"spec": "rm -rf /"}}})
+        with self.assertRaises(RulesError):
+            change(client, routes={"deploy": ["human"]})                         # the human route is not a choice
+        drafted = change(client, settings={"objective": "99.95"}, sections={"silences": {"m-x": {
+            "target_of": "all", "until": "99999999999999", "reason": "maintenance"}}})
+        law = Kernel(RELEASE, "x").load(drafted).raw
+        self.assertEqual(RulesView(law).silences(2_000)["m-x"]["target_of"], "all")
+        with self.assertRaises(Exception):                                        # looser than the socle: refused
+            Kernel(RELEASE, "x").load(change(client, settings={"canary_max_error_delta": "5"}))
 
     def test_a_component_override_and_its_counting(self):
         cid = component_id("api", "POST", "/orders")
-        policy = Policy({"components": {cid: {"p99_ms": "200", "counted": "off"}}})
-        self.assertEqual(policy.limits("api", "POST", "/orders")["p99_ms"], 200)
-        self.assertFalse(policy.limits("api", "POST", "/orders")["counted"])
-        self.assertEqual(policy.limits("api", "GET", "/health")["p99_ms"], 1000.0)
-        self.assertFalse(policy.limits("dependency", "POST", "pay")["counted"])      # outside: shown, not counted
-        self.assertFalse(runtime.measures({"components": {cid: {"counted": "off"}}})["counted"][cid])   # the scanner too
+        law = Kernel(RELEASE, "x").load(client_law(settings={"components": {cid: {"p99_ms": 200, "counted": "off"}}})).raw
+        rules = RulesView(law)
+        self.assertEqual(rules.limits("api", "POST", "/orders")["p99_ms"], 200)
+        self.assertFalse(rules.limits("api", "POST", "/orders")["counted"])
+        self.assertEqual(rules.limits("api", "GET", "/health")["p99_ms"], 1000.0)
+        self.assertFalse(rules.limits("dependency", "POST", "pay")["counted"])      # outside: shown, not counted
+        self.assertFalse(runtime.measures(law["settings"])["counted"][cid])          # the scanner reads the same
 
-    def test_the_law_bounds_and_the_history_of_the_rules(self):
-        from standard.floors import FLOORS
-        bounds = law_bounds(FLOORS["conditions"])
-        self.assertEqual((bounds["burn_fast"], bounds["rollback_horizon_min"], bounds["restarts_per_hour"]),
-                         (("ge", 14.4), ("le", 240.0), ("le", 12.0)))
-        changes = history([(1, "h1", {}), (2, "h1", {"global": {"strategy": "canary"}}), (3, "alice", {})])
-        self.assertEqual([(c["at"], c["setting"], c["value"]) for c in changes],
-                         [(3, "global/strategy", "(retiré)"), (2, "global/strategy", "canary")])
+    def test_the_window_is_measured_from_the_rules(self):
+        m = runtime.measures({"deploy_days": "mon,tue,wed,thu,fri", "deploy_hours": "09-18", "deploy_tz": "Europe/Paris"})
+        saturday = 1_791_619_200_000                                                  # 2026-10-10 10:00 Paris
+        self.assertEqual(runtime.window(m, saturday), "closed")
+        self.assertEqual(runtime.window(m, saturday + 2 * 86_400_000), "open")       # Monday
+        self.assertEqual(runtime.window({**m, "deploy_tz": "Nowhere/Else"}, saturday), "closed")
 
 
 class Migrations(unittest.TestCase):
@@ -364,16 +382,14 @@ class Production(unittest.TestCase):
                                          pins=str(root / "elsewhere" / "pins.db")))
         with open(install / "standard.toml", "a") as f:
             f.write('\n[run]\nmetrics = ["http://standard/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n')
-        clock.t += 3_600_100
-        ceremony.activate(argparse.Namespace(dir=str(install)))
         operator = daemon.Installation(install / "standard.toml")
         metrics = Metrics(link=str(install / "run" / "current"))       # the product says which release answers
         operator.host.fetch = metrics
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            cycle, refresh = agent_process.build(install / "standard.toml")
-            cycle.clock = clock
+            loop, repairer, _, refresh = agent_process.build(install / "standard.toml")
+            loop.clock = repairer.clock = clock
 
             def rounds(n=3):
                 for _ in range(n):
@@ -381,7 +397,7 @@ class Production(unittest.TestCase):
                     operator.tick()
                     refresh()
                     clock.t += 61_000                                  # past the agent's backoff
-                    cycle.run()
+                    loop.run()
                 clock.t += 30_000
                 operator.tick()
 
@@ -415,34 +431,30 @@ class Production(unittest.TestCase):
             self.assertIn("run-live", [o.get("target") for o in health["open"]])  # someone's gap, with a due date
             self.assertIn("run-slo", [p["target"] for p in health["proven"]])     # the service itself recovered
 
-            # D31: the engineer keeps deployment for himself (stricter: at once), then approves one exact switch.
-            from standard.surface.human import load_signer
-            from bt.signing import envelope
-            h1 = load_signer("h1", install / "keys" / "h1.key")
+            # D51: the human keeps deployment (a change of the rules, in force at once), then says yes to one switch.
+            from standard.autonomy.moves import queue
+            from standard.surface.human import decide as yes, load_signer, rules
+            human = load_signer("human", install / "keys" / "human.key")
+            view = operator.service.view()
+            operator.service.admit(rules(view, human, change(view["law"]["client"], routes={"deploy": []}),
+                                         at=clock()))
 
-            def decide(resource, prop, status):
-                s = operator.journal.snapshot()
-                operator.service.admit(envelope(s["domain"], "observation", {
-                    "id": f"h1-{clock()}", "at": max(clock(), s["last_at"] + 1), "author": "h1",
-                    "under": operator.config["grants"]["engineer"], "resource": resource, "property": prop,
-                    "status": status, "level": "real"}, [h1]))
+            def decide(resource):
+                operator.service.admit(yes(operator.service.view(), human, operator.config["grants"]["human"],
+                                           resource, at=clock()))
 
-            (repo / "standard").mkdir(exist_ok=True)                           # D35: the rules file, by git
-            (repo / "standard" / "rules.json").write_text(json.dumps({"global": {"auto_deploy": "off"}}))
-            git("add", "-A", cwd=repo)
-            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "rules", cwd=repo)
             (repo / "app.py").write_text("def add(a, b):\n    return a + b  # fixed\n")
             git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "fix", cwd=repo)
             m2 = git("rev-parse", "main", cwd=repo)
             rounds(2)
             self.assertEqual(operator.releases.current(), m0)                 # a candidate, not deployed alone
             self.assertEqual(obs(f"run:release:all/{m0}/{m2}|candidate"), "yes")
-            notes = json.loads((install / "agent" / "releases.json").read_text())
-            self.assertIn("approves", notes["why"]["deploy"])                  # the agent's restraint, said
-            decide(f"run:release:all/{m0}/{m2}", "approved", "yes")
+            self.assertIn(f"run:release:all/{m0}/{m2}",                       # it waits for the human
+                          [m["resource"] for m in queue(operator.service.view())])
+            decide(f"run:release:all/{m0}/{m2}")
             rounds(1)
-            self.assertEqual(operator.releases.current(), m2)                 # the engineer's decision, by the guard
-            decide(f"run:process:all/{m2}/1", "requested", "yes")             # and a restart, by hand
+            self.assertEqual(operator.releases.current(), m2)                 # the human's yes, by the guard
+            decide(f"run:process:all/{m2}/1")                                 # and a restart, by hand
             rounds(1)
             self.assertIn(f"{m2} 1", (install / "run" / "restart").read_text())
             restart = next(i for i, it in operator.journal.snapshot()["intents"].items() if it["op"] == "restart")
@@ -491,8 +503,6 @@ class CanaryEndToEnd(unittest.TestCase):
         with open(install / "standard.toml", "a") as f:
             f.write('\n[run]\nmetrics = ["http://standard/metrics"]\nslo = 99.9\n\n[deploy]\nroot = "run"\n'
                     'runner_metrics = "http://runner/__standard/metrics"\n')
-        clock.t += 3_600_100
-        ceremony.activate(argparse.Namespace(dir=str(install)))
         operator = daemon.Installation(install / "standard.toml")
         metrics, bad = Metrics(link=str(install / "run" / "current")), {}
         seen = {}
@@ -513,11 +523,17 @@ class CanaryEndToEnd(unittest.TestCase):
                           f'standard_release_duration_seconds_bucket{{release="{release}",le="+Inf"}} {ok + err}']
             return "\n".join(lines)
         operator.host.fetch = fetch
+
+        def commit_v(text):
+            git("reset", "-q", "--hard", cwd=repo)                            # the guard moved main, not this tree
+            (repo / "app.py").write_text(text)
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", text[:9], cwd=repo)
+            return git("rev-parse", "main", cwd=repo)
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            cycle, refresh = agent_process.build(install / "standard.toml")
-            cycle.clock = clock
+            loop, repairer, _, refresh = agent_process.build(install / "standard.toml")
+            loop.clock = repairer.clock = clock
 
             def rounds(n):
                 for _ in range(n):
@@ -525,59 +541,36 @@ class CanaryEndToEnd(unittest.TestCase):
                     operator.tick()
                     refresh()
                     clock.t += 61_000
-                    cycle.run()
+                    loop.run()
                 operator.tick()
 
-            from standard.surface.human import load_signer
-            from bt.signing import envelope
-            h1 = load_signer("h1", install / "keys" / "h1.key")
+            from standard.surface.human import load_signer, rules
+            human = load_signer("human", install / "keys" / "human.key")
             m0 = git("rev-parse", "main", cwd=repo)
             rounds(2)
             self.assertEqual(operator.releases.current(), m0)                 # a first release: nothing to compare
 
-            # D35: the engineer changes the rules from the interface with one signature; the agent commits exactly
-            # that file; the scanner checks it; the law lands it.
-            doc = json.dumps({"global": {"strategy": "canary"}}, indent=2, sort_keys=True).encode() + b"\n"
-            digest = "sha256:" + hashlib.sha256(doc).hexdigest()
-            (install / "requests").mkdir(exist_ok=True)
-            (install / "requests" / digest[7:]).write_bytes(doc)
-            s = operator.journal.snapshot()
-            operator.service.admit(envelope(s["domain"], "observation", {
-                "id": "h1-rules", "at": max(clock(), s["last_at"] + 1), "author": "h1",
-                "under": operator.config["grants"]["engineer"], "resource": f"repo:config:rules/{m0}",
-                "property": "rules", "status": digest, "level": "real"}, [h1]))
-            rounds(3)
-            r1 = git("rev-parse", "main", cwd=repo)
-            self.assertNotEqual(r1, m0)
-            self.assertEqual(git("show", f"{r1}:standard/rules.json", cwd=repo).encode() + b"\n", doc)
+            # D51: the human turns direct deployment off in the rules: the agent goes through a canary.
+            view = operator.service.view()
+            operator.service.admit(rules(view, human, change(view["law"]["client"], routes={"deploy": ["promote"]}),
+                                         at=clock()))
+            agent = load_signer("agent", install / "agent" / "agent.key")
+            with self.assertRaises(Exception) as refused:                     # the agent never writes the rules
+                operator.service.admit(rules(operator.service.view(), agent, client_law(), at=clock()))
+            self.assertEqual(getattr(refused.exception, "code", None), "CAP.HUMAN")
+            r1 = commit_v("def add(a, b):\n    return a + b  # v1\n")
             rounds(2)
             self.assertEqual((operator.releases.current(), operator.releases.canary()), (m0, r1))   # on a share
             rounds(9)
             self.assertEqual((operator.releases.current(), operator.releases.canary()), (r1, None))   # promoted
 
-            def commit(text):
-                git("reset", "-q", "--hard", cwd=repo)                        # the guard moved main, not this tree
-                (repo / "app.py").write_text(text)
-                git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", text[:9], cwd=repo)
-                return git("rev-parse", "main", cwd=repo)
             m1 = r1
-            m2 = commit("def add(a, b):\n    return a + b  # v2\n")
+            m2 = commit_v("def add(a, b):\n    return a + b  # v2\n")
             bad[m2] = 30                                                      # 30 % of its requests fail
             rounds(4)
             self.assertEqual((operator.releases.current(), operator.releases.canary()), (m1, None))   # taken out
             self.assertIn("abort", [h["op"] for h in operator.releases.history()])
 
-            # D35: a rules commit that changes anything else, or bytes nobody signed, is never `configured`.
-            from standard.autonomy.agent import commit_files
-            here = git("rev-parse", "main", cwd=repo)
-            sneaky = commit_files(cycle.agent.store, here, {"standard/rules.json": doc, "app.py": b"evil = 1\n"},
-                                  f"rules\n\nStandard-Rules: {digest}\n")
-            unsigned = commit_files(cycle.agent.store, here, {"standard/rules.json": b"{}\n"},
-                                    "rules\n\nStandard-Rules: sha256:" + "1" * 64 + "\n")
-            operator.tick()
-            facts = operator.service.view()["transitions"]
-            self.assertEqual(facts[f"repo:config:rules/{here}/{sneaky}"]["configured"], "no")
-            self.assertEqual(facts[f"repo:config:rules/{here}/{unsigned}"]["configured"], "no")
         finally:
             gateway.shutdown()
             gateway.server_close()

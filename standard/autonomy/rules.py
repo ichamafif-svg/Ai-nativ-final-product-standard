@@ -20,6 +20,8 @@ import re
 from zoneinfo import ZoneInfo
 
 from instruments.production import PROBE, SELECTOR, component_id, measures
+from kernel.law import setting_ways
+from standard.floors import FLOORS
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 # key -> (type, bounds or choices). The kernel adds its own floor for the settings a route compares with.
@@ -176,3 +178,11 @@ class Rules:
         """Active silences: id -> {"target_of", "until", "reason"}. They mute the console, never a signed fact."""
         return {mid: keys for mid, keys in self.settings.get("silences", {}).items()
                 if int(keys.get("until", 0)) > now_ms}
+
+
+def socle() -> dict:
+    """What the human's rules can never go below: the autonomous routes each move may have, and each threshold's floor
+    with the way it bounds (at least, at most)."""
+    ways = setting_ways(FLOORS)
+    return {"routes": {op: sorted(r for r in spec["routes"] if r != "human") for op, spec in FLOORS["ops"].items()},
+            "bounds": {k: {"socle": v, "way": ways.get(k)} for k, v in FLOORS["settings"].items()}}

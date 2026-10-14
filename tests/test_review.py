@@ -355,15 +355,14 @@ class WriteCost(unittest.TestCase):
 class WitnessConfiguration(unittest.TestCase):
     """§20.1: the operator only accepted the local demo clock; production now configures witnesses."""
 
-    def test_witnesses_are_configured_over_https_and_local_time_is_demo_only(self):
+    def test_witnesses_are_reached_over_https_and_the_operator_clock_is_the_default(self):
         import base64
         import types
         from bt.clock import WitnessClock
         from standard.runtime.daemon import Installation
         fake = types.SimpleNamespace(demo=False, config={"ledger": {"genesis": "g"}}, path=Path("/tmp/standard.toml"))
         key = base64.b64encode(b"k" * 32).decode()
-        with self.assertRaises(ValueError):
-            Installation._clock(fake, {"kind": "local"})
+        self.assertTrue(callable(Installation._clock(fake, {"kind": "local"})))   # one human, one agent: F0-1
         with self.assertRaises(ValueError):
             Installation._clock(fake, {"kind": "witnesses", "witnesses": {"w1": {"public": key, "url": "http://a"},
                                                                           "w2": {"public": key, "url": "http://b"}}})

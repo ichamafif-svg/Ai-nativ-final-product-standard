@@ -333,20 +333,17 @@ class Installation:
     def settings(self) -> dict:
         """The rules of the game as the human edits them: every move and its routes (on or off), every setting with
         the socle's bound, the components to tune, who changed the rules and when (D51)."""
-        from standard.autonomy.rules import SCHEMA
-        from kernel.law import setting_ways
-        from standard.floors import FLOORS
+        from standard.autonomy.rules import SCHEMA, socle
         findings, view = _json(self.findings), self.client.view()
         rules = self.settle(view)
         report = self.telemetry.report(window=3600)
         components = [{k: r.get(k) for k in ("id", "kind", "operation", "name", "state", "availability", "p99",
                                              "counted")} for rows in report["components"].values() for r in rows
                       if r.get("id")]
-        ways = setting_ways(FLOORS)
-        socle = {op: sorted(r for r in spec["routes"] if r != "human") for op, spec in FLOORS["ops"].items()}
+        floor = socle()
         return {"main": git(self.repo, "rev-parse", "main").strip(),
-                "rules": {"settings": rules.settings, "routes": rules.routes(), "socle": socle,
-                          "bounds": {k: {"socle": FLOORS["settings"][k], "way": ways.get(k)} for k in FLOORS["settings"]},
+                "rules": {"settings": rules.settings, "routes": rules.routes(), "socle": floor["routes"],
+                          "bounds": floor["bounds"],
                           "schema": {k: v[1] for k, v in SCHEMA.items() if v[1] is not None},
                           "team": {"delays": view["law"]["effective"]["delays"],
                                    "witnesses": view["law"]["effective"]["witnesses"]},
@@ -523,7 +520,7 @@ def handler(inst: Installation, allowed_hosts=LOCAL_HOSTS):
             try:
                 if route in ("/", "/index.html"):
                     return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-                if route in ("/sign.js", "/app.js", "/objectives.js"):
+                if route in ("/sign.js", "/app.js", "/rules.js"):
                     return self._send(200, (STATIC / route[1:]).read_bytes(), "text/javascript; charset=utf-8")
                 if route == "/app.css":
                     return self._send(200, (STATIC / "app.css").read_bytes(), "text/css; charset=utf-8")

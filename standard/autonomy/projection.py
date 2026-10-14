@@ -119,8 +119,8 @@ def project(view: dict, routes, qualify, *, mode: str = "RUN") -> dict:
 def installed_routes(scopes=(), *, model=True, recipes=True, scanner=True):
     """Actual registered targets, rather than pretending repo:* implements any client requirement."""
     from instruments.probes import PROBES
-    from .agent import WRITE_SCOPE
-    repair = set(WRITE_SCOPE) | set(scopes) if model else ({"sbom", "vulns", "actions"} if recipes else set())
+    from instruments.scope import REPAIR
+    repair = set(REPAIR) | {"actions"} | set(scopes) if model else ({"sbom", "vulns", "actions"} if recipes else set())
     routes = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"}), target_ids=frozenset(repair)),
               Route("agent-investigate", "BOTH", "*", frozenset({"investigate"}))]
     if scanner:

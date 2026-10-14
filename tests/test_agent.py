@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from standard.autonomy.agent import Agent, AgentError  # noqa: E402
-from standard.autonomy.cycle import Cycle  # noqa: E402
+from standard.autonomy.repair import Repairer  # noqa: E402
 from standard.autonomy.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
 from standard.autonomy.memory import Memory  # noqa: E402
 from standard.autonomy.precheck import precheck  # noqa: E402
@@ -158,11 +158,11 @@ class Model(unittest.TestCase):
             prompts.append(prompt)
             return json.dumps(replies.pop(0))
         log = store.parent / "egress.log"
-        agent = Agent(Signer(), "cap", store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")}, log,
+        agent = Agent(store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")}, log,
                                                        transport=transport), sandbox=LocalSandbox())
         finding = {"status": "found:1", "details": ["app.py:1:secret-rule-0"]}
         head, route = agent.craft("secrets", base, targets=TARGETS, finding=finding)
-        self.assertEqual(route, "review")
+        self.assertEqual(route, "model")
         self.assertIn("tests are red", prompts[1])                       # the feedback reached the second attempt
         self.assertIn("app.py:1:secret-rule-0", prompts[0])              # where the gap is
         self.assertNotIn(KEY, "".join(prompts))                         # what the gap is never leaves
@@ -177,7 +177,7 @@ class Model(unittest.TestCase):
     def test_out_of_ideas_is_an_error_not_a_proposal(self):
         store, base = store_with()
         bad = {"title": "x", "files": {"app.py": "def add(a, b):\n    return 0\n"}}
-        agent = Agent(Signer(), "cap", store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")},
+        agent = Agent(store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")},
                                                        store.parent / "egress.log",
                                                        transport=lambda p, prompt: json.dumps(bad)))
         with self.assertRaises(AgentError):
@@ -205,7 +205,7 @@ class Memory_(unittest.TestCase):
         self.assertFalse(memory.exhausted("ci", "b2"))                   # a new main is a new problem
         self.assertIn("test_x failed 1", memory.lessons("ci"))
 
-    def test_the_cycle_abandons_after_the_budget_and_stops_trying(self):
+    def test_the_repairer_abandons_after_the_budget_and_stops_trying(self):
         class Service:
             def view(self):
                 return {"law": {"digest": "test-law", "effective": {"targets": [TARGETS["ci"]]}}, "health": {"as_of": 0},
@@ -241,15 +241,17 @@ class Memory_(unittest.TestCase):
         ReadModel.plan = lambda self, mode="RUN": {"state": "IN_PROGRESS", "tasks": []}
         self.addCleanup(setattr, ReadModel, "plan", real)              # never leak into the next test
         root = Path(tempfile.mkdtemp())
-        cycle = Cycle(Service(), Engine(), Failing(), [], clock=lambda: 1, main=lambda: "b1",
-                      state_path=root / "proposals.json", memory=Memory(root / "memory.json", budget=2))
-        self.assertEqual(cycle.run()["submitted"]["ci"], "agent: nothing passes")
+        service = Service()
+        cycle = Repairer(service, Engine(), Failing(), [], clock=lambda: 1, state_path=root / "proposals.json",
+                         memory=Memory(root / "memory.json", budget=2))
+        run = lambda: cycle.run(service.view(), "b1")
+        self.assertEqual(run()["candidates"]["ci"], "agent: nothing passes")
         self.assertEqual(cycle.engine.records[0]["basis"]["main"], "b1")
-        cycle.run()
-        self.assertEqual(cycle.run()["submitted"]["ci"], "abandoned: waiting for people")
+        run()
+        self.assertEqual(run()["candidates"]["ci"], "abandoned: waiting for people")
         self.assertIn("nothing passes", Memory(root / "memory.json").abandoned("ci", "b1"))
         cycle.agent.sandbox = type("Unavailable", (), {"isolated": False})()
-        self.assertEqual(cycle.run()["submitted"]["ci"], "trust blocked: candidate jail unavailable")
+        self.assertEqual(run()["candidates"]["ci"], "trust blocked: candidate jail unavailable")
         self.assertEqual(cycle.engine.records[-1]["reason_code"], "candidate_jail_unavailable")
 
 

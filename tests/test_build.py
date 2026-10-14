@@ -1,7 +1,7 @@
-"""Construction (D34): a person writes a request and its acceptance tests; the scanner checks the contract asks for
-something main does not do; the person signs it; the agent implements it without touching a test; the law lands it
-only with the contract passing, main's tests passing, no regression and a review; main passing the contract delivers
-the request."""
+"""Construction (D34): the human writes a request and its acceptance tests; the scanner checks the contract asks for
+something main does not do; the human signs it (what to build is the human's word); the agent implements it without
+touching a test; the rules land it alone when the contract passes, main's tests pass, nothing regresses and the change
+stays in scope; main passing the contract delivers the request."""
 import argparse
 import hashlib
 import json
@@ -47,15 +47,15 @@ def git(*args, cwd):
 
 class Scope(unittest.TestCase):
     def test_the_agent_writes_code_never_tests(self):
-        self.assertTrue(in_scope("app.py"))
-        self.assertTrue(in_scope("shop/orders.py"))
+        self.assertTrue(in_scope("r1", "app.py"))
+        self.assertTrue(in_scope("r1", "shop/orders.py"))
         for path in ("tests/test_app.py", "tests/acceptance/test_r1.py", ".github/workflows/ci.yml",
-                     "standard/rules.json", "../app.py", "app.sh"):
-            self.assertFalse(in_scope(path), path)
+                     "standard/rules.json", "../app.py", "app.sh", "shop/conftest.py"):
+            self.assertFalse(in_scope("r1", path), path)
 
 
 class Construction(unittest.TestCase):
-    def test_request_contract_implementation_review_delivery(self):
+    def test_request_contract_implementation_delivery(self):
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, {**FILES, "sbom.json": "{}\n"})
         clock = Clock(1_900_000_000_000)
@@ -63,25 +63,23 @@ class Construction(unittest.TestCase):
         install = root / "install"
         ceremony.init(argparse.Namespace(dir=str(install), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
-        clock.t += 3_600_100
-        ceremony.activate(argparse.Namespace(dir=str(install)))
         operator = daemon.Installation(install / "standard.toml")
         store, grants = install / "requests", operator.config["grants"]
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            cycle, refresh = agent_process.build(install / "standard.toml")
-            cycle.clock = clock
-            people = {h: load_signer(h, install / "keys" / f"{h}.key") for h in ("h1", "h3")}
+            loop, repairer, _, refresh = agent_process.build(install / "standard.toml")
+            loop.clock, loop.backoff_ms, repairer.clock = clock, 0, clock
+            human = {"human": load_signer("human", install / "keys" / "human.key")}
 
             def sign(who, kind, **body):
                 s = operator.journal.snapshot()
                 operator.service.admit(envelope(s["domain"], kind, {
                     "id": f"{kind}-{clock()}", "at": max(clock(), s["last_at"] + 1), "author": who, **body},
-                    [people[who]]))
+                    [human[who]]))
 
             def request(rid, contract):
-                sign("h1", "resource", under=grants["product"], resource=f"build:request/{rid}", type="request",
+                sign("human", "resource", under=grants["human"], resource=f"build:request/{rid}", type="request",
                      fields={"title": "Multiply", "spec": stored(store, b"Add mul(a, b)."),
                              "contract": stored(store, contract)})
 
@@ -93,7 +91,7 @@ class Construction(unittest.TestCase):
 
             def contract(rid):
                 e = entity(rid)
-                sign("h1", "transition", under=grants["product"], resource=f"build:request/{rid}",
+                sign("human", "transition", under=grants["human"], resource=f"build:request/{rid}",
                      operation="contract", expected=e["expected"], changes={})
 
             request("r-already", ALREADY)
@@ -111,33 +109,27 @@ class Construction(unittest.TestCase):
                             {"title": "Add mul", "files": {"app.py": IMPLEMENTATION}, "risks": "none"}])
             gate = Gate({"frontier": Provider("fake", "anthropic", "m", "k")}, root / "egress.log",
                         transport=lambda provider, prompt: json.dumps(next(replies)))
-            builder = Builder(cycle.service, cycle.agent.signer,
-                              {k: grants[k] for k in ("agent_implement", "agent_deliver")}, cycle.agent.store, store,
-                              main=lambda: git("rev-parse", "main", cwd=repo), clock=clock,
+            builder = Builder(loop.service, loop.signer, grants["agent"], repairer.agent.store, store, clock=clock,
                               notes=root / "requests.json", llm=gate, backoff_ms=0, sandbox=LocalSandbox())
+            loop.producers = (builder,)
             main = git("rev-parse", "main", cwd=repo)
             refresh()
             with self.assertRaises(AgentError):                                 # a test is out of its reach
                 builder.craft("r-mul", "Multiply", b"", CONTRACT, main, {})
-            report = builder.run()
-            self.assertIn(report["r-mul"], ("proposed: CAP.CONDITION", "landing"))
+            report = loop.run()
+            self.assertEqual(report["build"]["r-mul"], "proposed")
+            self.assertEqual(report["played"], {})                              # nothing measured on it yet
             head = json.loads((root / "requests.json").read_text())["r-mul"]["head"]
             operator.tick()
             resource = f"repo:feature:r-mul/{main}/{head}"
-            self.assertEqual({k: facts(resource).get(k) for k in ("acceptance", "tests", "regressions")},
-                             {"acceptance": "green", "tests": "green", "regressions": "none"})
-            clock.t += 61_000
-            builder.run()
-            self.assertEqual(git("rev-parse", "main", cwd=repo), main)          # no review: nothing lands
-            sign("h3", "observation", under=grants["reviewer"], resource=resource, property="review",
-                 status="approved", level="real")
-            clock.t += 61_000
-            builder.run()
+            self.assertEqual({k: facts(resource).get(k) for k in ("acceptance", "tests", "regressions", "scoped")},
+                             {"acceptance": "green", "tests": "green", "regressions": "none", "scoped": "yes"})
+            self.assertEqual(loop.run()["played"][resource], "admitted")        # the route `accepted` holds
             operator.tick()
-            self.assertEqual(git("rev-parse", "main", cwd=repo), head)          # reviewed: the guard moved main
+            self.assertEqual(git("rev-parse", "main", cwd=repo), head)          # the guard moved main
             operator.tick()                                                     # the scanner reads the new main
             self.assertEqual(facts("build:request/r-mul")["accepted"], "yes")
-            builder.run()
+            loop.run()
             self.assertEqual(entity("r-mul")["state"], "delivered")
             from tools import replay                                                       # D37: the facts replay, isolated
             config = install / "standard.toml"

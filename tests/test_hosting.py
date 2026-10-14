@@ -89,10 +89,10 @@ if __name__ == "__main__":
 
 
 class Integration(unittest.TestCase):
-    """A client's contribution reaches main only with main's tests green, no new gap on any floor target and a human
-    review of that exact commit."""
+    """Code the agent did not write reaches main only with main's tests green, no new gap on any floor target and the
+    human's yes on that exact commit."""
 
-    def test_reviewed_green_clean_work_lands_and_red_or_leaky_work_never_does(self):
+    def test_approved_green_clean_work_lands_and_red_or_leaky_work_never_does(self):
         import argparse
         import threading
         sys.path.insert(0, str(ROOT / "tests"))
@@ -102,7 +102,7 @@ class Integration(unittest.TestCase):
 
         import standard.autonomy.__main__ as agent_process
         import standard.runtime.daemon as daemon
-        from standard.surface.human import load_signer, review
+        from standard.surface.human import decide, load_signer
         from bt.gateway import AdmissionGateway
 
         root = Path(tempfile.mkdtemp())
@@ -115,14 +115,12 @@ class Integration(unittest.TestCase):
         ceremony.now = daemon.now_ms = clock
         ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db"), inbox=str(inbox)))
-        clock.t += 3_600_100
-        ceremony.activate(argparse.Namespace(dir=str(root / "install")))
         operator = daemon.Installation(root / "install" / "standard.toml")
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            cycle, refresh = agent_process.build(root / "install" / "standard.toml")
-            cycle.clock = clock
+            loop, repairer, _, refresh = agent_process.build(root / "install" / "standard.toml")
+            loop.clock = repairer.clock = clock
             main = git("rev-parse", "main", cwd=repo).stdout.strip()
 
             def contribute(author, text):
@@ -140,24 +138,24 @@ class Integration(unittest.TestCase):
                     operator.tick()
                     refresh()
                     clock.t += 120_000                       # past the agent's backoff
-                    cycle.run()
+                    loop.run()
                 operator.tick()
 
             def approve(author, head):
                 keys = root / "install" / "keys"
                 view = operator.service.view()
-                operator.service.admit(review(view, load_signer("h3", keys / "h3.key"),
-                                              operator.config["grants"]["reviewer"], f"contrib:{author}", main, head,
-                                              "approved", at=clock()))
+                operator.service.admit(decide(view, load_signer("human", keys / "human.key"),
+                                              operator.config["grants"]["human"],
+                                              f"repo:contrib:{author}/{main}/{head}", at=clock()))
 
             red = contribute("bob", "def add(a, b):\n    return a - b\n")
             leaky = contribute("eve", 'TOKEN = "AKIA' + 'ABCDEFGHIJKLMNOP"\n\n\ndef add(a, b):\n    return a + b\n')
             green = contribute("alice", "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n")
             rounds()
-            self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # no review: nothing moves
+            self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # no yes: nothing moves
             approve("bob", red)
             approve("eve", leaky)
-            # D33: a reviewer cannot replace a measure by an opinion: `tests` is the scanner's instrument only.
+            # D33: the human cannot replace a measure by an opinion: `tests` is the scanner's instrument only.
             from bt.signing import envelope
             for kind, extra in (("observation", {}), ("measurement", {"method": "main-suite",
                                                                         "coverage": "repo:inventory:all",
@@ -165,15 +163,15 @@ class Integration(unittest.TestCase):
                                                                         "artifact": "sha256:" + "0" * 64})):
                 s = operator.journal.snapshot()
                 forged = envelope(s["domain"], kind, {
-                    "id": f"forged-{kind}", "at": clock(), "author": "h3", "under": operator.config["grants"]["reviewer"],
+                    "id": f"forged-{kind}", "at": clock(), "author": "human", "under": operator.config["grants"]["human"],
                     "resource": f"repo:contrib:bob/{main}/{red}", "property": "tests", "status": "green",
-                    "level": "real", **extra}, [load_signer("h3", root / "install" / "keys" / "h3.key")])
+                    "level": "real", **extra}, [load_signer("human", root / "install" / "keys" / "human.key")])
                 with self.assertRaises(Exception) as refused:
                     operator.service.admit(forged)
                 self.assertTrue(str(getattr(refused.exception, "code", refused.exception)).startswith("PROV"))
             rounds()
-            self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # reviewed but red: never
-            state = operator.journal.snapshot()                                          # reviewed, green, but a
+            self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # approved but red: never
+            state = operator.journal.snapshot()                                          # approved, green, but a
             self.assertEqual(state["observations"][f"repo:contrib:eve/{main}/{leaky}|regressions|scanner"]["status"],
                              "found:1")                                                  # new secret: never
             approve("alice", green)

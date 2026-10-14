@@ -14,15 +14,15 @@ from instruments.tree import Measure, Snapshot, export, verdict
 from bt.assessment import TrustUnavailable
 from bt.service import TrustedService
 from standard.runtime.operator import Instruments
-from standard.autonomy.agent import Agent, AgentError, in_scope
+from instruments.scope import repair as in_scope
+from standard.autonomy.agent import Agent, AgentError
 from standard.autonomy.build import Builder
 from standard.autonomy.context import render_context, task_context
-from standard.autonomy.cycle import Cycle
+from standard.autonomy.repair import Repairer
 from standard.autonomy.drift_map import gap_dossiers
 from standard.autonomy.patrol import patrol_context
 from standard.autonomy.advisory_llm import propose_patrol, propose_reading
-from standard.autonomy.read_model import target_state, projection_labels
-from standard.autonomy.law_surface import law_surface_map
+from standard.autonomy.read_model import target_state
 from standard.autonomy.llm import Gate, Provider
 from standard.autonomy.patrol import run_patrol
 from standard.autonomy.read_model import ReadModel
@@ -94,7 +94,7 @@ class Reports(unittest.TestCase):
             self.assertEqual(verdict('green', measure), expected)
 
     def test_ci_job_records_dependencies_and_network_policy(self):
-        subjects = {'main': 'main', 'install': True, 'targets': [], 'entities': {}, 'holders': {},
+        subjects = {'main': 'main', 'install': True, 'targets': [], 'entities': {},
                     'anchor': 'anchor', 'judged': [], 'now': 0, 'proposals': [], 'inbox': [], 'production': False}
         job = jobs.plan(subjects)[0]
         self.assertEqual(job['inputs']['install'], {'value': True})
@@ -123,7 +123,9 @@ class CoherentView(unittest.TestCase):
 
     def test_service_retries_a_moving_prefix_and_never_mixes_health_with_law(self):
         snapshots = iter([{'size': 1, 'head': 'old'}, {'size': 2, 'head': 'new'}])
-        state = lambda prefix: {**prefix, 'domain': 'g', 'observations': {}, 'grants': {}, 'entities': {}}
+        state = lambda prefix: {**prefix, 'domain': 'g', 'observations': {}, 'grants': {}, 'entities': {},
+                                 'law': {'client': {}},
+                                 'root': {'identities': {}}, 'frozen': [], 'intents': {}, 'line': {}, 'statements': {}}
         service = TrustedService.__new__(TrustedService)
         service._require = lambda contracts: 1
         service.journal = SimpleNamespace(snapshot=lambda: state(next(snapshots)),
@@ -160,18 +162,15 @@ class ContextAndRoutes(unittest.TestCase):
         view['facts'] = [{'id': 'fact-1', 'resource': 'repo:client:custom',
                           'property': 'status', 'status': 'red', 'author': 'scanner', 'at': 2}]
         findings = {'repo:client:custom|status': {'status': 'red', 'details': ['client.py:7:rule']}}
-        model = ReadModel(view, findings, installed_routes(), lambda contracts: None,
-                          settings={'global': {'objective': 99.9}}, main='commit-1')
+        view['law']['effective'] = {**view['law']['effective'], 'settings': {'objective': '99.9'}}
+        model = ReadModel(view, findings, installed_routes(), lambda contracts: None, main='commit-1')
         graph = model.graph()
         self.assertEqual(graph['schema'], 'standard-read-model/v1')
         for section in ('ops', 'conditions', 'resources', 'instruments', 'targets', 'obligations'):
             self.assertTrue(any(node.startswith(f'law:{section}') for node in graph['declarations']))
-        self.assertIn('settings:main', graph['declarations'])
+        self.assertIn('rules:settings', graph['declarations'])
         self.assertIn('floor0:F0-1', graph['declarations'])
-        self.assertIn('external:OWASP Agentic Top 10 2026', graph['declarations'])
-        self.assertEqual(graph['declarations']['external:OWASP Agentic Top 10 2026']['value']['mapping'],
-                         'not_established')
-        self.assertFalse(any(e['to'] == 'external:OWASP Agentic Top 10 2026' for e in graph['relations']))
+        self.assertFalse(any(n.startswith('external:') for n in graph['declarations']))   # no compliance theatre
         code = next(e for e in graph['relations'] if e['relation'] == 'possible_code_location')
         self.assertEqual((code['to'], code['status'], code['origin']),
                          ('code:client.py:7', 'candidate', 'diagnostic_finding'))
@@ -208,14 +207,14 @@ class ContextAndRoutes(unittest.TestCase):
     def test_read_model_captures_inputs_once(self):
         view = self.view(self.target())
         findings = {'repo:client:custom|status': {'status': 'red'}}
-        settings = {'global': {'objective': 99.9}}
-        model = ReadModel(view, findings, settings=settings, main='main-1')
+        view['law']['effective'] = {**view['law']['effective'], 'settings': {'objective': '99.9'}}
+        model = ReadModel(view, findings, main='main-1')
         captured = model.basis['inputs']
         view['law']['effective']['targets'].clear()
         findings['repo:client:custom|status']['status'] = 'green'
-        settings['global']['objective'] = 50
+        view['law']['effective']['settings']['objective'] = '50'
         self.assertEqual(model.target('client-specific')['finding']['status'], 'red')
-        self.assertEqual(model.settings['global']['objective'], 99.9)
+        self.assertEqual(model.settings['objective'], '99.9')
         self.assertEqual(captured, model.basis['inputs'])
 
     def test_read_model_links_transitions_entities_and_constitutional_proof(self):
@@ -278,11 +277,11 @@ class ContextAndRoutes(unittest.TestCase):
         task = {'id': 'repair', 'need': 'repair', 'op': 'remediate', 'resource': 'repo:client:custom',
                 'target': 'client-specific', 'state': 'AVAILABLE'}
         packet = task_context(view, task)
-        options = {a['condition']: a for a in packet['proof_plan']['alternatives']}
+        options = {a['route']: a for a in packet['proof_plan']['alternatives']}
         self.assertEqual(packet['proof_plan']['observed']['tests'], 'green')
-        self.assertFalse(options['remediate-autonomous']['mismatch'])
-        self.assertIn('reproduced', {x['name'] for x in options['remediate-autonomous']['missing']})
-        self.assertIn('review', {x['name'] for x in options['remediate-reviewed']['missing']})
+        self.assertFalse(options['scoped']['mismatch'])
+        self.assertIn('reproduced', {x['name'] for x in options['reproduced']['missing']})
+        self.assertIn('decision', {x['name'] for x in options['human']['missing']})
 
     def test_a_diagnostic_green_cannot_override_an_open_constitutional_debt(self):
         target = self.target()
@@ -297,10 +296,6 @@ class ContextAndRoutes(unittest.TestCase):
         view['health']['open'] = []
         view['health']['proven'] = [{'target': target['id']}]
         self.assertEqual(Installation.__new__(Installation).requirements(view, finding)[0]['state'], 'held')
-
-    def test_open_human_debt_waits_for_attestation_not_a_machine_measure(self):
-        target = next(t for t in FLOORS['targets'] if t['id'] == 'isms')
-        self.assertEqual(target_state(target, {}, [{'state': 'open'}], False), 'attestation_due')
 
     def test_drift_controller_maps_gap_to_law_route_and_proof_without_authority(self):
         view = self.view(self.target())
@@ -330,11 +325,10 @@ class ContextAndRoutes(unittest.TestCase):
 
     def test_law_patrol_context_carries_full_law_and_weak_spots_without_a_drift_map_requirement(self):
         view = self.view(self.target())
-        context = patrol_context(view, {}, installed_routes(), lambda needs: None, settings={'run': {'slo': 99.9}})
+        context = patrol_context(view, {}, installed_routes(), lambda needs: None)
         self.assertEqual(context['kind'], 'law-patrol')
         self.assertEqual(context['mode'], 'wide')
         self.assertEqual(context['effective_law'], view['law']['effective'])
-        self.assertEqual(context['system_settings'], {'run': {'slo': 99.9}})
         self.assertNotIn('rules', context)
         self.assertTrue(context['weak_spots'])
         self.assertIn('Exploratory patrol only', context['authority'])
@@ -353,7 +347,7 @@ class ContextAndRoutes(unittest.TestCase):
         reply = propose_patrol({'focus': None, 'authority': 'Exploratory patrol only.'}, object(), Research_())
         self.assertEqual(reply['suspicions'][0]['authority'], 'proposal_only')
         self.assertNotIn('facts', reply['suspicions'][0])
-        self.assertIn('complete effective law', sent[0][0])
+        self.assertIn('complete rules in force', sent[0][0])
 
     def test_agent_patrol_runs_read_only_and_records_its_advisory_result(self):
         root = Path(tempfile.mkdtemp())
@@ -367,42 +361,15 @@ class ContextAndRoutes(unittest.TestCase):
         view = self.view(self.target())
         cycle = SimpleNamespace(agent=SimpleNamespace(llm=object(), research=Research_(), store=root / 'store'),
                                 service=SimpleNamespace(view=lambda: view, qualify=lambda contracts: None),
-                                main=lambda: 'main-head', _findings=lambda: {}, routes=installed_routes(),
-                                settings=lambda: {'global': {'objective': 99.9}})
+                                _findings=lambda: {}, routes=installed_routes())
         with patch('standard.autonomy.patrol.Snapshot', return_value=SimpleNamespace(commit='main-head')):
-            result = run_patrol(cycle)
+            result = run_patrol(cycle, main=lambda: 'main-head')
         self.assertEqual(calls[0][1], ('read', 'search'))
         self.assertEqual(result['suspicions'][0]['authority'], 'proposal_only')
         self.assertNotIn('facts', result['suspicions'][0])
         self.assertEqual(len((root / 'patrol-results.jsonl').read_text().splitlines()), 1)
 
-    def test_law_surface_map_binds_law_to_code_evidence_and_unknowns_without_certification(self):
-        view = self.view(self.target())
-        finding = {'repo:client:custom|status': {'status': 'red', 'details': ['client.py:7:rule']}}
-        context = law_surface_map(view, finding, installed_routes(), lambda needs: None,
-                                  settings={'global': {'objective': 99.9}})
-        entry = context['entries'][0]
-        self.assertEqual(context['kind'], 'law-surface-map')
-        self.assertFalse(context['certification']['certifies'])
-        self.assertEqual(context['system_settings'], {'global': {'objective': 99.9}})
-        self.assertEqual(entry['law']['resource'], 'repo:client:custom')
-        self.assertEqual(entry['code']['locations'][0]['path'], 'client.py')
-        self.assertEqual(entry['code']['locations'][0]['line'], 7)
-        self.assertTrue(entry['unknowns'])
-        self.assertEqual(entry['human_validation']['status'], 'not_recorded')
-        self.assertFalse(entry['human_validation']['recording_available'])
-
-    def test_floor_measurement_and_framework_projection_have_one_mapping(self):
-        ci = next(t for t in FLOORS['targets'] if t['id'] == 'ci')
-        view = self.view(ci)
-        packet = law_surface_map(view, {}, installed_routes(), lambda needs: None)
-        entry = packet['entries'][0]
-        self.assertEqual(entry['instrumentation']['measurement']['method'], 'instruments.probes.PROBES[ci]')
-        self.assertEqual(entry['instrumentation']['instruments'], [])
-        self.assertEqual([p['framework'] for p in entry['compliance_projection']], projection_labels(ci))
-        self.assertEqual(packet['summary']['with_code_locations'], 0)
-
-    def test_cycle_research_does_not_submit_or_close_the_obligation(self):
+    def test_research_does_not_submit_or_close_the_obligation(self):
         view = self.view(self.target())
         class Service:
             def view(self): return view
@@ -413,36 +380,34 @@ class ContextAndRoutes(unittest.TestCase):
                 return {'summary': 'propose an external verifier', 'proposal': {'files': {'tools/check.py': 'pass'}}}
         root = Path(tempfile.mkdtemp())
         engine = WorkEngine(root / 'work.db')
-        cycle = Cycle(Service(), engine, Agent_(), installed_routes(), clock=lambda: 2, main=lambda: 'base',
-                      state_path=root / 'proposals.json')
-        report = cycle.run()
+        repairer = Repairer(Service(), engine, Agent_(), installed_routes(), clock=lambda: 2,
+                            state_path=root / 'proposals.json')
+        report = repairer.run(view, 'base')
         self.assertIn('ob:investigate', report['research'])
-        self.assertEqual(report['submitted'], {})
         self.assertEqual(report['crafted'], {})
         self.assertEqual({t['due'] for t in engine.tasks()}, {10})
 
-    def test_cycle_passes_the_legal_context_to_repairs(self):
+    def test_repairs_receive_the_rules_in_force(self):
         target = next(t for t in FLOORS['targets'] if t['id'] == 'ci')
         view = self.view(target)
         sent = []
         class Service:
             def view(self): return view
             def qualify(self, contracts): return None
-            def admit(self, statement): return {'admitted': True}
+            def admit(self, statement): raise AssertionError('a producer never submits')
         class Agent_:
             def craft(self, *args, **kwargs):
                 sent.append(kwargs['law_text'])
-                return 'head', 'review'
-            def intent(self, *args): return {'intent': 'example'}
+                return 'head', 'model'
         root = Path(tempfile.mkdtemp())
-        cycle = Cycle(Service(), WorkEngine(root / 'work.db'), Agent_(), installed_routes(), clock=lambda: 2,
-                      main=lambda: 'base', state_path=root / 'proposals.json',
-                      settings=lambda: {'global': {'objective': 99.9}})
-        self.assertEqual(cycle.run()['submitted']['ci'], 'admitted')
+        view['law']['effective']['settings'] = {'objective': '99.9'}
+        repairer = Repairer(Service(), WorkEngine(root / 'work.db'), Agent_(), installed_routes(), clock=lambda: 2,
+                            state_path=root / 'proposals.json')
+        self.assertEqual(repairer.run(view, 'base')['candidates']['ci'], 'head')
         packet = json.loads(sent[0])
         self.assertEqual(packet['schema'], 'standard-agent-context/v1')
         self.assertIn('client-custom-name', packet['packet']['effective_law']['conditions'])
-        self.assertEqual(packet['packet']['system_settings']['global']['objective'], 99.9)
+        self.assertEqual(packet['packet']['effective_law']['settings']['objective'], '99.9')
 
     def test_generic_precheck_does_not_claim_an_unmeasured_target_fixed(self):
         store, base = store_with(FILES)
@@ -457,8 +422,7 @@ class ContextAndRoutes(unittest.TestCase):
         sent = []
         gate = Gate({'frontier': Provider('fake', 'anthropic', 'm', 'k')}, store.parent / 'egress.log',
                     transport=lambda p, prompt: sent.append(prompt) or json.dumps({'files': {'app.py': 'x = 1'}}))
-        builder = Builder(None, Signer(), {}, store, store.parent / 'requests', main=lambda: base,
-                          clock=lambda: 0, notes=store.parent / 'build.json', llm=gate)
+        builder = Builder(None, Signer(), {}, store, store.parent / 'requests', clock=lambda: 0, notes=store.parent / 'build.json', llm=gate)
         context = task_context(self.view(self.target()), {'id': 'request:r', 'resource': 'build:request/r',
                                                         'need': 'repair', 'op': 'implement'})
         with patch.object(builder, 'check', return_value=[]):
@@ -589,19 +553,19 @@ class ResearchTools(unittest.TestCase):
             research.dialogue('investigate', tree)
         self.assertIn('agent notes only', research.notes.read_text())
 
-    def test_configured_client_scope_requires_review_and_cannot_touch_invariants(self):
+    def test_a_client_scope_is_a_model_candidate_and_never_touches_invariants(self):
         store, base = store_with(FILES)
         gate = Gate({'frontier': Provider('fake', 'anthropic', 'm', 'k')}, store.parent / 'egress.log',
                     transport=lambda p, prompt: json.dumps({'files': {'tools/check.py': 'print(1)'}}))
-        agent = Agent(Signer(), {'review': 'review-cap'}, store, llm=gate, scopes={'custom': ['tools/*.py']})
+        agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']})
         check = {'ok': True, 'fixed': None, 'tests': 'green'}
         target = {'id': 'custom', 'resource': 'repo:client:custom', 'property': 'result', 'expect': 'verified'}
         with patch('standard.autonomy.precheck.precheck', return_value=check):
             _, route = agent.craft('custom', base, targets={'custom': target})
-        self.assertEqual(route, 'review')
+        self.assertEqual(route, 'model')
         for path in ('tests/test_app.py', 'standard/rules.json', '.github/workflows/ci.yml', '../keys/a.key'):
             self.assertFalse(in_scope('custom', path, {'custom': ['*']}))
-        unconfigured = Agent(Signer(), 'cap', store, llm=gate)
+        unconfigured = Agent(store, llm=gate)
         with self.assertRaises(AgentError):
             unconfigured.craft('custom', base, targets={'custom': target})
 
@@ -621,7 +585,7 @@ class Qualification(unittest.TestCase):
         config = tomllib.loads((install / 'standard.toml').read_text())
         journal = install / config['ledger']['journal']
         identities = qualify.release_basis(journal, config['ledger']['genesis'], qualify.code_digest())
-        self.assertIn('h1', identities)
+        self.assertIn('human', identities)
         with self.assertRaises(Exception):
             qualify.release_basis(journal, 'sha256:' + '0' * 64, qualify.code_digest())
         with self.assertRaises(Exception):
@@ -634,9 +598,9 @@ class Qualification(unittest.TestCase):
     def test_empty_key_directory_unsigned_assessment_and_renamed_keys_do_not_pass(self):
         install = self.installation()
         keys = install / 'keys'
-        (keys / 'h1.key').rename(keys / 'renamed.key')
+        (keys / 'human.key').rename(keys / 'renamed.key')
         report = {p['probe']: p for p in qualify.qualify(install / 'standard.toml')}
-        self.assertEqual(report['T02 humans hold their own keys']['result'], 'FAIL')
+        self.assertEqual(report['T02 the human holds their own key']['result'], 'FAIL')
         (install / 'assessment.json').write_text(json.dumps({'payload': {'independent': True}}))
         for path in keys.glob('*.key'): path.unlink()
         report = {p['probe']: p for p in qualify.qualify(install / 'standard.toml')}

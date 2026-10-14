@@ -122,8 +122,8 @@ class Installation:
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):
-        """[clock] kind = "local" (the operator's clock, the default) or "witnesses":
-            quorum = 1, tolerance_ms = 0, state = "clock.json",
+        """[clock] kind = "local" (the operator's clock, the default) or "witnesses" (a team option: at least two):
+            quorum = 2, tolerance_ms = 0, state = "clock.json",
             [clock.witnesses.<name>] public = "<base64 Ed25519>", url = "https://..."   (one per witness)
         Each reading asks every witness for a signed quote of a fresh nonce (bt.clock.WitnessClock)."""
         kind = spec.get("kind", "local")
@@ -149,7 +149,7 @@ class Installation:
         state = spec.get("state")
         return WitnessClock(genesis=self.config["ledger"]["genesis"],
                             public_keys={n: base64.b64decode(w["public"]) for n, w in witnesses.items()},
-                            quorum=int(spec.get("quorum", 1)), fetch=fetch,
+                            quorum=int(spec.get("quorum", 2)), fetch=fetch,
                             tolerance_ms=int(spec.get("tolerance_ms", 0)),
                             state=(self.path.parent / state) if state else None)
 

@@ -5,7 +5,7 @@ import unittest
 from test_maintenance import FILES, Stand, sh
 
 from kernel import digest
-from standard.surface.human import attest, review
+from standard.surface.human import decide
 from instruments.data import DataError, TrustedData
 
 SBOM_24_1 = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
@@ -26,7 +26,7 @@ class Route(Stand):
         for _ in range(rounds):
             self.witness()
             self.instruments.measure()
-            self.cycle.run()
+            self.loop.run()
             self.witness()
             self.service.dispatch_due()
             self.witness()
@@ -82,44 +82,41 @@ class Secrets(Route):
                 "files": {"app.py": 'import os\n\nAPI_KEY = os.environ.get("API_KEY", "")\n\n\n'
                                     'def add(a, b):\n    return a + b\n'}}
 
-    def test_a_secret_is_removed_through_a_signed_human_review(self):
+    def candidate(self):
+        report = self.loop.run()
+        crafted = report["repair"]["crafted"]["secrets"]
+        self.assertEqual(crafted["way"], "model")
+        self.assertNotIn(SECRET, "".join(self.prompts))                           # R15: the value never left
+        return crafted, f"repo:code:secrets/{crafted['base']}/{crafted['head']}"
+
+    def test_a_secret_is_removed_alone_when_tests_pass_and_the_change_stays_in_scope(self):
         self.instruments.measure()
         self.assertTrue(self.status("repo:code:secrets", "leaks").startswith("found:"))
-        report = self.cycle.run()
-        crafted = report["crafted"]["secrets"]
-        self.assertEqual(crafted["route"], "review")
-        self.assertNotIn(SECRET, "".join(self.prompts))                           # R15: the value never left
-        self.assertEqual(report["submitted"]["secrets"], "CAP.CONDITION")
-        self.witness()
-        self.instruments.measure()                                                 # tests only: not reproducible
-        self.assertEqual(self.cycle.run()["submitted"]["secrets"], "CAP.CONDITION")
-        view = self.service.view()
-        self.service.admit(review(view, self.signer("h3"), self.reviewer_cap, "secrets",
-                                  crafted["base"], crafted["head"], "approved", at=self.clock()))
-        self.assertEqual(self.cycle.run()["submitted"]["secrets"], "admitted")
+        self.candidate()
         self.land(rounds=2)
         self.assertNotIn(SECRET, sh(self.repo, "git", "show", "main:app.py"))
         self.assertEqual(self.status("repo:code:secrets", "leaks"), "none")
 
-    def test_the_agent_cannot_review_its_own_proposal(self):
+    def test_when_the_rules_keep_the_move_the_human_decides_and_the_agent_never_can(self):
+        from fixture import client_law
+        from standard.surface.human import rules
+        view = self.service.view()
+        self.service.admit(rules(view, self.signer("h1"), client_law(
+            bindings={"owner": "h1", "inventory_source": "scanner", "scanner": "scanner"},
+            routes={"remediate": ["reproduced"]}), at=self.clock()))
         self.instruments.measure()
-        crafted = self.cycle.run()["crafted"]["secrets"]
+        crafted, resource = self.candidate()
         self.witness()
         self.instruments.measure()
-        self.service.admit(review(self.service.view(), self.signer("agent"), self.agent_observe_cap, "secrets",
-                                  crafted["base"], crafted["head"], "approved", at=self.clock()))
-        self.assertEqual(self.cycle.run()["submitted"]["secrets"], "CAP.CONDITION")
-
-
-class Organisation(Route):
-    def test_an_attestation_proves_an_organisational_target(self):
-        view = self.service.view()
-        open_ = {o["obligation"] for o in view["health"]["open"] + view["health"]["escalated"]}
-        self.assertIn("target:isms", open_)
-        for target in ("soa", "isms"):
-            self.service.admit(attest(self.service.view(), self.signer("h2"), self.officer_cap, target, at=self.clock()))
-        proven = {p["target"] for p in self.service.view()["health"]["proven"]}
-        self.assertTrue({"soa", "isms"} <= proven)
+        self.assertIn(resource, self.loop.run()["waiting"])                       # yours: only your yes plays it
+        own = self.L.state = self.journal.snapshot()
+        grant = next(g for g, x in own["grants"].items() if x["holder"] == "agent")
+        self.assertRaises(Exception, self.service.admit, decide(self.service.view(), self.signer("agent"), grant,
+                                                                resource, at=self.clock()))   # not the agent's yes
+        self.service.admit(decide(self.service.view(), self.signer("h1"), self.human_cap, resource, at=self.clock()))
+        self.assertEqual(self.loop.run()["played"][resource], "admitted")
+        self.land(rounds=2)
+        self.assertNotIn(SECRET, sh(self.repo, "git", "show", "main:app.py"))
 
 
 class Limits(Route):

@@ -1,7 +1,7 @@
 // Standard — operations console. Opens on the product in production (RUN); construction (BUILD) is one section away.
-// Reads /api/state; signs reviews in this browser (sign.js). Nothing here is a permission: the kernel decides.
+// Reads /api/state; signs your decisions and rules in this browser (sign.js). Nothing here is a permission: the kernel decides.
 import { envelope, forgetSigner, importKeyFile, loadSigner, saveSigner } from "/sign.js";
-import { createObjectives } from "/objectives.js";
+import { createRules } from "/rules.js";
 
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -22,13 +22,7 @@ const NAMES = {
   vulns: "Vulnérabilités connues", "deps-age": "Dépendances à jour", licenses: "Licences autorisées",
   secrets: "Aucun secret dans le code", sast: "Analyse de sécurité du code", ci: "Tests au vert",
   actions: "Actions CI épinglées", sbom: "Inventaire des composants", branch: "Protection de la branche principale",
-  lineage: "Chaque changement est jugé", inventory: "Dépôt entièrement couvert", soa: "Déclaration d'applicabilité",
-  isms: "Politique de sécurité", risk: "Analyse de risques", access: "Revue des accès", training: "Formation",
-  hr: "Sécurité des ressources humaines", suppliers: "Registre des fournisseurs", incident: "Procédure d'incident",
-  continuity: "Test de continuité", backup: "Restauration des sauvegardes", legal: "Obligations légales",
-  audit: "Audit indépendant", physical: "Sécurité physique", crypto: "Politique cryptographique",
-  resilience: "Tests de résilience", assets: "Inventaire des actifs", infra: "Socle d'infrastructure",
-  monitoring: "Supervision", threat: "Veille sur les menaces",
+  lineage: "Chaque changement est jugé", inventory: "Dépôt entièrement couvert",
   "run-sources": "Métriques de production collectées", "run-slo": "Objectif de service tenu", "run-live": "main en production",
 };
 const DOMAINS = [
@@ -37,31 +31,31 @@ const DOMAINS = [
   ["Intégration continue", (r) => repo(r) && r.domain === "ci"],
   ["Gouvernance du code", (r) => repo(r) && ["settings", "main", "inventory"].includes(r.domain)],
   ["Production", (r) => r.resource.startsWith("run:")],
-  ["Organisation", (r) => r.resource.startsWith("org:")],
 ];
 const repo = (r) => r.resource.startsWith("repo:");
 const STATES = {
-  held: "Tenue", gap: "Écart", escalated: "Escaladée", attest: "À attester", unmeasured: "Non mesurée", pending: "En mesure",
+  held: "Tenue", gap: "Écart", escalated: "Escaladée", unmeasured: "Non mesurée", pending: "En mesure",
 };
-const WHO = { agent: "L'agent seul", review: "L'agent, puis une revue", people: "Une personne" };
 const name = (id) => NAMES[id] || id;
 const LEVEL = {
-  autonomous: ["held", "Autonome", "L'agent répare seul"], supervised: ["gap", "Supervisée", "L'agent prépare, une personne signe"],
-  human: ["attest", "Humaine", "Seules des personnes agissent"], observed: ["pending", "Observation", "Standard mesure, personne n'agit par lui"],
+  autonomous: ["held", "Autonome", "L'agent joue seul, dans les règles"], decision: ["gap", "Ta décision", "L'agent prépare, tu dis oui ou non"],
+  human: ["escalated", "Toi", "Aucun coup des règles n'y touche : c'est toi"], observed: ["pending", "Observation", "Standard mesure, personne n'agit par lui"],
 };
 const RAISE = {
-  autonomous: "Déjà au maximum : rien n'entre sans preuve indépendante, et cette preuve suffit.",
-  supervised: "Une recette dont le résultat se recalcule à l'identique ferait passer ce type de correction en autonome.",
-  human: "Un instrument qui mesure ce point dans le code ou la plateforme remplacerait l'attestation.",
-  observed: "Une opération d'exploitation dans la loi (par exemple revenir à la version précédente), exécutée par la garde sous conditions mesurées.",
+  autonomous: "Déjà au maximum : l'agent joue seul quand les faits du scanner tiennent, et tu peux couper la route dans les règles.",
+  decision: "Rallumer une route automatique de ce coup dans Règles du jeu.",
+  human: "Un coup des règles qui atteigne ce réglage (aujourd'hui chez le fournisseur).",
+  observed: "Une section [deploy] : Standard déploie main et revient en arrière sous les seuils des règles.",
 };
+const OP = { remediate: "Réparation", integrate: "Contribution", implement: "Implémentation", deploy: "Mise en production",
+  canary: "Canari", rollback: "Retour arrière", restart: "Redémarrage", abort: "Retrait du canari" };
 const levelTag = (lv) => `<span class="state ${LEVEL[lv][0]}"><i></i>${LEVEL[lv][1]}</span>`;
 const VALUES = { met: "tenu", behind: "en retard", none: "aucun", current: "à jour", complete: "complète", green: "au vert", red: "en échec", all: "toutes",
   compliant: "conformes", "guard-only": "garde seule" };
 function measure(r) {
   if (r.diagnostic_alignment === "stale") return "diagnostic périmé ; preuve à relire";
   if (r.diagnostic_conflict) return r.state === "held" ? "preuve tenue ; diagnostic divergent" : "diagnostic vert ; preuve attendue";
-  if (!r.measured) return r.state === "held" ? "prouvée" : r.state === "attest" ? "attestation attendue" : "en attente";
+  if (!r.measured) return r.state === "held" ? "prouvée" : "en attente";
   if (r.measured.startsWith("uncovered")) return "aucun instrument ici";
   const found = /^found:(\d+)$/.exec(r.measured);
   return found ? `${found[1]} trouvé${found[1] === "1" ? "" : "s"}` : VALUES[r.measured] || r.measured;
@@ -74,31 +68,32 @@ function subject(s) {
 // ---- routing --------------------------------------------------------------------------------------------------------
 const ROUTES = {
   standard: ["Standard", "standard"],
-  run: ["Run", "run"], alerts: ["Alertes", "run"], objectives: ["Objectifs et réglages", "run"], autonomy: ["Autonomie", "run"], compliance: ["Conformité", "run"], activity: ["Activité", "run"],
+  decisions: ["Décisions", "both"], rules: ["Règles du jeu", "both"],
+  run: ["Run", "run"], alerts: ["Alertes", "run"], autonomy: ["Autonomie", "run"], activity: ["Activité", "run"],
   contributions: ["Contributions", "build"], requests: ["Demandes", "build"],
-  reviews: ["Revues", "both"], proofs: ["Preuves", "both"], settings: ["Réglages", "both"],
+  proofs: ["Preuves", "both"], settings: ["Clé de signature", "both"],
 };
 let state = null, signer = null, alerting = null;
 const route = () => (location.hash.slice(2) in ROUTES ? location.hash.slice(2) : "standard");
 window.addEventListener("hashchange", () => render());
 
 const features = () => state.build.requests.flatMap((r) => r.features);
-function pending() {
-  return [...state.build.contributions.filter((c) => c.awaiting_review), ...state.run.repairs.filter((r) => r.awaiting_review),
-    ...features().filter((f) => f.awaiting_review)];
-}
+const candidates = () => [...state.build.contributions, ...state.run.repairs, ...features()];
+// What waits for you: the moves only your decision can play (the same reading the agent plays from).
+const pending = () => state.queue;
 
 function frame() {
-  const here = route(), reviews = pending().length, untaken = alerting?.untaken || 0;
-  const badge = (id) => id === "reviews" && reviews ? `<span class="badge">${reviews}</span>`
-    : id === "alerts" && untaken ? `<span class="badge alarm">${untaken}</span>` : "";
+  const here = route(), waiting = pending().length, open = alerting?.open || 0;
+  const badge = (id) => id === "decisions" && waiting ? `<span class="badge">${waiting}</span>`
+    : id === "alerts" && open ? `<span class="badge alarm">${open}</span>` : "";
   const link = (id) => `<a href="#/${id}" ${id === here ? 'aria-current="page"' : ""}><span>${ROUTES[id][0]}</span>${badge(id)}</a>`;
-  document.title = untaken ? `(${untaken}) Standard` : "Standard";
+  document.title = waiting ? `(${waiting}) Standard` : "Standard";
   $("#nav").innerHTML = `
     <div class="group">Niveau</div>${link("standard")}
-    <div class="group">Exploitation</div>${link("run")}${link("alerts")}${link("objectives")}${link("autonomy")}${link("compliance")}${link("activity")}
+    <div class="group">Toi</div>${link("decisions")}${link("rules")}
+    <div class="group">Exploitation</div>${link("run")}${link("alerts")}${link("autonomy")}${link("activity")}
     <div class="group">Construction</div>${link("contributions")}${link("requests")}
-    <div class="group">Gouvernance</div>${link("reviews")}${link("proofs")}${link("settings")}`;
+    <div class="group">Preuves</div>${link("proofs")}${link("settings")}`;
   const others = state.products.length > 1;
   $("#product").innerHTML = `<div class="mark">${esc(state.product.slice(0, 1).toUpperCase())}</div><div>
     ${others ? `<select aria-label="Produit">${state.products.map((p) => `<option ${p === state.product ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`
@@ -127,34 +122,33 @@ async function refresh() {
 function render() {
   if (!state) return;
   frame();
-  const views = { standard: standardView, run: runView, alerts: alertsView, objectives: objectivesView, autonomy, compliance, activity, contributions, requests, reviews, proofs, settings };
+  const views = { standard: standardView, decisions, rules: rulesView, run: runView, alerts: alertsView, autonomy, activity, contributions, requests, proofs, settings };
   $("#view").innerHTML = banner() + views[route()]();
   if (route() === "run") loadRun();
-  if (route() === "objectives") loadObjectives();
+  if (route() === "rules") loadRules();
   if (route() === "settings") bindSettings();
   document.querySelectorAll("[data-review]").forEach((b) => b.addEventListener("click", () => openReview(b.dataset.review)));
   document.querySelectorAll("[data-agent-context]").forEach((b) => b.addEventListener("click", () => openAgentContext(b.dataset.agentContext, b.dataset.id)));
-  document.querySelectorAll("[data-ack]").forEach((b) => b.addEventListener("click", () => take(b)));
 }
 
 // ---- RUN: the product in production -------------------------------------------------------------------------------
 function counts() {
   const by = (s) => state.requirements.filter((r) => r.state === s).length;
   return { total: state.requirements.length, held: by("held"), gap: by("gap"), escalated: by("escalated"),
-    attest: by("attest"), unmeasured: by("unmeasured") };
+    unmeasured: by("unmeasured") };
 }
 
 function standardLevel(c) {
   const ratio = c.held / Math.max(c.total, 1);
   if (c.escalated) return ["escalated", "Dette critique", "Une échéance Standard est dépassée : le système ne masque pas le retard, il l'escalade."];
-  if (ratio === 1) return ["held", "Auditable", "Toutes les exigences Standard visibles ici disposent d'une preuve ou d'une attestation fraîche."];
-  if (ratio >= 0.85 && !c.unmeasured) return ["gap", "Maintenu", "Le socle est largement tenu ; la montée dépend surtout des écarts et attestations restants."];
-  if (ratio >= 0.55) return ["gap", "Sous contrôle", "Le système mesure le terrain et pousse les écarts vers réparation, preuve ou personne responsable."];
+  if (ratio === 1) return ["held", "Auditable", "Toutes les exigences Standard visibles ici disposent d'une preuve fraîche."];
+  if (ratio >= 0.85 && !c.unmeasured) return ["gap", "Maintenu", "Le socle est largement tenu ; la montée dépend des écarts restants."];
+  if (ratio >= 0.55) return ["gap", "Sous contrôle", "Le système mesure le terrain et pousse les écarts vers l'agent, ou vers toi."];
   return ["pending", "Observé", "Standard commence par rendre les trous visibles : rien n'est considéré conforme par silence."];
 }
 
 function blockers(limit = 6) {
-  const order = { escalated: 0, gap: 1, attest: 2, unmeasured: 3, pending: 4, held: 5 };
+  const order = { escalated: 0, gap: 1, unmeasured: 3, pending: 4, held: 5 };
   return [...state.requirements].filter((r) => r.state !== "held")
     .sort((a, b) => order[a.state] - order[b.state] || a.id.localeCompare(b.id)).slice(0, limit);
 }
@@ -164,18 +158,10 @@ function autonomyBuckets() {
   const rows = state.autonomy.requirements.map((a) => ({ ...a, req: reqs[a.id] })).filter((a) => a.req);
   return {
     alone: rows.filter((a) => a.level === "autonomous" && ["gap", "pending"].includes(a.req.state)),
-    prepare: rows.filter((a) => a.level === "supervised" && a.req.state !== "held"),
+    prepare: rows.filter((a) => a.level === "decision" && a.req.state !== "held"),
     people: rows.filter((a) => a.level === "human" && a.req.state !== "held"),
     waiting: rows.filter((a) => a.blocked || a.req.state === "unmeasured"),
   };
-}
-
-function auditReadings() {
-  return (state.external_references || []).map(({ label, mapping }) => {
-    const rs = state.requirements.filter((r) => r.projections?.includes(label));
-    const held = rs.filter((r) => r.state === "held").length;
-    return { label, mapping, held, total: rs.length };
-  });
 }
 
 function standardView() {
@@ -190,20 +176,19 @@ function standardView() {
     <section class="stdgrid">
       <div class="stdpanel">
         <h2>Ce qui empêche de monter</h2>
-        ${blocked.length ? `<div class="stdlist">${blocked.map((r) => `<a href="#/compliance"><span class="state ${r.state}"><i></i>${STATES[r.state]}</span><b>${esc(name(r.id))}</b><small>${esc(measure(r))}</small></a>`).join("")}</div>`
-          : `<div class="clear">Aucun bloqueur visible : les preuves et attestations sont à jour.</div>`}
+        ${blocked.length ? `<div class="stdlist">${blocked.map((r) => `<a href="#/proofs"><span class="state ${r.state}"><i></i>${STATES[r.state]}</span><b>${esc(name(r.id))}</b><small>${esc(measure(r))}</small></a>`).join("")}</div>`
+          : `<div class="clear">Aucun bloqueur visible : les preuves sont à jour.</div>`}
       </div>
       <div class="stdpanel">
         <h2>Ce que l'agent peut faire</h2>
         <div class="stdnums">
           <a href="#/autonomy"><b>${buckets.alone.length}</b><span>agir seul</span></a>
-          <a href="#/reviews"><b>${buckets.prepare.length}</b><span>préparer puis revue</span></a>
-          <a href="#/compliance"><b>${buckets.people.length}</b><span>humain requis</span></a>
+          <a href="#/decisions"><b>${pending().length}</b><span>t'attendent</span></a>
+          <a href="#/autonomy"><b>${buckets.people.length}</b><span>à toi seul</span></a>
           <a href="#/proofs"><b>${buckets.waiting.length}</b><span>preuve attendue</span></a>
         </div>
-        <p class="small quiet">L'agent monte le client vers le même Standard commun : il répare quand la preuve suffit, prépare quand il faut juger, et laisse visible ce qu'il ne peut pas signer.</p>
+        <p class="small quiet">L'agent joue les coups que les règles lui laissent ; les autres t'attendent dans Décisions. Il ne mesure jamais lui-même : le scanner le fait.</p>
         <div class="decide compact"><button class="btn" data-agent-context="patrol" data-id="wide">Contexte de patrouille</button>
-          <button class="btn" data-agent-context="surface" data-id="wide">Carte loi/code</button>
           <span class="small quiet">Le contexte prépare une recherche ; aucune analyse n'est lancée ici.</span></div>
       </div>
       <div class="stdpanel">
@@ -211,15 +196,10 @@ function standardView() {
         <ol class="ladder">
           <li><b>Écart</b><span>une exigence Standard manque de preuve fraîche</span></li>
           <li><b>Obligation</b><span>la dette reste ouverte avec échéance</span></li>
-          <li><b>Travail</b><span>agent, revue ou personne responsable</span></li>
-          <li><b>Preuve</b><span>instrument indépendant ou attestation</span></li>
+          <li><b>Coup</b><span>l'agent propose, les règles disent qui joue</span></li>
+          <li><b>Preuve</b><span>instrument indépendant, jamais l'agent</span></li>
           <li><b>Admission</b><span>le noyau ferme ou refuse, jamais l'interface</span></li>
         </ol>
-      </div>
-      <div class="stdpanel">
-        <h2>Lectures audit</h2>
-        <div class="auditread">${auditReadings().map((r) => `<a href="#/proofs"><b>${esc(r.label)}</b><span>${r.mapping === "not_established" ? "non cartographié" : `${r.held}/${r.total} cibles tenues`}</span><i style="width:${r.mapping === "not_established" ? 0 : Math.round((100 * r.held) / Math.max(r.total, 1))}%"></i></a>`).join("")}</div>
-        <p class="small quiet">Projections par thème uniquement. Aucune correspondance contrôle par contrôle ni certification.</p>
       </div>
     </section>
     <section><h2>Carte du Standard</h2>${map()}</section>
@@ -235,28 +215,25 @@ function map() {
       <div class="cells">${rs.map((r) => `<button class="cell ${r.state}" title="${esc(name(r.id))} : ${STATES[r.state]}" aria-label="${esc(name(r.id))} : ${STATES[r.state]}" data-req="${esc(r.id)}"></button>`).join("")}</div>
       <div class="tally">${held} sur ${rs.length}</div>`;
   }).join("")}</div>
-  <div class="legend">${["held", "gap", "attest", "unmeasured", "escalated"].map((s) => `<span><i class="cell ${s}"></i>${STATES[s]}</span>`).join("")}</div>`;
+  <div class="legend">${["held", "gap", "unmeasured", "escalated"].map((s) => `<span><i class="cell ${s}"></i>${STATES[s]}</span>`).join("")}</div>`;
 }
 
 function todo() {
   const items = [];
-  for (const e of state.health.escalated) items.push(["alert", `${name(e.target)} a dépassé son échéance`, "Décision humaine requise", "#/compliance", "Voir"]);
-  for (const p of pending()) items.push(["wait", p.kind === "contribution" ? `Relire la contribution de ${p.author}` : `Relire la réparation « ${name(p.target)} »`,
-    "Tests au vert, aucun nouvel écart", null, "Relire", p.resource]);
+  for (const e of state.health.escalated) items.push(["alert", `${name(e.target)} a dépassé son échéance`, "À toi de trancher", "#/proofs", "Voir"]);
+  for (const m of pending()) items.push(["wait", `${OP[m.op] || m.op} : à toi de décider`, m.resource, null, "Décider", m.resource]);
   for (const a of state.run.abandoned) items.push(["alert", `L'agent n'a pas su réparer « ${name(a.target)} »`, "Son dossier explique pourquoi", "#/activity", "Voir"]);
-  const attest = counts().attest;
-  if (attest) items.push(["people", `${plural(attest, "exigence organisationnelle", "exigences organisationnelles")} à attester`, "Politiques, accès, continuité, fournisseurs", "#/compliance", "Voir"]);
-  if (!items.length) return `<div class="clear">Rien ne vous attend. L'agent surveille et répare en continu.</div>`;
+  if (!items.length) return `<div class="clear">Rien ne t'attend. L'agent surveille et répare en continu.</div>`;
   return `<div class="todo">${items.map(([kind, what, sub, href, cta, review]) => `
     <div class="task"><i class="dot ${kind}"></i><div class="what"><b>${esc(what)}</b><span>${esc(sub)}</span></div>
-      ${review ? `<button class="btn primary" data-review="${esc(review)}">${cta}</button>` : `<a class="btn" href="${href}">${cta}</a>`}</div>`).join("")}</div>`;
+      ${review ? (review.startsWith("repo:") ? `<button class="btn primary" data-review="${esc(review)}">${cta}</button>` : `<a class="btn primary" href="#/decisions">${cta}</a>`) : `<a class="btn" href="${href}">${cta}</a>`}</div>`).join("")}</div>`;
 }
 
 function feed(limit) {
   const rows = state.history.slice(0, limit).map((c) => {
     const agent = c.author === "standard-agent";
     return `<li><i class="dot ${agent ? "agent" : "people"}"></i><div><div class="t">${esc(subject(c.subject))}</div>
-      <div class="s">${agent ? "Réparé automatiquement par l'agent" : `Intégré après revue, par ${esc(c.author)}`}</div></div>
+      <div class="s">${agent ? "Joué par l'agent, sous les règles" : `Intégré, par ${esc(c.author)}`}</div></div>
       <time>${c.at > 946684800 ? ago(c.at * 1000) : ""}</time></li>`;
   });
   return `<ul class="feed">${rows.join("")}</ul>`;
@@ -266,17 +243,17 @@ function autonomy() {
   const a = state.autonomy, c = a.count, n = a.total, share = (k) => Math.round((100 * c[k]) / Math.max(n, 1));
   const blocked = a.requirements.filter((r) => r.blocked).length;
   return `<h1>Autonomie</h1>
-    <p class="lede">Ce que Standard fait sans personne, pour chaque élément, et pourquoi pas davantage. L'autonomie n'est jamais une confiance accordée à l'agent : elle existe seulement là où une preuve indépendante suffit.</p>
+    <p class="lede">Ce que Standard fait sans toi, pour chaque élément, sous les règles en vigueur. L'autonomie n'est jamais une confiance accordée à l'agent : c'est une route des règles qui tient sur les faits du scanner.</p>
     <section class="autosum">
       <div class="panel"><h2>Code et conformité</h2>
-        <div class="bar">${["autonomous", "supervised", "human"].map((k) => `<span class="seg-${k}" style="flex:${c[k]}" title="${LEVEL[k][1]} : ${c[k]}"></span>`).join("")}</div>
-        <ul class="levels">${["autonomous", "supervised", "human"].map((k) => `<li>${levelTag(k)}<b>${c[k]} sur ${n}</b><span>${share(k)} %</span><p>${esc(a.levels[k])}</p></li>`).join("")}</ul>
+        <div class="bar">${["autonomous", "decision", "human"].map((k) => `<span class="seg-${k}" style="flex:${c[k]}" title="${LEVEL[k][1]} : ${c[k]}"></span>`).join("")}</div>
+        <ul class="levels">${["autonomous", "decision", "human"].map((k) => `<li>${levelTag(k)}<b>${c[k]} sur ${n}</b><span>${share(k)} %</span><p>${esc(a.levels[k])}</p></li>`).join("")}</ul>
         ${blocked ? `<p class="small quiet">${plural(blocked, "exigence n'est pas mesurée", "exigences ne sont pas mesurées")} sur cette installation : leur autonomie reste théorique tant qu'aucun instrument ne les couvre.</p>` : ""}
       </div>
       <div class="panel"><h2>Exploitation</h2>${levelTag("observed")}<p>${esc(a.runtime.why)}</p>
         <p class="small quiet">Pour aller plus loin : ${esc(RAISE.observed)}</p></div>
     </section>
-    ${["autonomous", "supervised", "human"].map((lv) => {
+    ${["autonomous", "decision", "human"].map((lv) => {
       const rs = a.requirements.filter((r) => r.level === lv);
       return rs.length ? `<section class="lvl"><div class="lvlhead">${levelTag(lv)}<h2>${LEVEL[lv][2]}</h2><span class="quiet">${rs.length} sur ${n}</span></div>
         <div class="lvlbody"><div><h3>Pourquoi cette limite</h3><p>${esc(a.levels[lv])}</p><h3>Ce qui l'augmenterait</h3><p>${esc(RAISE[lv])}</p></div>
@@ -285,15 +262,6 @@ function autonomy() {
     <section class="lvl"><div class="lvlhead">${levelTag("observed")}<h2>${LEVEL.observed[2]}</h2><span class="quiet">tous les composants en exploitation</span></div>
       <div class="lvlbody"><div><h3>Pourquoi cette limite</h3><p>${esc(a.runtime.why)}</p><h3>Ce qui l'augmenterait</h3><p>${esc(RAISE.observed)}</p></div>
       <ul class="items">${["APIs", "Workers et files", "Tâches planifiées", "Bases de données", "Services externes", "Processus"].map((k) => `<li><b>${k}</b></li>`).join("")}</ul></div></section>`;
-}
-
-function compliance() {
-  const c = counts();
-  return `<h1>Conformité</h1>
-    <p class="lede">${c.held} exigences tenues sur ${c.total}, mesurées par des instruments indépendants. On peut durcir une exigence à tout moment ; l'assouplir demande deux personnes et une heure de délai.</p>
-    ${map()}
-    <section><h2>À traiter par vous</h2>${todo()}</section>
-    ${requirementTables()}`;
 }
 
 // ---- Run: the product's APIs and what an engineer on call needs ------------------------------------------------
@@ -334,6 +302,11 @@ const KIND = {
 };
 const bytes = (v) => v == null ? "—" : v >= 1 << 30 ? `${nf(v / (1 << 30), 1)} Go` : `${nf(v / (1 << 20), 0)} Mo`;
 const dur = (s) => s == null ? "—" : s < 120 ? `${nf(s, 0)} s` : s < 7200 ? `${nf(s / 60, 0)} min` : s < 172800 ? `${nf(s / 3600, 0)} h` : `${nf(s / 86400, 0)} j`;
+function budgetBar(b) {
+  if (b == null) return `<div class="bbar"><i style="width:0"></i></div><span class="small quiet">pas encore de données</span>`;
+  const w = Math.max(0, Math.min(1, b)), tone = b < 0 ? "bad" : b < 0.25 ? "warn" : "ok";
+  return `<div class="bbar ${tone}"><i style="width:${(w * 100).toFixed(1)}%"></i></div><span class="small ${tone}">${b < 0 ? `épuisé, dépassé de ${pct(-b, 0)}` : `${pct(b, 1)} restant`}</span>`;
+}
 const pctx = (v) => pct(v, Math.min(3, Math.max(0, String(+(v * 100).toFixed(3)).split(".")[1]?.length || 0)));   // as set
 function reason(w) {
   if (!w) return "";
@@ -443,7 +416,7 @@ async function loadRun() {
       ${kpi("Budget d'erreur", f.budget == null ? "—" : f.budget < 0 ? "Épuisé" : pct(f.budget, 0),
         f.budget == null ? "pas de trafic" : f.budget < 0 ? `consommé à ${pct(1 - f.budget, 0)}` : "restant sur la période", budgetTone)}
     </div>
-    ${Object.keys(d.live.slos || {}).length ? `<section><h2>SLO <span class="quiet small">budget d'erreur sur la fenêtre de chaque SLO ; <a href="#/objectives">régler</a></span></h2><div class="slostrip">${Object.entries(d.live.slos).map(([id, e]) => `
+    ${Object.keys(d.live.slos || {}).length ? `<section><h2>SLO <span class="quiet small">budget d'erreur sur la fenêtre de chaque SLO ; <a href="#/rules">régler</a></span></h2><div class="slostrip">${Object.entries(d.live.slos).map(([id, e]) => `
       <div class="panel"><div class="slohead"><b>${esc(e.name)}</b>${e.fast ? `<span class="sev page">Page</span>` : e.slow ? `<span class="sev ticket">Ticket</span>` : ""}</div>
         <div class="small quiet">${pctx(e.target / 100)} sur ${e.window_d} j · conformité ${e.compliance == null ? "—" : pct(e.compliance, 3)}</div>${budgetBar(e.budget)}
         <div class="burns small">${Object.entries(e.burn || {}).map(([span, v]) => `<span>${fmtBurn(v)} ${span}</span>`).join("")}</div></div>`).join("")}</div></section>` : ""}
@@ -463,22 +436,18 @@ document.addEventListener("click", async (e) => {
   const m = e.target.closest("[data-silence]");
   if (m && alerting) {
     m.disabled = true;
-    const id = "m-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8), g = alerting.signing.engineer;
-    try {
-      for (const [k, v] of [["target_of", m.dataset.silence], ["reason", "silencée depuis Alertes"], ["until", String(Date.now() + 3_600_000)]]) {
-        await signFact(alerting.signing.domain, Math.max(Date.now(), alerting.signing.as_of + 1), g, `run:policy/${id}/${k}`, "value", v);
-      }
-      m.textContent = "Silence signé : appliqué au prochain passage";
-    } catch (err) { m.textContent = `Refusé : ${err.message}`; }
+    const id = "m-" + crypto.randomUUID().replaceAll("-", "").slice(0, 8);
+    await signRules({ sections: { silences: { [id]: { target_of: m.dataset.silence, reason: "silencée depuis Alertes",
+      until: String(Date.now() + 3_600_000) } } } }, m);
     return;
   }
   const d = e.target.closest("[data-decide]");
-  if (d && runData) {
+  if (d) {
     d.disabled = true;
-    const at = Math.max(Date.now(), state.signing.as_of + 1);
     try {
-      await signFact(state.signing.domain, at, runData.live.grant, d.dataset.decide, d.dataset.prop, "yes");
-      d.textContent = "Signé : la garde exécute au prochain passage";
+      await (d.dataset.no ? sayNo(d.dataset.decide) : sayYes(d.dataset.decide));
+      d.textContent = d.dataset.no ? "Gelé" : "Oui signé : l'agent joue au prochain passage";
+      setTimeout(refresh, 800);
     } catch (err) { d.textContent = `Refusé : ${err.message}`; }
     return;
   }
@@ -503,11 +472,11 @@ function liveDetail(x) {
   const RULES = [
     [/^migration not declared compatible: (.*)$/, (m) => [`Retour impossible : migration non déclarée compatible (${m[1]}). Une personne corrige en avant.`, "bad"]],
     [/^stepping back across a compatible migration is turned off$/, () => ["Retour à travers une migration compatible désactivé dans les règles", "wait"]],
-    [/^automatic deployment is off/, () => ["Mise en production automatique désactivée : un ingénieur approuve", "wait"]],
-    [/^automatic rollback is off/, () => ["Retour automatique désactivé : un ingénieur décide", "wait"]],
+    [/^the rules deploy directly$/, () => ["Les règles déploient directement : pas de canari", ""]],
+    [/^the canary holds$/, () => ["Le canari tient", "ok"]],
     [/^(\w{7})\w* never answered: (\w{7})\w* still serves$/, (m) => [`${m[1]} n'a jamais répondu : ${m[2]} sert toujours, retour automatique`, "bad"]],
     [/^automatic restart is off$/, () => ["Redémarrage automatique désactivé", ""]],
-    [/^deployments are frozen$/, () => ["Mises en production gelées par un ingénieur", "wait"]],
+    [/^deployments are frozen$/, () => ["Mises en production gelées", "wait"]],
     [/^outside the deployment window \((.*)\)$/, (m) => [`Hors de la fenêtre de mise en production (${m[1]})`, "wait"]],
     [/^error budget left ([\d.]+) % is under ([\d.]+) %: frozen$/, (m) => [`Budget d'erreur restant ${m[1]} % sous ${m[2]} % : mises en production gelées`, "wait"]],
     [/^the breach follows a switch/, () => ["La rupture suit une mise en production : redémarrer le même code ne la corrigerait pas", "wait"]],
@@ -542,16 +511,13 @@ function liveSection(live) {
     ${liveActions(live)}</section>`;
 }
 function liveActions(live) {
-  const can = Boolean(signer && live.grant && signer.identity === live.grant.holder), a = live.actions || {};
-  const btn = (kind, label, resource, prop, tone) => resource
-    ? `<button class="btn ${tone}" data-decide="${esc(resource)}" data-prop="${prop}" ${can ? "" : "disabled"}>${label}</button>` : "";
-  const buttons = [btn("deploy", "Mettre main en production", a.deploy, "approved", "primary"),
-    btn("rollback", "Revenir à la version précédente", a.rollback, "requested", ""),
-    btn("restart", "Redémarrer sans coupure", a.restart, "requested", ""),
-    live.canary ? btn("abort", "Retirer le canary", a.abort, "requested", "danger") : ""].join("");
-  return `<div class="decide">${buttons}<span class="small quiet">${can
-    ? "Chaque décision est une signature de ce navigateur ; la loi l'exécute par la garde, seulement si le fait du scanner la permet."
-    : `Décisions réservées à ${esc(live.grant?.holder || "l'ingénieur habilité")}, avec sa clé dans ce navigateur.`}</span></div>`;
+  const can = Boolean(signer && live.grant && signer.identity === live.grant.holder);
+  const ms = (live.moves || []).filter((m) => ["yours", "ready", "decided"].includes(m.status));
+  const btn = (m) => `<button class="btn ${m.op === "abort" ? "danger" : m.op === "deploy" ? "primary" : ""}" data-decide="${esc(m.resource)}" ${can && m.status === "yours" ? "" : "disabled"}>
+      ${OP[m.op] || m.op}${m.status === "yours" ? "" : " (l'agent s'en charge)"}</button>`;
+  return `<div class="decide">${ms.map(btn).join("")}<span class="small quiet">${can
+    ? "Oui est une signature de ce navigateur sur ce coup exact ; l'agent le joue, la garde l'exécute si les faits du scanner tiennent encore."
+    : `Décisions réservées à ${esc(live.grant?.holder || "l'humain")}, avec sa clé dans ce navigateur.`}</span></div>`;
 }
 
 // ---- ALERTS: what is wrong now, and who took it -------------------------------------------------------------------
@@ -559,14 +525,11 @@ const ALERT_STATE = { failing: ["escalated", "En échec"], degraded: ["gap", "D�
   resolved: ["held", "Résolu"] };
 function banner() {
   if (!alerting || !alerting.open || route() === "alerts") return "";
-  const u = alerting.unattended;
-  return `<a class="alarm-bar ${u ? "hot" : ""}" href="#/alerts"><i></i><b>${plural(alerting.open, "alerte ouverte", "alertes ouvertes")}</b>
-    <span>${alerting.untaken ? `${alerting.untaken} sans personne pour la prendre${u ? `, dont ${u} depuis plus de ${alerting.ack_ms / 60000} min` : ""}` : "toutes prises en charge"}</span><em>Voir</em></a>`;
+  return `<a class="alarm-bar hot" href="#/alerts"><i></i><b>${plural(alerting.open, "alerte ouverte", "alertes ouvertes")}</b><em>Voir</em></a>`;
 }
 function alertsView() {
   if (!alerting) return `<h1>Alertes</h1><div class="note bad">Les alertes sont indisponibles.</div>`;
-  const grant = alerting.signing.grant, can = Boolean(signer && grant && signer.identity === grant.holder);
-  const engineer = Boolean(signer && alerting.signing.engineer && signer.identity === alerting.signing.engineer.holder);
+  const grant = state.signing.grants.human, can = Boolean(signer && grant && signer.identity === grant.holder);
   const what = (a) => a.kind === "slo" ? `SLO <b>${esc(a.name)}</b>` : a.kind === "obligation" ? `Écart réglementaire : ${esc(name(a.name.replace(/^target:/, "")))}`
     : a.kind === "source" ? `Source de métriques ${esc(a.name)}` : `${esc(KIND[a.kind]?.[1] || a.kind)} <b>${esc([a.operation, a.name].filter(Boolean).join(" "))}</b>`;
   const why = (a) => a.why?.rule === "overdue" ? `échéance du ${due(a.why.due)} dépassée` : a.why?.rule === "source_down" ? "ne répond pas" : reason(a.why);
@@ -575,16 +538,11 @@ function alertsView() {
     return `<div class="rowi"><div class="main">${a.closed_at ? "" : `<span class="sev ${a.severity}">${a.severity === "page" ? "Page" : "Ticket"}</span>`}<span class="state ${s[0]}"><i></i>${s[1]}</span> ${what(a)}
       <div class="facts">${fact(`depuis ${ago(a.opened_ms)}`, "")}${a.why ? fact(why(a), "") : ""}
         ${a.closed_at ? fact(`résolu ${ago(a.closed_at * 1000)}`, "ok") : ""}
-        ${a.silenced ? fact(`silencée jusqu'à ${new Date(a.silenced.until).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}${a.silenced.reason ? ` : ${a.silenced.reason}` : ""}`, "")
-          : a.taken ? fact("Prise en charge signée", "ok") : a.closed_at ? "" : fact(a.unattended ? "Personne ne l'a prise" : "En attente d'une personne", a.unattended ? "bad" : "wait")}</div></div>
-      ${!a.closed_at && !a.silenced && engineer && a.subject ? `<button class="btn" data-silence="${esc(a.subject)}">Silencer 1 h</button>` : ""}
-      ${!a.closed_at && !a.taken && !a.silenced ? `<button class="btn primary" data-ack="${esc(a.resource)}" ${can ? "" : "disabled"}>Prendre en charge</button>` : ""}</div>`;
+        ${a.silenced ? fact(`silencée jusqu'à ${new Date(Number(a.silenced.until)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}${a.silenced.reason ? ` : ${a.silenced.reason}` : ""}`, "") : ""}</div></div>
+      ${!a.closed_at && !a.silenced && can && a.subject ? `<button class="btn" data-silence="${esc(a.subject)}">Silencer 1 h</button>` : ""}</div>`;
   };
   const open = alerting.alerts.filter((a) => !a.closed_at), closed = alerting.alerts.filter((a) => a.closed_at);
-  return `<h1>Alertes</h1><p class="lede">Ce qui se dégrade en production et les écarts dont l'échéance est passée. Prendre une alerte en charge
-    est une signature faite dans ce navigateur et gardée dans le journal : c'est la preuve qu'une personne a été prévenue et a répondu.</p>
-    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour prendre une alerte en charge.</div>`
-      : !can ? `<div class="note warn">Seul ${esc(grant?.holder || "le détenteur du droit de revue")} peut prendre une alerte en charge ici.</div>` : ""}
+  return `<h1>Alertes</h1><p class="lede">Ce qui se dégrade en production et les écarts dont l'échéance est passée. Un silence est une règle signée : il coupe le badge, jamais un fait.</p>
     <section><h2>Ouvertes <span class="quiet small">${open.length}</span></h2><div class="rows">${open.map(row).join("") || `<div class="rowi quiet">Aucune alerte ouverte</div>`}</div></section>
     ${closed.length ? `<section><h2>Résolues ces dernières 24 h</h2><div class="rows">${closed.map(row).join("")}</div></section>` : ""}
     ${alerting.silenced ? `<p class="small quiet">${plural(alerting.silenced, "alerte silencée", "alertes silencées")} (maintenance) : hors du badge, les faits signés ne changent pas.</p>` : ""}
@@ -592,37 +550,38 @@ function alertsView() {
       Une alerte s'ouvre quand un composant passe dégradé ou en échec sur les 5 dernières minutes, ou quand une source se tait ;
       elle se ferme quand il revient. Pas encore d'e-mail ni de messagerie : seulement cette page, le badge et le titre de l'onglet.</p>`;
 }
-async function take(button) {
-  const grant = alerting.signing.grant;
-  button.disabled = true;
-  button.textContent = "Signature";
-  const statement = { id: `ack-${crypto.randomUUID().replaceAll("-", "")}`, at: Math.max(Date.now(), alerting.signing.as_of + 1),
-    author: signer.identity, under: grant.id, resource: button.dataset.ack, property: "ack", status: "taken", level: "real" };
-  try {
-    const env = await envelope(alerting.signing.domain, "observation", statement, signer);
-    const r = await fetch("/api/admit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(env) });
-    const out = await r.json();
-    if (!r.ok) throw new Error(out.refused || out.error);
-    refresh();
-  } catch (err) {
-    button.textContent = `Refusé : ${err.message}`;
-  }
-}
-
-// ---- OBJECTIVES: what engineers set (D31) ---------------------------------------------------------------------------
-async function signFact(domain, at, grant, resource, property, status) {
-  const statement = { id: `set-${crypto.randomUUID().replaceAll("-", "")}`, at, author: signer.identity, under: grant.id,
-    resource, property, status: String(status), level: "real" };
-  const env = await envelope(domain, "observation", statement, signer);
+// ---- your three gestures ---------------------------------------------------------------------------------------------
+async function admit(kind, body) {
+  const statement = { id: `${kind}-${crypto.randomUUID().replaceAll("-", "")}`, at: Math.max(Date.now(), state.signing.as_of + 1),
+    author: signer.identity, ...body };
+  const env = await envelope(state.signing.domain, kind, statement, signer);
   const r = await fetch("/api/admit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(env) });
   const out = await r.json();
   if (!r.ok) throw new Error(out.refused || out.error);
   return out;
 }
-const { view: objectivesView, load: loadObjectives } = createObjectives({
-  $, esc, KIND, localGet, localSet, nf, pct, msf, pctx, fact, ago, signFact, getSigner: () => signer,
-});
+const sayYes = (resource) => admit("observation", { under: state.signing.grants.human.id, resource, property: "decision",
+  status: "approve", level: "real" });
+const sayNo = (scope) => admit("freeze", { scope });
+const { view: rulesView, load: loadRules, signRules: signRulesInto } = createRules({ $, esc, fact, ago, getSigner: () => signer, envelope });
+const signRules = (changes, el) => signRulesInto(changes, { set textContent(v) { el.textContent = v; } });
 
+function decisions() {
+  const items = pending(), byResource = Object.fromEntries(candidates().map((c) => [c.resource, c]));
+  return `<h1>Décisions</h1>
+    <p class="lede">Les coups que seule ta décision peut jouer : les règles les gardent pour toi, ou aucun chemin automatique ne tient.
+      Tout le reste (tests, absence de régression, périmètre, faits de production) est déjà mesuré. Oui porte sur ce coup exact ; non le gèle.</p>
+    ${signer ? "" : `<div class="note warn" style="margin-top:24px">Pour décider, ajoute ta clé dans Clé de signature.</div>`}
+    <section>${items.length ? `<div class="rows">${items.map((m) => {
+      const c = byResource[m.resource];
+      return `<div class="rowi"><div class="main"><b>${OP[m.op] || esc(m.op)}</b> ${c?.kind === "contribution" ? `<span class="quiet">par ${esc(c.author)}</span>` : c?.target ? `<span class="quiet">${esc(name(c.target))}</span>` : ""}
+        <span class="sha">${esc(m.resource)}</span>
+        <div class="facts">${m.refuted.map((x) => fact(`hors route automatique : ${x}`, "wait")).join("")}${m.turned_off.length ? fact(`route coupée par tes règles : ${m.turned_off.join(", ")}`, "wait") : ""}</div></div>
+        ${m.resource.startsWith("repo:") ? `<button class="btn primary" data-review="${esc(m.resource)}">Lire et décider</button>`
+          : `<button class="btn primary" data-decide="${esc(m.resource)}" ${signer ? "" : "disabled"}>Oui</button><button class="btn" data-decide="${esc(m.resource)}" data-no="1" ${signer ? "" : "disabled"}>Non</button>`}</div>`;
+    }).join("")}</div>`
+      : `<div class="empty"><b>Rien ne t'attend</b>L'agent joue seul ce que les règles lui laissent.</div>`}</section>`;
+}
 
 function activity() {
   const repairs = state.run.repairs;
@@ -633,11 +592,10 @@ function activity() {
       : progress ? `<section><h2>Progression</h2><p>${progress.pf} impasse${progress.pf === 1 ? "" : "s"} confirmée${progress.pf === 1 ? "" : "s"} · ${progress.waiting.length} tâche${progress.waiting.length === 1 ? "" : "s"} en attente</p></section>` : ""}
     ${repairs.length ? `<section><h2>Réparations de l'agent</h2><div class="rows">${repairs.map((p) => `
       <div class="rowi"><div class="main"><b>${esc(name(p.target))}</b> <span class="sha">${short(p.head)}</span>
-        <div class="facts">${p.route === "recipe" ? fact("Reproduite à l'identique", p.facts.reproduced === "yes" ? "ok" : "")
-          : fact(p.facts.review === "approved" ? "Revue approuvée" : "Revue requise", p.facts.review === "approved" ? "ok" : "wait")}
+        <div class="facts">${p.way === "recipe" ? fact("Recette", p.facts.reproduced === "yes" ? "ok" : "") : fact("Écrite par un modèle", "")}
           ${fact(p.facts.tests === "green" ? "Tests au vert" : p.facts.tests ? "Tests en échec" : "Tests en cours", p.facts.tests === "green" ? "ok" : p.facts.tests ? "bad" : "")}
-          ${p.submitted ? fact("Acceptée par la loi", "ok") : ""}</div></div>
-        <button class="btn ${p.awaiting_review ? "primary" : ""}" data-review="${esc(p.resource)}">${p.awaiting_review ? "Relire" : "Détails"}</button></div>`).join("")}</div></section>` : ""}
+          ${moveFact(p.move)}</div></div>
+        <button class="btn ${p.awaiting ? "primary" : ""}" data-review="${esc(p.resource)}">${p.awaiting ? "Décider" : "Détails"}</button></div>`).join("")}</div></section>` : ""}
     ${state.run.abandoned.length ? `<section><h2>Ce que l'agent n'a pas su réparer</h2>${state.run.abandoned.map((a) => `
       <div class="panel"><b>${esc(name(a.target))}</b><pre style="margin-top:12px">${esc(a.dossier)}</pre></div>`).join("")}</section>` : ""}
     <section><h2>Historique de production</h2>${feed(50)}</section>`;
@@ -646,6 +604,10 @@ function activity() {
 function fact(text, tone) {
   return `<span class="fact ${tone}"><i></i>${esc(text)}</span>`;
 }
+const MOVE = { ready: ["L'agent joue seul", "ok"], decided: ["Oui signé : l'agent joue", "ok"], yours: ["À toi de décider", "wait"],
+  measuring: ["En mesure", ""], refuted: ["Refusé par les faits", "bad"], frozen: ["Gelé", "bad"], playing: ["En cours", "ok"],
+  done: ["Joué", "ok"], failed: ["N'a pas abouti", "bad"] };
+const moveFact = (m) => m?.status ? fact(MOVE[m.status]?.[0] || m.status, MOVE[m.status]?.[1] || "") : "";
 
 const auto = (id) => state.autonomy.requirements.find((a) => a.id === id);
 
@@ -667,16 +629,16 @@ function requirementTables() {
 function contributions() {
   const cs = state.build.contributions;
   const status = (c) => c.landed ? fact("En production", "ok") : c.stale ? fact("La branche principale a avancé : à rebaser", "wait")
-    : c.blocked.length ? fact("Bloquée par la loi", "bad") : c.awaiting_review ? fact("Attend une revue", "wait") : fact("Mesure en cours", "");
+    : c.blocked.length ? fact("Bloquée par les faits", "bad") : moveFact(c.move) || fact("Mesure en cours", "");
   return `<h1>Contributions</h1>
-    <p class="lede">Le travail poussé par les développeurs. Il n'entre en production qu'avec les tests au vert, aucun nouvel écart et une revue signée.</p>
+    <p class="lede">Le code poussé par d'autres que l'agent. Il n'entre qu'avec les tests au vert, aucun nouvel écart, et ton oui.</p>
     <section>${cs.length ? `<div class="rows">${cs.map((c) => `
       <div class="rowi"><div class="main"><b>${esc(c.branch)}</b> <span class="quiet">par ${esc(c.author)}</span> <span class="sha">${short(c.head)}</span>
         <div class="facts">${status(c)}
           ${fact(c.facts.tests === "green" ? "Tests au vert" : c.facts.tests ? "Tests en échec" : "Tests en cours", c.facts.tests === "green" ? "ok" : c.facts.tests ? "bad" : "")}
           ${fact(c.facts.regressions === "none" ? "Aucun nouvel écart" : c.facts.regressions ? "Ouvre un nouvel écart" : "Écarts en cours", c.facts.regressions === "none" ? "ok" : c.facts.regressions ? "bad" : "")}</div>
         ${c.why.length ? `<ul class="where">${c.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}</div>
-        ${c.landed ? "" : `<button class="btn ${c.awaiting_review ? "primary" : ""}" data-review="${esc(c.resource)}">${c.awaiting_review ? "Relire" : "Détails"}</button>`}</div>`).join("")}</div>`
+        ${c.landed ? "" : `<button class="btn ${c.awaiting ? "primary" : ""}" data-review="${esc(c.resource)}">${c.awaiting ? "Décider" : "Détails"}</button>`}</div>`).join("")}</div>`
       : `<div class="empty"><b>Aucune contribution</b>Poussez une branche à votre nom, par exemple <span class="sha">git push origin HEAD:refs/heads/vous/ma-branche</span>.</div>`}</section>`;
 }
 
@@ -702,16 +664,16 @@ function contractFact(r) {
   return fact(`Contrat : ${c}`, "bad");
 }
 function requests() {
-  const rs = state.build.requests, grant = state.signing.grants.product;
+  const rs = state.build.requests, grant = state.signing.grants.human;
   const can = Boolean(signer && grant && signer.identity === grant.holder);
   const feature = (f) => `<div class="rowi"><div class="main"><b>Implémentation</b> <span class="sha">${short(f.head)}</span>
       <div class="facts">${f.landed ? fact("Sur main", "ok") : f.stale ? fact("main a avancé : l'agent réimplémente", "wait") : ""}
         ${fact(f.facts.acceptance === "green" ? "Contrat tenu" : f.facts.acceptance ? `Contrat : ${f.facts.acceptance}` : "Contrat en mesure", f.facts.acceptance === "green" ? "ok" : f.facts.acceptance ? "bad" : "")}
         ${fact(f.facts.tests === "green" ? "Tests de main au vert" : f.facts.tests ? "Tests de main en échec" : "Tests en mesure", f.facts.tests === "green" ? "ok" : f.facts.tests ? "bad" : "")}
         ${fact(f.facts.regressions === "none" ? "Aucun nouvel écart" : f.facts.regressions ? "Ouvre un écart" : "Écarts en mesure", f.facts.regressions === "none" ? "ok" : f.facts.regressions ? "bad" : "")}
-        ${f.facts.review === "approved" ? fact("Revue approuvée", "ok") : ""}</div>
+        ${moveFact(f.move)}</div>
       ${f.why.length ? `<ul class="where">${f.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}</div>
-      ${f.landed ? "" : `<button class="btn ${f.awaiting_review ? "primary" : ""}" data-review="${esc(f.resource)}">${f.awaiting_review ? "Relire" : "Détails"}</button>`}</div>`;
+      ${f.landed ? "" : `<button class="btn ${f.awaiting ? "primary" : ""}" data-review="${esc(f.resource)}">${f.awaiting ? "Décider" : "Détails"}</button>`}</div>`;
   const card = (r) => {
     const st = RSTATE[r.state] || ["pending", r.state];
     const contributions = state.build.contributions.filter((c) => c.request === r.id);
@@ -727,18 +689,18 @@ function requests() {
           <div class="facts">${fact(c.facts.acceptance === "green" ? "Contrat tenu" : c.facts.acceptance ? `Contrat : ${c.facts.acceptance}` : "Contrat en mesure", c.facts.acceptance === "green" ? "ok" : c.facts.acceptance ? "bad" : "")}</div></div>
           <button class="btn" data-review="${esc(c.resource)}">Détails</button></div>`).join("")}</div>` : ""}
       <div class="decide compact"><button class="btn" data-agent-context="request" data-id="${esc(r.id)}">Contexte agent</button>
-        <span class="small quiet">Dossier lisible par l'agent et par vous : demande, loi, réglages système, preuves et limites.</span></div>
+        <span class="small quiet">Dossier lisible par l'agent et par toi : demande, règles, preuves et limites.</span></div>
       ${r.state === "proposed" || r.state === "contracted" ? `<div class="decide">
         ${r.state === "proposed" ? `<button class="btn primary" data-contract="${esc(r.resource)}" ${can && r.facts.contract === "red" ? "" : "disabled"}>Signer le contrat</button>` : ""}
         <button class="btn danger" data-withdraw="${esc(r.resource)}" ${can ? "" : "disabled"}>Retirer</button>
-        <span class="small quiet">${r.state === "proposed" ? "Signer le contrat autorise l'agent à l'implémenter ; les tests ne pourront plus changer." : "L'agent implémente, un relecteur signe, la loi intègre seulement si le contrat passe."}</span></div>` : ""}
+        <span class="small quiet">${r.state === "proposed" ? "Signer le contrat, c'est dire quoi construire : l'agent l'implémente, les tests ne pourront plus changer." : "L'agent implémente ; l'implémentation entre seule si le contrat passe, sans régression, dans son périmètre."}</span></div>` : ""}
     </div>`;
   };
   return `<h1>Demandes</h1>
     <p class="lede">Une demande est une spécification et un contrat : des tests d'acceptation que vous écrivez et signez avant tout code.
       Le scanner vérifie qu'ils échouent sur main (sinon ils ne promettent rien). Ensuite l'agent, ou un contributeur, implémente sans pouvoir toucher aux tests ;
-      la loi n'intègre qu'avec le contrat tenu, les tests de main au vert, aucun nouvel écart et une revue signée.</p>
-    ${!signer ? `<div class="note warn">Ajoutez votre clé dans Réglages pour écrire et signer une demande.</div>` : !can ? `<div class="note warn">Seul ${esc(grant?.holder || "le responsable produit")} écrit et signe les demandes ici.</div>` : ""}
+      elle entre avec le contrat tenu, les tests de main au vert, aucun nouvel écart et un périmètre respecté.</p>
+    ${!signer ? `<div class="note warn">Ajoute ta clé dans Clé de signature pour écrire et signer une demande.</div>` : !can ? `<div class="note warn">Seul ${esc(grant?.holder || "l'humain")} écrit et signe les demandes ici.</div>` : ""}
     <section><h2>Nouvelle demande</h2><div class="panel sloform">
       <label for="rq-title">Titre</label><input type="text" id="rq-title" placeholder="ex. Multiplier deux nombres" ${can ? "" : "disabled"}>
       <label for="rq-spec">Spécification</label><textarea id="rq-spec" class="code sm" placeholder="Ce que la fonctionnalité doit faire, pour qui, et ses limites." ${can ? "" : "disabled"}></textarea>
@@ -749,13 +711,13 @@ function requests() {
 function agentText(s) {
   if (s === "landing") return "implémentation acceptée par la loi, intégration en cours";
   if (s === "delivered") return "livraison enregistrée";
-  if (s.startsWith("proposed")) return s.includes("CAP.CONDITION") ? "implémentation proposée, en attente des mesures et d'une revue" : "implémentation proposée";
+  if (s.startsWith("proposed")) return "implémentation proposée : le scanner la mesure, les règles disent qui la joue";
   if (s.startsWith("waiting: no model")) return "aucun modèle configuré : un contributeur peut l'implémenter (Standard-Request: dans le commit)";
   if (s.startsWith("waiting")) return "pas encore d'implémentation qui passe ses propres vérifications";
   return s;
 }
 async function signRequest(kind, body) {
-  const grant = state.signing.grants.product;
+  const grant = state.signing.grants.human;
   const statement = { id: `${kind}-${crypto.randomUUID().replaceAll("-", "")}`, at: Math.max(Date.now(), state.signing.as_of + 1),
     author: signer.identity, under: grant.id, ...body };
   const env = await envelope(state.signing.domain, kind, statement, signer);
@@ -790,19 +752,6 @@ document.addEventListener("click", async (e) => {
   } catch (err) { el.textContent = `Refusé : ${err.message}`; }
 });
 
-// ---- governance -----------------------------------------------------------------------------------------------------
-function reviews() {
-  const items = pending();
-  return `<h1>Revues</h1>
-    <p class="lede">La loi a déjà vérifié les tests et l'absence de nouvel écart. Vous jugez le sens du changement. Votre signature porte sur ce commit exact : s'il change, il faut relire.</p>
-    ${signer ? "" : `<div class="note warn" style="margin-top:24px">Pour signer, ajoutez votre clé dans Réglages.</div>`}
-    <section>${items.length ? `<div class="rows">${items.map((i) => `
-      <div class="rowi"><div class="main"><b>${i.kind === "contribution" ? esc(i.branch) : `Réparation : ${esc(name(i.target))}`}</b>
-        <span class="quiet">${i.kind === "contribution" ? `par ${esc(i.author)}` : "par l'agent"}</span> <span class="sha">${short(i.head)}</span></div>
-        <button class="btn primary" data-review="${esc(i.resource)}">Relire</button></div>`).join("")}</div>`
-      : `<div class="empty"><b>Aucune revue en attente</b>Les contributions et réparations à relire apparaîtront ici.</div>`}</section>`;
-}
-
 function proofs() {
   const c = counts();
   return `<h1>Preuves</h1>
@@ -811,26 +760,25 @@ function proofs() {
       <div class="panel"><h2>Journal</h2><p class="small quiet">Entrées : ${state.prefix.size}</p>
         <p class="small quiet">Tête : <span class="sha">${esc(state.prefix.head.slice(7, 23))}</span></p>
         <p class="small quiet">Loi : <span class="sha">${esc(state.law_digest.slice(7, 23))}</span></p>
-        <p class="small quiet">${state.assessment === "INDEPENDENT" ? "Installation évaluée par un tiers indépendant." : "Laboratoire auto-évalué : quorum et témoins simulés, garanties physiques non qualifiées."}</p></div>
-      <div class="panel"><h2>Couverture</h2><p class="small quiet">${c.held} exigences tenues sur ${c.total}, ${c.attest} attestations attendues, ${c.unmeasured} non mesurées sur cette installation.</p>
+        <p class="small quiet">${state.assessment === "INDEPENDENT" ? "Installation évaluée par un tiers indépendant." : "Laboratoire auto-évalué : garanties physiques non qualifiées."}</p></div>
+      <div class="panel"><h2>Couverture</h2><p class="small quiet">${c.held} exigences tenues sur ${c.total}, ${c.unmeasured} non mesurées sur cette installation.</p>
         <button class="btn" id="export">Télécharger le rapport</button></div>
-    </section>`;
+    </section>
+    ${map()}
+    ${requirementTables()}`;
 }
 
 function settings() {
   const grants = state.signing.grants;
-  return `<h1>Réglages</h1>
-    <p class="lede">Votre clé de signature reste dans ce navigateur : elle y est importée sans pouvoir en sortir, et n'est jamais envoyée au serveur. Le navigateur fabrique lui-même ce qu'il signe.</p>
+  return `<h1>Clé de signature</h1>
+    <p class="lede">Ta clé reste dans ce navigateur : elle y est importée sans pouvoir en sortir, et n'est jamais envoyée au serveur. Le navigateur fabrique lui-même ce qu'il signe : tes oui, tes non et tes règles.</p>
     <section class="panel">${signer
       ? `<div class="note ok">Ce navigateur signe en tant que <b>${esc(signer.identity)}</b>.</div><button class="btn danger" id="forget">Retirer la clé de ce navigateur</button>`
       : `<h2>Ajouter votre clé</h2>
-        <label for="ident">Identité</label><input id="ident" type="text" value="${esc(grants.reviewer?.holder || "")}" autocomplete="off">
+        <label for="ident">Identité</label><input id="ident" type="text" value="${esc(grants.human?.holder || "")}" autocomplete="off">
         <label for="keyfile">Fichier de clé</label><input id="keyfile" type="file">
-        <p class="small quiet">Installation de démonstration : le fichier créé par la cérémonie. En production, une passkey sur votre appareil.</p>
-        <button class="btn primary" id="import">Ajouter la clé</button> <span id="msg" class="small quiet"></span>`}</section>
-    <section><h2>Rôles</h2><table class="table"><thead><tr><th>Rôle</th><th>Personne</th></tr></thead><tbody>
-      ${Object.entries(grants).map(([k, g]) => `<tr><td>${k === "reviewer" ? "Relecteur" : k === "officer" ? "Responsable conformité" : esc(k)}</td><td>${esc(g.holder)}</td></tr>`).join("")}
-    </tbody></table></section>`;
+        <p class="small quiet">Installation de démonstration : le fichier créé par la cérémonie. En production, une passkey sur ton appareil.</p>
+        <button class="btn primary" id="import">Ajouter la clé</button> <span id="msg" class="small quiet"></span>`}</section>`;
 }
 
 function bindSettings() {
@@ -856,7 +804,7 @@ document.addEventListener("click", (e) => {
     a.click();
   }
   const cell = e.target.closest("[data-req]");
-  if (cell) location.hash = "#/compliance";
+  if (cell) location.hash = "#/proofs";
 });
 
 // ---- agent context --------------------------------------------------------------------------------------------------
@@ -879,14 +827,13 @@ async function openAgentContext(kind, id) {
   }
   const isRequest = ctx.kind === "request";
   const isPatrol = ctx.kind === "patrol";
-  const isSurface = ctx.kind === "surface";
   body.innerHTML = `<h2>Contexte agent · ${esc(ctx.title || ctx.id)}</h2>
     <p class="small quiet">Dossier de lecture. Rien ici n'autorise : seules les signatures admises par le noyau comptent.</p>
     <div class="ctxgrid">
       <section class="ctxcard"><h3>Decision packet</h3>${jsonBlock(ctx.decision)}</section>
       <section class="ctxcard"><h3>Mission</h3>${jsonBlock(ctx.mission)}</section>
       <section class="ctxcard"><h3>Law trace</h3>${jsonBlock(ctx.law_trace || ctx.law)}</section>
-      <section class="ctxcard"><h3>Réglages système</h3>${jsonBlock(ctx.system_settings)}</section>
+      <section class="ctxcard"><h3>Réglages des règles</h3>${jsonBlock(ctx.settings)}</section>
       <section class="ctxcard"><h3>Proof plan</h3>${jsonBlock(ctx.proof_plan || ctx.proof)}</section>
       <section class="ctxcard"><h3>Ce que l'agent peut faire</h3>${bullets(ctx.agent?.can)}<h3>Interdit</h3>${bullets(ctx.agent?.cannot)}</section>
       <section class="ctxcard"><h3>Admission</h3>${jsonBlock(ctx.admission)}</section>
@@ -894,19 +841,15 @@ async function openAgentContext(kind, id) {
       <section class="ctxcard"><h3>Weak spots</h3>${jsonBlock(ctx.weak_spots)}</section>
       <section class="ctxcard"><h3>Known findings</h3>${jsonBlock(ctx.known_findings)}</section>
       <section class="ctxcard"><h3>Expected output</h3>${jsonBlock(ctx.expected_output)}</section>` : ""}
-      ${isSurface ? `<section class="ctxcard"><h3>Périmètre et sources</h3>${jsonBlock({scope: ctx.scope, inputs: ctx.inputs})}</section>
-      <section class="ctxcard"><h3>Résumé</h3>${jsonBlock(ctx.summary)}</section>
-      <section class="ctxcard"><h3>Certification</h3>${jsonBlock(ctx.certification)}</section>
-      <section class="ctxcard wide"><h3>Bindings loi / code / preuve</h3>${jsonBlock(ctx.entries)}</section>` : ""}
     </div>
     ${isRequest ? `<details class="ctxdoc"><summary>Spec et contrat signés</summary><h3>Spec</h3><pre>${esc(ctx.request?.spec || "")}</pre><h3>Contrat</h3><pre>${esc(ctx.request?.contract || "")}</pre></details>` : ""}
     <footer><span class="small quiet spacer">Préfixe ${esc(ctx.basis?.size)} · loi <span class="sha">${esc(String(ctx.law_digest || "").slice(7, 23))}</span></span><button class="btn" id="close">Fermer</button></footer>`;
   $("#close").onclick = () => dlg.close();
 }
 
-// ---- reviewing and signing -----------------------------------------------------------------------------------------
+// ---- reading a move and deciding ------------------------------------------------------------------------------------
 async function openReview(resource) {
-  const item = [...state.build.contributions, ...state.run.repairs, ...features()].find((i) => i.resource === resource);
+  const item = candidates().find((i) => i.resource === resource);
   const head = resource.split("/").pop(), dlg = $("#dlg"), body = $("#dlgbody");
   body.innerHTML = `<p class="quiet">Chargement du dossier</p>`;
   dlg.showModal();
@@ -921,7 +864,7 @@ async function openReview(resource) {
     return;
   }
   const diff = esc(d.diff).split("\n").map((l) => /^\+(?!\+\+)/.test(l) ? `<span class="add">${l}</span>` : /^-(?!--)/.test(l) ? `<span class="del">${l}</span>` : l).join("\n");
-  const grant = state.signing.grants.reviewer, can = Boolean(signer && item?.awaiting_review && grant);
+  const grant = state.signing.grants.human, can = Boolean(signer && grant && signer.identity === grant.holder && item?.awaiting);
   body.innerHTML = `
     <h2>${item?.kind === "contribution" ? esc(item.branch) : item?.kind === "feature" ? `Demande : ${esc(item.title)}` : `Réparation : ${esc(name(item?.target))}`}</h2>
     <div class="quiet small">${item?.kind === "contribution" ? `par ${esc(item.author)}` : item?.kind === "feature" ? "implémentée par l'agent" : "par l'agent"}, commit <span class="sha">${short(head)}</span> sur <span class="sha">${short(resource.split("/").slice(-2)[0])}</span></div>
@@ -930,26 +873,21 @@ async function openReview(resource) {
       ${item?.facts?.acceptance ? fact(item.facts.acceptance === "green" ? "Contrat d'acceptation tenu" : `Contrat : ${item.facts.acceptance}`, item.facts.acceptance === "green" ? "ok" : "bad") : ""}</div>
     <h3>Description</h3><pre>${esc(d.message)}</pre>
     <h3>Changements</h3><pre>${diff}</pre>
-    ${!signer ? `<div class="note warn" style="margin-top:18px">Ajoutez votre clé dans Réglages pour signer.</div>` : ""}
-    ${signer && !item?.awaiting_review ? `<div class="note warn" style="margin-top:18px">Ce commit n'attend pas de revue : il est déjà signé, bloqué par la loi ou encore en mesure.</div>` : ""}
+    ${!signer ? `<div class="note warn" style="margin-top:18px">Ajoute ta clé dans Clé de signature pour décider.</div>` : ""}
+    ${signer && !item?.awaiting ? `<div class="note warn" style="margin-top:18px">Ce coup ne t'attend pas : l'agent le joue seul, il est encore en mesure, refusé par les faits ou déjà joué.</div>` : ""}
     <footer><span id="sigmsg" class="small quiet spacer"></span><button class="btn" id="close">Fermer</button>
-      <button class="btn" id="changes" ${can ? "" : "disabled"}>Demander des changements</button>
-      <button class="btn primary" id="approve" ${can ? "" : "disabled"}>Approuver</button></footer>`;
+      <button class="btn" id="no" ${can ? "" : "disabled"}>Non (geler ce coup)</button>
+      <button class="btn primary" id="yes" ${can ? "" : "disabled"}>Oui</button></footer>`;
   $("#close").onclick = () => dlg.close();
-  const sign = async (verdict) => {
+  const sign = async (yes) => {
     $("#sigmsg").textContent = "Signature dans ce navigateur";
-    const statement = { id: `review-${crypto.randomUUID().replaceAll("-", "")}`, at: Math.max(Date.now(), state.signing.as_of + 1),
-      author: signer.identity, under: grant.id, resource, property: "review", status: verdict, level: "real" };
     try {
-      const env = await envelope(state.signing.domain, "observation", statement, signer);
-      const r = await fetch("/api/admit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(env) });
-      const out = await r.json();
-      if (!r.ok) throw new Error(out.refused || out.error);
-      $("#sigmsg").textContent = verdict === "approved" ? "Approuvé" : "Changements demandés";
+      await (yes ? sayYes(resource) : sayNo(resource));
+      $("#sigmsg").textContent = yes ? "Oui : l'agent joue au prochain passage" : "Gelé";
       setTimeout(() => { dlg.close(); refresh(); }, 800);
     } catch (err) { $("#sigmsg").textContent = `Signature refusée par le noyau : ${err.message}`; }
   };
-  if (can) { $("#approve").onclick = () => sign("approved"); $("#changes").onclick = () => sign("changes_requested"); }
+  if (can) { $("#yes").onclick = () => sign(true); $("#no").onclick = () => sign(false); }
 }
 
 // ---- start ----------------------------------------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 Document unique de référence. Il réunit tout ce qui a été trouvé et décidé dans les versions V0 → V7, M2, le laboratoire TCB (campagnes I à V) et le prototype hybride, réécrit au propre. Il remplace tous les documents antérieurs.
 
-**Statut :** architecture cible et décisions arrêtées. Une exigence de ce document n'est **pas** une garantie démontrée. §18 conserve l'historique des décisions, y compris les anciens noms de modules ; §20 décrit le code actuel et §21.4 distingue réalisation et qualification. En cas d'écart entre une ancienne décision et l'inventaire courant, l'inventaire courant prévaut.
+**Statut :** architecture cible et décisions arrêtées. **Depuis D51, la cible est une personne et un agent** : l'humain garde le dernier mot là où il compte (§4.8), les options d'équipe (seuil, délais, témoins) restent dans la loi pour plus tard. Les sections antérieures qui parlent de quorum k ≥ 2, de sentinelle, de revue, de `configure` ou de conformité organisationnelle décrivent l'histoire ; §4.2, §4.8, §11, §12 et §18 (D51–D53) décrivent l'état courant. Une exigence de ce document n'est **pas** une garantie démontrée. §18 conserve l'historique des décisions, y compris les anciens noms de modules ; §20 décrit le code actuel et §21.4 distingue réalisation et qualification. En cas d'écart entre une ancienne décision et l'inventaire courant, l'inventaire courant prévaut.
 
 ---
 
@@ -136,27 +136,29 @@ Texte normatif. Le digest de FLOOR-0 couvre ce texte, la table de polarité, les
 
 | Règle | Contenu |
 |---|---|
-| **F0-1** | Aucun acteur seul : quorum humain k ≥ `MIN_HUMANS`, au moins k+2 humains enrôlés, et assez de témoins. La récupération reste conditionnée à leur réponse. |
+| **F0-1** | L'agent ne détient aucune autorité propre. Tout élargissement est énoncé par un humain de la racine et signé par son seuil k ≥ `MIN_HUMANS` d'humains ; le temps est énoncé par le quorum de témoins de la loi. Une personne et un agent est le minimum ; une équipe relève k, le quorum de témoins et les délais dans sa loi. |
 | **F0-2** | Pour chaque propriété critique : ses contrôles, ses dépendances communes et les fautes couvertes sont nommés. Un désaccord de sûreté bloque l'effet ; une incohérence d'intégrité bloque la frontière touchée. Un arrêt local n'est pas une mutation non signée du journal. |
-| **F0-3** | Code et floors sont liés à la genèse. La loi client ne change que par quorum, délai attesté et activation, sans jamais affaiblir les floors ; les chaînes de capacités ne font que se restreindre. Une loi ne contraint que les genres qui agissent, attestent ou atténuent : **jamais** une restriction, un témoin ou le protocole d'élargissement. |
+| **F0-3** | Code et floors sont liés à la genèse. La loi client ne change que par élargissement, sans jamais affaiblir les floors de la release ; les chaînes de capacités ne font que se restreindre. Une loi ne contraint que les genres qui agissent, attestent ou atténuent : **jamais** une restriction, un témoin ou le protocole d'élargissement. |
 | **F0-4** | Toute transition d'état canonique est causée par exactement une entrée signée. L'admission ne dépend que du préfixe admis, de la loi et du code épinglés. |
-| **F0-5** | Chaque genre d'entrée a une seule polarité. La genèse établit la racine initiale, épinglée de l'extérieur, par quorum. Tout élargissement ultérieur exige quorum humain, délai attesté, puis activation explicite par quorum. Les autres polarités ne font que restreindre, atténuer, agir sous capacité, attester ou témoigner. |
+| **F0-5** | Chaque genre d'entrée a une seule polarité. La genèse établit la racine initiale, épinglée de l'extérieur. Un élargissement prend effet avec sa propre entrée, sauf si la loi déclare un délai pour son genre : il attend alors ce délai attesté et une activation explicite, et peut être mis en veto entre-temps. Les autres polarités ne font que restreindre, atténuer, agir sous capacité, attester ou témoigner. |
 | **F0-6** | Le temps ne fait qu'expirer ou faire tomber une autorité ; il n'en accorde jamais. Seul le quorum de témoins fait avancer l'ancre attestée. Les horodatages ordinaires sont monotones et bornés au-dessus de l'ancre. Une restriction peut partager le dernier instant : aucun horodatage ne peut l'affamer. |
-| **F0-7** | Lever une restriction unilatérale est un élargissement. k+1 humains peuvent dépasser un veto après son délai. |
+| **F0-7** | Lever une restriction unilatérale est un élargissement. Là où l'élargissement attend, k+1 humains peuvent dépasser un veto après deux fois son délai. |
 | **F0-8** | Un fait ne permet une action que s'il est fraîchement attesté par une chaîne ne partageant **aucun détenteur** avec l'acteur. Tout fait permissif porte son étiquette de provenance : observations, clôtures, instances ouvertes et portes. L'absence d'un fait ne permet jamais rien. |
 | **F0-9** | Tout effet est typé ; sa ressource dérive de ses arguments ; sa réservation est durable et à usage unique. Re-jugement et départ fournisseur sont ordonnés contre l'admission. Seule la requête canonique jugée passe à l'adaptateur de confiance, avec une clé de réservation liée à la genèse. La ligne d'effet suit une table unique ; une réservation part dans `DISPATCH_MS` ou jamais, et seulement ensuite peut être réconciliée. |
 | **F0-10** | L'historique est append-only et lié à la genèse. Une épingle monotone indépendante est retenue pour chaque écriture **avant** acquittement. Un historique en dessous ou divergent est bloqué ; la réparation restaure sa queue exacte. |
 | **F0-11** | Hors admission, chaque cible déclarée sans preuve indépendante fraîche a une obligation et une échéance stables ; un écart en retard enregistre une escalade vers les humains de la racine. La redevabilité n'autorise jamais rien. Enregistrer une escalade ne prouve ni sa livraison ni la réparation. |
+| **F0-12** | Chaque opération déclare ses routes : les routes autonomes ne lisent que des faits mesurés, la route humaine exige la décision d'un humain sur la ressource exacte (`decision = approve`, auteur de genre `human`). Un effet ne passe que tant qu'une route en vigueur tient, de l'intention au départ. Une loi peut couper des routes autonomes, jamais la route humaine. |
 
 **Constantes de FLOOR-0** (valeurs par défaut de la release ; une loi client peut seulement les durcir) :
 
 | Constante | Valeur | Rôle |
 |---|---|---|
-| `MIN_HUMANS` | 2 | k minimal du quorum ; k+2 humains enrôlés |
-| `MIN_WITNESSES` | 2 | Quorum de témoins pour avancer l'ancre |
-| `MIN_DELAY_MS` | 1 h | Délai attesté minimal avant activation d'un élargissement |
+| `MIN_HUMANS` | 1 | k minimal ; une équipe le relève dans sa racine |
+| `MIN_WITNESSES` | 1 | Quorum de témoins pour avancer l'ancre (l'horloge de l'opérateur, `clock`) |
+| `MIN_DELAY_MS` | 0 | Un élargissement prend effet tout de suite, sauf si la loi déclare un délai pour son genre |
 | `MAX_AHEAD_MS` | 5 min | Avance maximale d'un horodatage sur l'ancre |
 | `DISPATCH_MS` | 5 min | Fenêtre de départ d'une réservation |
+| `DECISION` | `observed(decision, approve, real, human)` | Le seul atome qu'une route humaine doit porter (F0-12) |
 | TTL `pending`, `unredeemed`, `reconcile`, `proof`, `observation` | 1 jour | Durées de vie avant expiration |
 
 **Polarité de chaque genre d'entrée :**
@@ -165,12 +167,12 @@ Texte normatif. Le digest de FLOOR-0 couvre ce texte, la table de polarité, les
 |---|---|
 | `widen` | `genesis`, `rotate`, `grant`, `unfreeze`, `law`, `activate` |
 | `attenuate` | `delegate` |
-| `restrict` | `veto`, `revoke`, `freeze`, `flag`, `heartbeat`, `invalidate` |
+| `restrict` | `veto`, `revoke`, `freeze`, `invalidate` |
 | `witness` | `checkpoint` |
 | `act` | `intent`, `token`, `reservation`, `execution`, `resource`, `transition` |
 | `attest` | `reconciliation`, `observation`, `measurement`, et tout genre de preuve déclaré par la loi |
 
-**Qui peut restreindre seul :** `veto` et `revoke` : humain (et tout détenteur sur la chaîne révoquée pour `revoke`) ; `freeze` et `flag` : humain ou sentinelle ; `heartbeat` : sentinelle ; `invalidate` : humain ou oracle source.
+**Qui peut restreindre seul :** `veto`, `revoke` et `freeze` : humain (et tout détenteur sur la chaîne révoquée pour `revoke`) ; `invalidate` : humain ou oracle source. Il n'y a plus de sentinelle ni de `flag`/`heartbeat` (D51) : un refus humain est un gel, une révocation ou l'absence de `decision`.
 
 ### 4.3 Les six mécanismes
 
@@ -243,6 +245,22 @@ Le langage est **fini, borné, positif** :
 L'autonomie vient de **l'écart entre ce que Standard et le client demandent et ce que le dépôt a**. Toute exigence active produit des besoins observables dès son activation, même sans route installée ni écart encore attesté. Chaque besoin non satisfait produit une obligation ; chaque obligation produit du travail. Une obligation ne crée **jamais** de permission.
 
 ---
+
+### 4.8 Les règles du jeu (D51)
+
+Le système part des situations où une personne doit avoir le dernier mot, pas d'une organisation. Trois objets suffisent :
+
+- **Le socle** (`standard/floors.py`, lié à la genèse) : chaque coup possible (une opération), ses routes, et pour chaque seuil la borne que personne ne peut relâcher.
+- **Les règles du jeu** : le document client, signé par l'humain (une entrée `law`), en vigueur aussitôt. Il ne contient que des choix *à l'intérieur* du socle : quelles routes autonomes restent allumées (`routes`), les seuils que ces routes comparent (`settings`, liés dans les atomes `compare` par `@nom`, jamais plus lâches que le socle : le sens se déduit de `ge`/`le`), et ce contre quoi la production est jugée (objectif, latence, fenêtre de mise en production, composants, SLO, sondes, silences). Les options d'équipe y restent (seuil dans la racine, délais par genre, quorum de témoins) : à une personne, elles valent un, zéro et un.
+- **Les coups** : chaque opération sur une ressource exacte. Un coup est *prêt* quand une route autonome tient sur des faits mesurés par le scanner, *décidé* quand l'humain a dit oui, *à toi* quand seule ta décision l'ouvre.
+
+**Les trois gestes de l'humain :** **oui** (une observation `decision = approve` sur la ressource exacte du coup), **non** (un gel de la ressource), **règles** (signer de nouvelles règles du jeu). Rien d'autre n'est requis pour qu'une personne et un agent travaillent ; tout le reste est mesuré.
+
+**Situations où l'humain garde le dernier mot** (route humaine seule, ou route autonome que les règles recommandées laissent éteinte) : intégrer le code de quelqu'un d'autre (`integrate`) ; réparer hors du périmètre d'écriture de la cible ; implémenter sans contrat accepté ; mettre en production hors fenêtre ou sous le budget gelé ; revenir en arrière au-delà de l'horizon ou à travers des migrations ; redémarrer (éteint par défaut) ; changer les règles elles-mêmes, que l'agent ne signe jamais (`CAP.HUMAN`).
+
+**Ce que l'agent fait et comment.** Une boucle (`standard/autonomy/loop.py`) : lire la vue, laisser ses producteurs écrire des candidats dans son propre dépôt (réparations, constructions), puis jouer chaque coup *prêt* ou *décidé*, la production d'abord et une seule bascule par passe. Il ne choisit ni route, ni seuil, ni capacité : il en détient une seule. Sa tactique ne peut que le retenir (reculer avant d'avancer, ne pas redémarrer le code qu'une bascule vient d'amener, retirer un canari seulement s'il fait pire au-delà du bruit ou si main a bougé) et chaque retenue est écrite pour la console. La file de l'humain (`moves.queue`) est la même lecture des coups, vue de l'autre côté.
+
+**Deux juges.** Le noyau juge chaque coup sur la route qu'il nomme ; le second juge (`bt/checker.py`) restate les routes, les bornes des seuils et l'entrée en vigueur immédiate des règles.
 
 ## 5. Architecture en couches
 
@@ -715,15 +733,15 @@ Que l'effet soit appliqué n'est pas que son but soit atteint : la **preuve** re
 | U07 | Intégrations | Git, CI, cloud, IAM, SRE, exposés en modèles génériques | Autoriser une action, fabriquer un fait qualifié |
 | U08 | Surface | Couverture, objectifs, risques, dettes, décisions, escalades | Traiter un risque non couvert comme sain |
 
-**Agents du prototype** (`python -m standard.autonomy run`, un processus, une clé) :
+**L'agent** (`python -m standard.autonomy run`, un processus, une clé, une capacité) :
 
-| Agent | Fichier | Fait | Ne fait jamais |
+| Pièce | Fichier | Fait | Ne fait jamais |
 |---|---|---|---|
-| Cycle | `standard/autonomy/cycle.py`, `agent.py` | Répare les écarts des floors (`remediate`) : recette reproductible ou proposition par LLM, précontrôle, dossier | Fusionner sans `reproduced` ou revue |
-| Integrator | `standard/autonomy/contributions.py` | Soumet `integrate` pour chaque contribution de la boîte de dépôt | Signer un fait |
-| Builder | `standard/autonomy/build.py` | Implémente une demande contractée (`implement`), commit avec `Standard-Request: <rid>` ; livre la demande (`deliver`) quand main passe le contrat | Écrire sous `tests/`, `.github/`, `standard/` |
-| Configurer | `standard/autonomy/rules.py` | Commite exactement le `standard/rules.json` signé par un ingénieur, trailer `Standard-Rules: <digest>`, puis `configure` | Écrire autre chose que ce fichier |
-| Releaser | `standard/autonomy/release.py`, `standard/autonomy/policy.py` | `deploy`, `rollback`, `restart`, `canary`, `abort` : compare les nombres signés aux réglages des ingénieurs (`standard/rules.json` sur main) et soumet sous la capacité dont la condition tient (D36) | Agir hors des bornes de la loi : le noyau refuse |
+| Lecture des coups | `standard/autonomy/moves.py` | Statut de chaque coup (`ready`, `decided`, `yours`, `measuring`, `refuted`, `frozen`, `playing`, `done`), route qui tient, file de l'humain | Décider : le noyau rejuge |
+| Boucle | `standard/autonomy/loop.py` | Joue les coups prêts ou décidés, une bascule par passe ; tactiques qui retiennent seulement | Choisir une route, un seuil, une capacité |
+| Réparateur | `standard/autonomy/repair.py`, `agent.py` | Écrit des candidats pour les écarts des floors : recette reproductible ou modèle, précontrôle ; un candidat réfuté devient une leçon | Soumettre quoi que ce soit lui-même |
+| Constructeur | `standard/autonomy/build.py` | Implémente une demande contractée (`Standard-Request: <rid>`), livre quand main passe le contrat | Écrire sous `tests/`, `.github/`, `standard/` |
+| Règles | `standard/autonomy/rules.py` | Schéma de chaque réglage, brouillon des nouvelles règles, valeurs effectives, socle | Signer : seul l'humain signe |
 
 ### 11.2 Routes
 
@@ -740,19 +758,19 @@ Chaque responsabilité de l'installation a une route vérifiable : **réutiliser
 - La base opérationnelle (leases, tentatives) n'est ni le journal ni une ancre et ne confère aucun droit.
 - Cycle d'une proposition avant intention : mesure → prête ou en attente de revue → retrait si tests non verts, sujet disparu ou délai de revue dépassé (3 jours). Une transition exacte retirée ne se rouvre pas par recréation du même commit. Échec de fabrication → backoff d'un jour.
 
-### 11.4 Autonomie = reproductibilité
+### 11.4 Autonomie = faits mesurés (D51)
 
-Une réparation passe sans humain **seulement** si :
+Une réparation passe sans humain **seulement** par une route autonome du socle, sur la transition exacte `base → head` :
 
-- `tests = green` sur la transition exacte `base → head`, **et**
-- `reproduced = yes` : un instrument indépendant a recalculé exactement son contenu depuis la base et des données de confiance (recette reproductible).
+- `reproduced` : `tests = green` et `reproduced = yes` (un instrument indépendant a recalculé exactement son contenu depuis la base et des données de confiance), **ou**
+- `scoped` : `tests = green`, `regressions = none` et `scoped = yes` (le scanner a vérifié que chaque chemin modifié est dans le périmètre d'écriture de la cible, `instruments/scope.py`, une seule définition).
 
-Sinon, elle exige `review = approved`, signé par un reviewer habilité, lié au head exact (jamais à un pointeur mutable) [M2-r2]. Le reviewer est un humain de la racine, distinct de l'agent, avec la capacité `observe` + `certify:real` ; il signe avec sa propre clé depuis la surface (`python -m standard.surface review`). L'agent nomme la cible dans le commit (`Standard-Target:`) : c'est une donnée non fiable qui sert seulement à nommer la ressource ; les faits restent liés à la transition exacte. Le sujet de l'effet est la transition `repo:{area}:{item}/{base}/{head}` ; les faits qui l'autorisent portent sur cette ressource exacte. La comparaison d'arbres inclut chemins, contenus, **modes et gitlinks**.
+Sinon, elle attend la route humaine : `decision = approve` signée par l'humain, liée à la ressource exacte (jamais à un pointeur mutable) [M2-r2], depuis la console ou `python -m standard.surface yes RESOURCE`. L'agent nomme la cible dans le commit (`Standard-Target:`) : c'est une donnée non fiable qui sert seulement à nommer la ressource ; les faits restent liés à la transition exacte. Le sujet de l'effet est la transition `repo:{area}:{item}/{base}/{head}` ; les faits qui l'autorisent portent sur cette ressource exacte. La comparaison d'arbres inclut chemins, contenus, **modes et gitlinks**.
 
 ### 11.5 Point d'entrée agent
 
 - `python -m surface` : tâche courante, loi effective (floors + client) et routes T, en texte lisible lié au préfixe et au digest. L'agent ne lit ni README ni sérialisation de la constitution.
-- `status`, `tasks`, `context TASK_ID`, `law SECTION/ID` pour lire ; `review TARGET BASE HEAD` et `attest TARGET` pour qu'un humain signe, avec sa propre clé, une revue ou une attestation.
+- `status`, `moves`, `queue`, `tasks`, `context TASK_ID`, `law SECTION/ID` pour lire ; `yes RESOURCE`, `no RESOURCE`, `release`, `rules set|route` pour que l'humain signe, avec sa propre clé, ses trois gestes.
 - `submit` recontrôle route et préfixe, refuse une enveloppe qui ne traite pas exactement la tâche et sa ressource, puis la confie au **seul** chemin d'admission.
 - Un travailleur externe lit la vue sur stdin et renvoie une enveloppe signée par son identité U sur stdout. Aucun retour ne ferme une dette ni ne déclenche un effet.
 - `AGENTS.md` à la racine signale ce point d'entrée.
@@ -765,7 +783,7 @@ U parle à K/T par **une socket Unix étroite** (mode 0600/0660, répertoire non
 
 ### 11.7 Contrôle caché
 
-Pour certains risques, un contrôle IA parallèle, caché de l'agent, peut être ajouté. Il reste dans U, ne décide rien, et produit au plus un `flag` par une identité habilitée.
+Pour certains risques, un contrôle IA parallèle, caché de l'agent, peut être ajouté. Il reste dans U, ne décide rien, et au plus le signale à l'humain, qui gèle s'il le juge utile (le `flag` de sentinelle a disparu avec D51).
 
 ---
 
@@ -776,13 +794,13 @@ Le juge reste séparé ; l'agent reçoit tout ce qui l'aide à réussir et rien 
 | Besoin | Pièce | Où |
 |---|---|---|
 | Savoir **où** est l'écart | Les instruments publient leurs constats à côté des faits : `chemin:ligne:règle`, test en échec et sa trace. Un secret est localisé, jamais cité. Fichier `findings.json` lisible par le groupe de l'agent ; `surface --findings … context` | T06 (publication), U (lecture) |
-| Savoir **pourquoi** le juge a refusé | Le verdict des tests mesuré par le scanner sur la proposition exacte ; un rouge devient une leçon et la proposition est refaite | `standard/autonomy/cycle.py` |
+| Savoir **pourquoi** le juge a refusé | Le verdict du scanner sur la proposition exacte (tests, régressions, périmètre) ; une réfutation devient une leçon et la proposition est refaite | `standard/autonomy/repair.py` |
 | Exécuter sans risque | Bac à sable : `unshare -rn` (aucun réseau), environnement vide, `HOME` jetable, limite mémoire et délai, arbre détaché supprimé ensuite | `standard/autonomy/sandbox.py` |
 | Ne pas ouvrir un autre écart | Précontrôle de **toute la loi** sur le candidat : toutes les sondes locales avant/après, la suite de `main` dans le bac à sable, ruff (erreurs réelles) et mypy sur les fichiers modifiés. Une régression qu'une recette referme au tour suivant (SBOM périmé après une montée de version) est un suivi, pas un blocage | `standard/autonomy/precheck.py` |
 | Ne pas tourner en rond | Mémoire par obligation (tentative, base, issue, cause) relue avant chaque essai ; budget de tentatives par base de `main` ; au-delà l'agent s'arrête et laisse un dossier (`surface --memory … tasks`). L'escalade du registre reste celle de l'échéance : l'abandon de l'agent est visible, pas un fait | `standard/autonomy/memory.py` |
 | Comprendre le dépôt | Carte AST : modules, définitions, imports, qui appelle quoi ; les appelants des fichiers en cause sont donnés au modèle | `standard/autonomy/repomap.py` |
 | Monter une dépendance | L'instantané figé porte aussi les versions publiées après l'épingle, leur date et l'URL du changelog | `tools/refresh_data.py` |
-| Faciliter la revue | Chaque proposition à relire porte un dossier dans son message de commit : pourquoi, quoi, ce que l'agent a vérifié et comment, risques ; `surface dossier HEAD --repo …` | `standard/autonomy/agent.py` |
+| Faciliter la décision | Chaque proposition qui attend l'humain porte un dossier dans son message de commit : pourquoi, quoi, ce que l'agent a vérifié et comment, risques ; `surface dossier HEAD --repo …` | `standard/autonomy/agent.py` |
 | Choisir le modèle | Porte unique vers les LLM (Anthropic, ou tout point compatible OpenAI) ; niveau `small` ou `frontier` selon la cible ; tout secret détecté masqué ; une ligne de journal par envoi (fournisseur, modèle, octets, masquages, SHA-256 du prompt, jamais le contenu) ; une réponse qui écrit un masque est refusée | `standard/autonomy/llm.py` |
 
 Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes au modèle, nouveau candidat ; il ne propose que ce qui passe ses propres contrôles. Le juge mesure ensuite le commit exact, sous une autre identité.
@@ -793,13 +811,14 @@ Avec un modèle, l'agent itère : candidat, précontrôle, retour des problèmes
 
 | Page | Groupe | Contenu |
 |---|---|---|
-| **Run** | Run | Composants et signaux, version en production, SLO et budgets, frontière d'autonomie par composant (Voit, Prévient, Agit, Prouve, D29), écarts non couverts en tête, décisions qui restent aux ingénieurs (mettre main en production, revenir, redémarrer, promouvoir ou retirer un canary), chacune signée dans le navigateur |
-| **Alertes** (D30) | Run | Une alerte s'ouvre quand un composant passe dégradé ou en échec sur 5 minutes, quand un SLO brûle vite (page) ou lentement (ticket), quand une source se tait ou quand une obligation dépasse son échéance ; prise en charge par une signature (`ack = taken` sur `repo:alert/…`), silences signés (`run:policy/m-*`), fermeture au retour du composant. Bandeau sur toutes les pages, badge, titre de l'onglet. Ni e-mail ni messagerie |
-| **Objectifs et réglages** (D31, D32, D35, D36) | Run | Onglets : SLO et budgets, Alertes (fenêtres de consommation), Mise en production (stratégie directe ou canary, fenêtres, gel, gel sur budget), Santé immédiate, Composants (comptés ou non, objectif propre), Sondes, Silences, Réglages en code (`standard/rules.json` sur main, nom historique du contrat), Historique (le `git log` du fichier). Chaque champ dit sa borne et, s'il y en a une, celle de la loi ; un changement s'applique dès que main le porte. Un réglage qui demande moins que la loi est signalé : l'agent n'agira pas seul pour autant. Une modification = une signature de l'ingénieur sur `repo:config:rules/<main>` |
-| **Autonomie, Conformité, Activité** | Run | Ce que l'agent fait seul, avec un humain, ou pas du tout ; la carte des exigences par domaine (sécurité du code, dépendances et chaîne logicielle, CI, gouvernance du code, organisation) ; les écarts rangés par qui s'en occupe, les réparations de l'agent, ses abandons et leur dossier |
-| **Demandes** (D34) | Construction | Écrire une demande et ses tests d'acceptation, voir le contrat mesuré (`red` = demande du nouveau ; `passes:N` = ne promet rien), signer le contrat, suivre l'implémentation, l'acceptation, la revue et la livraison |
-| **Contributions** | Construction | La boîte de dépôt et les faits mesurés (tests, régressions, revue), avec la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`) |
-| **Revues, Preuves, Réglages** | Commun | File des transitions à signer avec dossier et différences ; preuves et loi en vigueur ; import de la clé de la personne |
+| **Run** | Run | Composants et signaux, version en production, SLO et budgets, frontière d'autonomie par composant (Voit, Prévient, Agit, Prouve, D29), écarts non couverts en tête, et ce que l'agent retient et pourquoi |
+| **Décisions** (D51) | Commun | La file de l'humain : chaque coup qui attend son oui, avec les faits mesurés, la route qui manque et ce qu'une règle coupée laisse à sa main ; oui (`decision = approve`) ou non (gel), signés dans le navigateur |
+| **Alertes** (D30) | Run | Une alerte s'ouvre quand un composant passe dégradé ou en échec sur 5 minutes, quand un SLO brûle vite (page) ou lentement (ticket), quand une source se tait ou quand une obligation dépasse son échéance ; silences dans les règles du jeu, fermeture au retour du composant. Bandeau sur toutes les pages, badge, titre de l'onglet. Ni e-mail ni messagerie |
+| **Règles du jeu** (D51) | Commun | Qui joue chaque coup (routes autonomes allumées ou coupées), seuils des routes avec la borne du socle, production (objectif, latence, fenêtre, canari), SLO, composants, sondes, silences, options d'équipe, historique. Le serveur rédige le document complet (`POST /api/rules/draft`), le navigateur le signe (`law`), il est en vigueur aussitôt ; le noyau refuse ce qui serait plus lâche que le socle |
+| **Autonomie, Activité** | Run | Ce que l'agent fait seul ou avec un oui ; les exigences du socle (sécurité du code, dépendances et chaîne logicielle, CI, gouvernance du code) ; les écarts rangés par qui s'en occupe, les réparations de l'agent, ses abandons et leur dossier |
+| **Demandes** (D34) | Construction | Écrire une demande et ses tests d'acceptation, voir le contrat mesuré (`red` = demande du nouveau ; `passes:N` = ne promet rien), signer le contrat, suivre l'implémentation, l'acceptation et la livraison |
+| **Contributions** | Construction | La boîte de dépôt et les faits mesurés (tests, régressions, décision), avec la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`) |
+| **Preuves, Clé** | Commun | Preuves, exigences et loi en vigueur ; import de la clé de la personne |
 
 Ce que l'interface ne fait pas : elle ne détient aucune clé et ne décide rien. Elle lit par la passerelle (la vue, qui publie aussi les faits sur les transitions exactes) et ce qui est publié pour les personnes (constats, notes de l'agent, dépôts en lecture), et transmet au noyau les enveloppes signées. **La signature se fait dans le navigateur** : la clé est importée dans WebCrypto, non exportable, gardée dans IndexedDB ; le navigateur construit lui-même l'énoncé canonique, le PAE et l'enveloppe à partir du corps qu'il affiche (`standard/surface/static/sign.js`, identique octet pour octet à `bt/signing.py`, vérifié par un test). **Correction (revue d'octobre 2026) :** l'affirmation antérieure selon laquelle un serveur web compromis ne pouvait pas faire signer autre chose que ce que le navigateur montre est fausse. Le serveur sert lui-même `sign.js` et `app.js` : compromis, il peut servir un script qui signe n'importe quel corps avec la clé non exportable, ou capter le fichier de clé au moment de l'import. La clé non exportable empêche seulement sa copie. Tant que les scripts de signature ne viennent pas d'une origine distincte et épinglée (ou d'un authentificateur qui affiche ce qu'il signe), `standard-web` est dans la confiance des personnes qui y signent. Les requêtes adressées à un autre nom d'hôte que `localhost` (ou un nom déclaré par `--allow-host`) sont refusées, ce qui ferme la lecture et l'écriture par DNS rebinding. En production, une passkey : le noyau vérifie déjà les assertions WebAuthn ES256, il reste à les enrôler par une rotation de racine. **Limite :** la lecture n'est pas authentifiée ; l'interface écoute localhost et compte sur le tunnel ou le proxy devant elle.
 
@@ -807,11 +826,11 @@ Ce que l'interface ne fait pas : elle ne détient aucune clé et ne décide rien
 
 Les floors portent la direction (autonomie, sécurité, conformité) dans le **même langage** qu'une loi client.
 
-**Rôles** que tout client lie à ses identités : `owner`, `inventory_source`, `scanner`, `compliance_officer`.
+**Rôles** que tout client lie à ses identités : `owner`, `inventory_source`, `scanner` (D51 : plus de `compliance_officer`).
 
 **Clôture sur preuve indépendante (F1).** Tout effet laisse une obligation `proof` que seule une preuve indépendante de niveau `real` ferme.
 
-**Couverture (F2).** Chaque univers déclaré doit être observé complet par une source indépendante, sinon c'est un écart : `inventory` (dépôt) et `soa` (déclaration d'applicabilité).
+**Couverture (F2).** Chaque univers déclaré doit être observé complet par une source indépendante, sinon c'est un écart : `inventory` (dépôt) et `run-sources` (production).
 
 **Mesures techniques** (observées par `@scanner`, réparées par `remediate`) — fraîcheur / échéance en jours :
 
@@ -828,20 +847,26 @@ Les floors portent la direction (autonomie, sécurité, conformité) dans le **m
 
 **Réglages** (observés, réparés par des humains) : protection de `main` (seule la garde la déplace) ; lignée (tout commit de `main` depuis l'ancre est la tête d'un effet jugé).
 
-**Mesures organisationnelles** (attestées `current` par `@compliance_officer`, sous la SoA) : ISMS, risques, revue d'accès (90 j), formation, RH, fournisseurs, procédure d'incident, continuité, sauvegarde/restauration (90 j), registre légal, audit indépendant, sites physiques, politique crypto, tests de résilience, registre des actifs, baseline infra (180 j), monitoring (180 j), threat intel (180 j). Leur écart va aux personnes.
+**Mesures organisationnelles :** retirées (D51). ISMS, RH, fournisseurs, SoA et attestations ne sont pas l'objet de Standard ; ISO 27001 et DORA ne servent plus que de motif à des règles techniques précises et vérifiables (lot du catalogue de règles).
 
-**Entrée dans `main`** (`MAIN_OPS` : toutes partagent le même CAS de la garde) :
+**Entrée dans `main` et production : les routes de chaque coup (F0-12).** Toutes les opérations de `MAIN_OPS` partagent le même CAS de la garde. `@nom` est un seuil des règles du jeu, borné par le socle (valeur du socle entre parenthèses) ; *recommandé* est la valeur que l'installation signe à la genèse.
 
-| Opération | Ressource | Condition |
-|---|---|---|
-| `remediate` | `repo:{area}:{item}/{base}/{head}` | `tests = green` et (`reproduced = yes` **ou** (`regressions = none` et `review = approved` signé par un humain)) |
-| `integrate` | `repo:contrib:{contributeur}/{base}/{head}` | `tests = green`, `regressions = none`, `review = approved` |
-| `implement` (D34) | `repo:feature:{request}/{base}/{head}` | `acceptance = green`, `tests = green`, `regressions = none`, `review = approved` |
-| `configure` (D35) | `repo:config:rules/{base}/{head}` | `configured = yes` (le commit contient exactement les règles signées par un ingénieur), `tests = green`, `regressions = none` |
+| Opération | Ressource | Routes autonomes | Route humaine |
+|---|---|---|---|
+| `remediate` | `repo:{area}:{item}/{base}/{head}` | `reproduced` : `tests = green`, `reproduced = yes` ; `scoped` : `tests = green`, `regressions = none`, `scoped = yes` | `tests`, `regressions`, `decision` |
+| `integrate` | `repo:contrib:{contributeur}/{base}/{head}` | — | `tests = green`, `regressions = none`, `decision` |
+| `implement` (D34) | `repo:feature:{request}/{base}/{head}` | `accepted` : `acceptance = green`, `tests = green`, `regressions = none`, `scoped = yes` | les mêmes faits sans `scoped`, plus `decision` |
+| `deploy` | `run:release:all/{from}/{to}` | `direct` : `candidate`, `window = open`, `budget_pct ≥ @freeze_below` (0) ; `promote` : `candidate`, `canary_error_delta ≤ @canary_max_error_delta` (2 ; recommandé 0,5), `canary_requests ≥ @canary_min_requests` (20 ; 100), `canary_baked_min ≥ @canary_bake_min` (1 ; 10) | `candidate`, `decision` |
+| `canary` | `run:canary:all/{from}/{to}` | `auto` : `candidate`, `window = open`, `budget_pct ≥ @freeze_below` | `candidate`, `decision` |
+| `rollback` | `run:service:all/{from}/{to}` | `previous`, `proven`, `migrations_crossed ≤ @rollback_migrations`, puis `burn` : `switched_min ≤ @rollback_horizon_min` (240 ; 30) et `burn_fast ≥ @burn_fast` (14,4) ; `failing` : même horizon et `failing_pct ≥ @failing` (5) ; `unanswered` : `unanswered_s ≥ 90` | `previous`, `decision` |
+| `restart` | `run:process:all/{release}/{n}` | `failing`, `burn` : `live`, `restarts_last_hour ≤ @restarts_per_hour` (11 ; 2) et le seuil correspondant — **coupées dans les règles recommandées** | `decision` |
+| `abort` | `run:canary:abort/{from}/{to}` | `auto` : `running` (retirer un canari est toujours sûr) | `decision` |
+
+`window` et `budget_pct` sont mesurés par le scanner depuis les règles en vigueur (`instruments/production.py`). Une route coupée dans les règles laisse le coup à l'humain ; aucune règle ne coupe la route humaine.
 
 **Demandes (D34).** Ressource typée `request` (`build:request/<rid>`, champs `title`, `spec`, `contract` en digests) : `proposed → contracted` exige `contract = red` (les tests d'acceptation échouent sur main : la demande demande du nouveau), `contracted → delivered` exige `accepted = yes` (main passe le contrat), `withdraw` depuis les deux premiers états. Enregistrer et contracter : le rôle produit (`register:request`, `transition:request:contract`).
 
-**Décisions humaines (D46).** `review`, `approved` et `requested` ne comptent que signés par une identité de genre `human` de la racine en vigueur (atome `observed` à quatre arguments). Un instrument, l'oracle ou toute identité machine qui détient `observe` sur la ressource ne remplace pas une personne. Le langage reste positif : un `changes_requested` n'annule pas l'`approved` d'un autre humain ; un refus se dit par un `flag`, un gel ou une révocation.
+**Décisions humaines (D46, D51).** Une seule forme : `decision = approve`, signée par une identité de genre `human` de la racine en vigueur, sur la ressource exacte du coup (atome `observed` à quatre arguments, `DECISION` de FLOOR-0). Un instrument, l'oracle ou l'agent ne remplace pas une personne. Un non est un gel de la ressource.
 
 **Production (D30–D36)** — cibles observées par `@scanner`, fraîcheur 15 min :
 
@@ -851,21 +876,9 @@ Les floors portent la direction (autonomie, sécurité, conformité) dans le **m
 | run-slo | `run:service:all` | `slo = met` (aucun composant compté à 5 % d'échecs ou plus, aucun SLO qui consomme à 14,4 ou plus) | 30 min | `rollback` |
 | run-live | `run:release:all` | `lag = none` | 1 jour | `deploy` |
 
-Le scanner signe ce qui est sur chaque bascule exacte et des nombres ; la loi dit sur quelles preuves l'agent agit seul (D36) :
+**Instruments épinglés (D33, D37).** Les floors réservent à `@scanner` : `tests`, `regressions`, `reproduced`, `scoped`, `acceptance`, `contract`, `accepted`, `window` et tous les faits de production ci-dessus. Leur méthode est l'empreinte du paquet de programmes (`programs@sha256:…`, calculée par les floors) : changer un programme change la release, donc la genèse. Seule une `measurement` de cette source, avec cette méthode, le porte ; son artefact est l'enregistrement rejouable.
 
-| Opération | Ressource | Autonome (capacité) | Revue |
-|---|---|---|---|
-| `deploy` | `run:release:all/{from}/{to}` | `candidate` (`agent_deploy`) ; promotion d'un canary : `candidate`, `canary_error_delta ≤ 2`, `canary_requests ≥ 20`, `canary_baked_min ≥ 1` (`agent_promote`) | `candidate` + `approved` |
-| `rollback` | `run:service:all/{from}/{to}` | `previous`, `proven`, `switched_min ≤ 240` et `burn_fast ≥ 14,4` (`agent_rollback`) ou `failing_pct ≥ 5` (`agent_rollback_failing`) ; ou `previous`, `proven`, `unanswered_s ≥ 90` (`agent_rollback_unanswered`) | `previous` + `requested` |
-| `restart` | `run:process:all/{release}/{n}` | `live`, `restarts_last_hour ≤ 11`, et `failing_pct ≥ 5` (`agent_restart`) ou `burn_fast ≥ 14,4` (`agent_restart_burn`) | `requested` |
-| `canary` | `run:canary:all/{from}/{to}` | `candidate` | — |
-| `abort` | `run:canary:abort/{from}/{to}` | `running` (retirer un canary est toujours sûr) | `requested` |
-
-Les bornes sont la **preuve minimale** pour agir seul, comparée par le noyau. Les réglages des ingénieurs (stratégie, fenêtres, gel, horizon de 30 min, canary à 0,5 point, seuils d'alerte, interrupteurs d'autonomie) sont la retenue de l'agent, hors TCB (`standard/autonomy/policy.py`) : ils peuvent exiger plus, jamais moins. Pour un arrêt garanti par le noyau, révoquer une capacité ou geler un périmètre (`run:release:*`) s'applique tout de suite ; rendre l'autonomie attend le délai témoigné.
-
-**Instruments épinglés (D33, D37).** Les floors réservent à `@scanner` : `tests`, `regressions`, `reproduced`, `acceptance`, `contract`, `configured`, `accepted` et tous les faits de production ci-dessus. Leur méthode est l'empreinte du paquet de programmes (`programs@sha256:…`, calculée par les floors) : changer un programme change la release, donc la genèse. Seule une `measurement` de cette source, avec cette méthode, le porte ; son artefact est l'enregistrement rejouable.
-
-**Projection conformité** (hors TCB) : l'interface possède des étiquettes ISO 27001, DORA et NIS2 par famille de cibles. Ce regroupement sommaire est implémenté, mais il n'existe pas de correspondance sourcée contrôle par contrôle, ni de certification. Les référentiels OWASP agentiques figurent comme références non cartographiées dans le modèle de lecture ; leur simple présence ne prouve aucune couverture. Une attestation générale peut surévaluer la portée d'un contrôle.
+**Projection conformité :** retirée (D51). Aucune étiquette ISO/DORA/NIS2 n'est plus affichée comme couverture.
 
 ---
 
@@ -1200,6 +1213,9 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | D48 | **Instruments que le sujet ne pilote pas, effets durables.** Exports par objets (pas `git archive`), non-régression par comparaison de mesures, `regressions` exigé en revue, liens symboliques déclarés, verrou exempt de dépendance mesuré, registres fsync, rejeu comparé au journal | Falsificateurs : `export-ignore` cachait un fichier ; un constat échangé contre un autre passait ; un crash entre historique et registre laissait un `ok` sans mouvement |
 | D49 | **Clôture de release et coût constant.** Les dépendances sont épinglées par hash (`requirements.hashes`) et entrent dans l'empreinte d'installation ; installations et CI installent avec `--require-hashes`. Les lectures et écritures du journal ne copient plus profondément les énoncés : 6 à 8 ms par écriture de 0 à 20 000 entrées mesurés, au lieu de 10 → 55 ms à 4 000 | Limite : la clôture est calculée pour Linux x86_64 et Python 3.11+ ; une autre plateforme régénère le verrou (`make lock`) et le relit |
 | D50 | **Témoins configurables.** `[clock] kind = "witnesses"` assemble `WitnessClock` (HTTPS, quorum, `tolerance_ms` borné à 5 s, état persisté). La lecture retourne la cotation la plus tardive : prudente pour toutes ses utilisations (fenêtre de départ, expirations, horizon), les délais d'élargissement restant sur les checkpoints témoignés | Limite : l'indépendance réelle des témoins reste une propriété à qualifier |
+| D51 | **Une personne, un agent, les règles du jeu.** FLOOR-0 descend à `MIN_HUMANS = 1`, `MIN_WITNESSES = 1`, `MIN_DELAY_MS = 0` ; un élargissement prend effet avec sa propre entrée sauf délai déclaré par la loi (les options d'équipe restent : seuil, délais, veto, quorum de témoins). F0-12 : chaque opération déclare ses routes ; la route humaine porte `decision = approve` par un humain ; une loi coupe des routes autonomes, jamais l'humaine. Réglages, règles et loi ne font qu'un document client signé (`routes`, `settings` liés par `@nom`, bornés par le socle) ; `standard/rules.json`, `configure`, la sentinelle, `flag`, `heartbeat`, les profils, `compliance_officer`, les cibles organisationnelles et la projection de conformité sont retirés. L'humain a trois gestes : oui, non (gel), règles | Arrêtée |
+| D52 | **L'agent est une boucle sur les coups.** `moves.py` est la lecture commune (agent et humain) : statut, route, file. `loop.py` joue ce qui est prêt ou décidé sous une seule capacité ; ses producteurs (réparation, construction) n'écrivent que des candidats. Les tactiques ne font que retenir. Deux nouveaux faits du scanner : `scoped` (une seule définition du périmètre d'écriture, `instruments/scope.py`) et `window` (fenêtre de mise en production lue dans les règles en vigueur) | Arrêtée |
+| D53 | **Une cérémonie, l'horloge de l'opérateur.** Identités `human`, `agent`, `guard`, `scanner`, `oracle`, `clock` ; capacités `scanner`, `oracle`, `agent`, `human` ; genèse signée par l'humain, ancre par `clock` tant que la loi ne demande pas plus de témoins ; `[clock] kind = "witnesses"` reste l'option d'équipe (au moins deux). `qualify.py` : T02 « l'humain détient sa propre clé », T03 « temps » selon le quorum rejoué | Arrêtée |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1290,9 +1306,9 @@ Tout le code hors démonstration appartient à Standard. Aucun produit métier c
 | `bt/` | Transactions OBSERVE/EFFECT/RESOLVE ; journal et pins ; second juge ; signatures, temps, qualification, garde, isolation et hôte ; adaptateurs physiques | `Boundary`, `TrustedService`, `Host`, `Guard` |
 | `instruments/` | Programmes épinglés et rejouables : plan, sondes, suites, recettes, données et production | `instruments.jobs.run` |
 | `standard/runtime/` | Assemblage privilégié de l'installation, choix des fournisseurs et passes scanner/oracle | `python -m standard.runtime serve CONFIG` |
-| `standard/floors.py` | Déclarations de la release actuelle : cibles, opérations, contrats des instruments et portée informative de conformité | `RELEASE`, `CONTRACTS`, `INSTRUMENTS`, `COMPLIANCE_SCOPES` |
-| `standard/autonomy/` | Agent, BUILD/RUN, Work Engine, propositions et retenue de Standard | `python -m standard.autonomy run CONFIG` |
-| `standard/surface/` | CLI et interface pour les personnes ; `read_views.py` projette BUILD/RUN depuis le modèle commun, `web.py` lit les entrées et sert HTTP ; `static/objectives.js` porte la vue des réglages et sa signature navigateur ; télémétrie séparée | `python -m standard.surface`, `python -m standard.surface.web` |
+| `standard/floors.py` | Le socle : cibles, opérations et leurs routes, bornes des seuils, règles recommandées, contrats des instruments | `RELEASE`, `FLOORS`, `RECOMMENDED`, `rules()` |
+| `standard/autonomy/` | L'agent : lecture des coups (`moves.py`), boucle (`loop.py`), producteurs (`repair.py`, `build.py`), règles du jeu (`rules.py`), Work Engine, contexte | `python -m standard.autonomy run CONFIG` |
+| `standard/surface/` | CLI et interface pour l'humain ; `human.py` signe ses trois gestes (oui, non, règles), `read_views.py` projette BUILD/RUN depuis le modèle commun, `web.py` lit les entrées et sert HTTP ; `static/rules.js` porte la page des règles du jeu et sa signature navigateur ; `telemetry.py` lit les métriques | `python -m standard.surface`, `python -m standard.surface.web CONFIG` |
 | `tools/` | Installation, hébergement, qualification, rejeu, lanceur de releases et inspection de Standard | `make coverage`, `python tools/qualify.py CONFIG` |
 | `examples/` | Dépôt métier fictif de démonstration et générateur de trafic ; aucun composant requis du socle | `examples/demo/`, `examples/load.py` |
 | `tests/` | Contrats de régression de Standard | `make check`, `make layers` |

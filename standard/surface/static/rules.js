@@ -77,7 +77,7 @@ export function createRules({ $, esc, fact, ago, getSigner, envelope }) {
     }).join("");
     const input = (key, [label, help], bound) => `<div class="set"><div class="sl"><b>${esc(label)}</b><span class="small quiet">${esc(help)}${bound
         ? ` · socle : ${bound.way === "ge" ? "au moins" : "au plus"} ${esc(bound.socle)}` : ""}</span></div>
-      <input type="text" data-set="${key}" value="${esc(s[key] ?? "")}" ${dis}><button class="btn tiny" data-save="${key}" ${dis}>Signer</button></div>`;
+      <div class="sv"><input type="text" data-set="${key}" value="${esc(s[key] ?? "")}" ${dis}><button class="btn tiny" data-save="${key}" ${dis}>Signer</button></div></div>`;
     const sections = (name, fields, title) => {
       const items = Object.entries(s[name] || {});
       return `<section><h2>${title} <span class="quiet small">${items.length}</span></h2><div class="rows">${items.map(([id, f]) => `

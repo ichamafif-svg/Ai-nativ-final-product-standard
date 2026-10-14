@@ -67,8 +67,6 @@ class Server(unittest.TestCase):
         ceremony.now = daemon.now_ms = clock
         ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
-        clock.t += 3_600_100
-        ceremony.activate(argparse.Namespace(dir=str(root / "install")))
         operator = daemon.Installation(root / "install" / "standard.toml")
         operator.tick()
         gateway = AdmissionGateway(operator.socket, operator.service)
@@ -87,14 +85,16 @@ class Server(unittest.TestCase):
                 urllib.request.urlopen(rebound)
             self.assertEqual(foreign.exception.code, 403)
             self.assertIn("sbom", [g["target"] for g in state["run"]["gaps"]])
-            self.assertEqual(state["signing"]["grants"]["reviewer"]["holder"], "h3")
+            self.assertEqual(state["signing"]["grants"]["human"]["holder"], "human")
+            self.assertEqual(state["queue"], [])                         # nothing waits for the human yet
+            self.assertIn("deploy", state["law"]["routes"])
             self.assertEqual(state["product"], "repo")
             self.assertEqual(state["progress"]["schema"], "standard-progress/v1")
             states = {r["id"]: r["state"] for r in state["requirements"]}
             self.assertEqual(states["sbom"], "gap")                     # the product's state, whatever the product
-            self.assertEqual(states["isms"], "attest")
+            self.assertNotIn("isms", states)                            # no organisational target any more
             levels = {r["id"]: r["level"] for r in state["autonomy"]["requirements"]}
-            self.assertEqual((levels["sbom"], levels["secrets"], levels["isms"]), ("autonomous", "supervised", "human"))
+            self.assertEqual((levels["sbom"], levels["secrets"], levels["branch"]), ("autonomous", "autonomous", "human"))
             self.assertEqual(state["autonomy"]["runtime"]["level"], "observed")    # no runtime operation in the law
             self.assertTrue(all(r["why"] for r in state["autonomy"]["requirements"]))
             run = json.loads(urllib.request.urlopen(f"{url}/api/run?window=900").read())
@@ -102,45 +102,54 @@ class Server(unittest.TestCase):
             self.assertTrue(all(r["no"] for r in run["frontier_reasons"].values()))   # every "no" says why
             self.assertEqual(run["frontier_total"]["act"], 0)                        # nothing acts in production
             self.assertFalse(run["live"]["configured"])                               # no [deploy]: said, not hidden
-            settings = json.loads(urllib.request.urlopen(f"{url}/api/settings").read())    # D31: what engineers set
-            self.assertEqual(settings["policy"]["defaults"]["objective"], 99.9)
-            self.assertEqual(settings["signing"]["grant"]["holder"], "h1")
-            self.assertIn("auto_rollback", settings["policy"]["defaults"])
-            self.assertIn("s-default", settings["policy"]["slos"])                         # D32: a default SLO
-            self.assertEqual(settings["policy"]["document"]["global"]["strategy"], "direct")
+            settings = json.loads(urllib.request.urlopen(f"{url}/api/settings").read())    # D51: the rules of the game
+            rules = settings["rules"]
+            self.assertEqual(rules["settings"]["objective"], "99.9")
+            self.assertEqual(settings["signing"]["grant"]["holder"], "human")
+            self.assertEqual(rules["routes"]["restart"]["auto"], [])                       # restarting stays yours
+            self.assertIn("direct", rules["routes"]["deploy"]["auto"])
+            self.assertEqual(rules["bounds"]["burn_fast"], {"socle": "14.4", "way": "ge"})
+            self.assertEqual([h["kind"] for h in rules["history"]], ["genesis"])
             preview = json.loads(urllib.request.urlopen(f"{url}/api/preview?sli=availability&target=99.9").read())
             self.assertIn("minutes", preview)
 
-            # Prévenir: a silent source opens an alert; a person takes it by a signature the kernel admits.
+            # Prévenir: a silent source opens an alert; a silence is a rule the human signs, never a fact.
             inst.telemetry.targets, inst.telemetry.fetch = ["http://standard/metrics"], lambda u: (_ for _ in ()).throw(OSError("down"))
             inst.telemetry.scrape()
             inst.telemetry.track()
+            clock.t += 3_700_000                                                          # past run-sources' due
+            operator.tick()
             alerts = json.loads(urllib.request.urlopen(f"{url}/api/alerts").read())
             self.assertIn("target:run-sources", [a["name"] for a in alerts["alerts"]])  # overdue gaps alert too
             source = [a for a in alerts["alerts"] if a["source"] == "run"]
             self.assertEqual(len(source), 1)
-            before = alerts["untaken"]
+            before = alerts["open"]
             alert = source[0]
             self.assertEqual((alert["kind"], alert["why"]["rule"]), ("source", "source_down"))
             self.assertEqual(alert["severity"], "page")                                   # D32: page or ticket
             from standard.surface.human import load_signer
             from bt.signing import envelope
-            ack = envelope(alerts["signing"]["domain"], "observation", {
-                "id": "ack-1", "at": max(clock(), alerts["signing"]["as_of"] + 1), "author": "h3",
-                "under": alerts["signing"]["grant"]["id"], "resource": alert["resource"], "property": "ack",
-                "status": "taken", "level": "real"}, [load_signer("h3", root / "install" / "keys" / "h3.key")])
-            admitted = urllib.request.Request(f"{url}/api/admit", data=json.dumps(ack).encode(),
-                                              headers={"Content-Type": "application/json"})
-            self.assertEqual(urllib.request.urlopen(admitted).status, 200)
+            post = lambda path, body: urllib.request.urlopen(urllib.request.Request(
+                f"{url}{path}", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}))
+            draft = json.loads(post("/api/rules/draft", {"sections": {"silences": {"m-maint": {
+                "target_of": alert["subject"], "until": str(clock.t + 3_600_000), "reason": "maintenance"}}}}).read())
+            signed = envelope(draft["domain"], "law", {"id": "law-silence", "at": max(clock(), draft["as_of"] + 1),
+                                                       "author": "human", "client": draft["client"]},
+                              [load_signer("human", root / "install" / "keys" / "human.key")])
+            self.assertEqual(post("/api/admit", signed).status, 200)              # in force at once
+            inst.telemetry.track()
             alerts = json.loads(urllib.request.urlopen(f"{url}/api/alerts").read())
-            self.assertEqual(alerts["untaken"], before - 1)                       # taken, and the journal keeps who
-            self.assertTrue(next(a for a in alerts["alerts"] if a["resource"] == alert["resource"])["taken"])
+            self.assertEqual(alerts["open"], before - 1)                          # muted in the console only
+            self.assertTrue(next(a for a in alerts["alerts"] if a["resource"] == alert["resource"])["silenced"])
+            with self.assertRaises(urllib.error.HTTPError) as bad:                # a malformed rule never gets signed
+                post("/api/rules/draft", {"settings": {"deploy_tz": "Mars/Olympus"}})
+            self.assertEqual(bad.exception.code, 400)
             inst.telemetry.fetch = lambda u: ""
             inst.telemetry.scrape()
             inst.telemetry.track()
             alerts = json.loads(urllib.request.urlopen(f"{url}/api/alerts").read())
             self.assertFalse([a for a in alerts["alerts"] if a["source"] == "run" and a["closed_at"] is None])  # closed
-            for asset in ("/app.css", "/sign.js", "/objectives.js", "/app.js"):
+            for asset in ("/app.css", "/sign.js", "/rules.js", "/app.js"):
                 self.assertEqual(urllib.request.urlopen(f"{url}{asset}").status, 200)
             main = state["main"]
             self.assertIn("initial", json.loads(urllib.request.urlopen(f"{url}/api/dossier/{main}").read())["message"])

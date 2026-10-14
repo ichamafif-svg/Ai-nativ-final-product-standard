@@ -8,7 +8,8 @@ from bt.release import code_digest as core_digest
 from standard.runtime import SOURCES, code_digest as installation_digest
 from tools.check_layers import ALLOWED, imports, violations
 from tools.coverage import inventory
-from standard.autonomy.read_model import compliance_reading, human_target, work_role
+from standard.autonomy.read_model import human_target, work_role
+from standard.floors import FLOORS
 from standard.autonomy.work import WorkEngine
 from tomllib import loads as parse_toml
 
@@ -44,18 +45,14 @@ class Structure(unittest.TestCase):
             engine.sync({**projection, "basis": {"head": "new"}})
             self.assertEqual(engine.claim(mode="RUN", now=11)["attempt"], 1)
 
-    def test_human_work_is_declared_not_inferred_from_resource_prefix(self):
-        target = {"id": "client-org", "resource": "org:client:custom", "repair": "remediate"}
+    def test_who_repairs_follows_the_routes_in_force_not_the_resource_prefix(self):
+        target = {"id": "client-thing", "resource": "repo:client:custom", "repair": "remediate"}
         self.assertFalse(human_target(target))
-        self.assertEqual(work_role(target)["level"], "supervised")
+        self.assertEqual(work_role(target, FLOORS)["level"], "autonomous")
+        human_only = {**FLOORS, "ops": {**FLOORS["ops"], "remediate": {**FLOORS["ops"]["remediate"],
+                                                                         "routes": {"human": {"all": []}}}}}
+        self.assertEqual(work_role(target, human_only)["level"], "decision")
         self.assertTrue(human_target({**target, "human": True}))
-
-    def test_coarse_compliance_never_claims_satisfaction(self):
-        target = {"id": "isms", "resource": "org:isms:policy"}
-        held = compliance_reading(target, "held", "HEALTHY")
-        self.assertTrue(held)
-        self.assertTrue(all(row["status"] == "partial" and not row["certifies"] for row in held))
-        self.assertTrue(all(row["status"] == "fault" for row in compliance_reading(target, "held", "FAULT")))
 
     def test_installation_toml_uses_a_complete_parser(self):
         self.assertEqual(parse_toml('name = "a#b"\n[agent]\nscopes = ["code", "tests"]'),
@@ -64,15 +61,15 @@ class Structure(unittest.TestCase):
     def test_coverage_does_not_invent_an_instrument_for_a_declared_target(self):
         rows = {r["target"]: r for r in inventory()}
         self.assertEqual(rows["ci"]["measurement"], "REGISTERED")
-        self.assertEqual(rows["ci"]["repair"], "model + human review")
+        self.assertEqual(rows["ci"]["repair"], "model in scope")
         unknown = {"id": "unknown", "resource": "repo:code:new", "property": "safe"}
         self.assertEqual(inventory([unknown])[0]["measurement"], "MISSING")
 
-    def test_coverage_distinguishes_recipes_attestations_and_conditional_production(self):
+    def test_coverage_distinguishes_recipes_human_repairs_and_conditional_production(self):
         rows = {r["target"]: r for r in inventory()}
-        self.assertEqual({tid for tid, r in rows.items() if r["repair"] == "recipe + review fallback"},
+        self.assertEqual({tid for tid, r in rows.items() if r["repair"] == "recipe, else model in scope"},
                          {"sbom", "vulns", "actions"})
-        self.assertEqual(rows["backup"]["measurement"], "MANUAL")
+        self.assertEqual(rows["branch"]["repair"], "human")
         self.assertEqual(rows["run-slo"]["measurement"], "CONDITIONAL")
 
     def setUp(self):

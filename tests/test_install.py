@@ -1,6 +1,6 @@
-"""A demo installation, as an operator runs it: ceremony in two phases, the operator process, the agent process.
+"""A demo installation, as an operator runs it: one ceremony, the operator process, the agent process.
 
-Time is simulated so that FLOOR-0's one-hour delay passes in the test; nothing else is stubbed.
+One human, one agent: the capabilities are in force as soon as the ceremony returns. Nothing is stubbed but time.
 """
 import argparse
 import tempfile
@@ -37,8 +37,6 @@ class Installation(unittest.TestCase):
         ceremony.now = daemon.now_ms = clock
         ceremony.init(argparse.Namespace(dir=str(root / "install"), repo=str(repo), github=None, token_file=None, unconfined_tests=True,
                                          pins=str(root / "elsewhere" / "pins.db")))
-        clock.t += 3_600_100
-        ceremony.activate(argparse.Namespace(dir=str(root / "install")))
 
         operator = daemon.Installation(root / "install" / "standard.toml")
         self.assertEqual(operator.service.status()["assessment"], "SELF_ASSESSED")
@@ -46,12 +44,12 @@ class Installation(unittest.TestCase):
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
             with patch("standard.autonomy.sandbox.Sandbox", LocalSandbox):
-                cycle, refresh = agent_process.build(root / "install" / "standard.toml")
-            cycle.clock, cycle.backoff_ms = clock, 0
+                loop, repairer, _, refresh = agent_process.build(root / "install" / "standard.toml")
+            loop.clock, loop.backoff_ms, repairer.clock = clock, 0, clock
             for _ in range(3):
                 operator.tick()
                 refresh()
-                cycle.run()
+                loop.run()
             operator.tick()
             state = operator.journal.snapshot()
             self.assertEqual(state["observations"]["repo:supply:sbom|state|scanner"]["status"], "current")
@@ -72,9 +70,10 @@ class Installation(unittest.TestCase):
         from tools import qualify
         report = {p["probe"]: p for p in qualify.qualify(root / "install" / "standard.toml")}
         failed = {name for name, p in report.items() if p["result"] == "FAIL"}
-        self.assertTrue({"T04 pins apart from the journal", "T02 humans hold their own keys",
-                         "T03 witnesses apart from the operator", "independent assessment",
+        self.assertTrue({"T04 pins apart from the journal", "T02 the human holds their own key",
+                         "independent assessment",
                          "T06 contributors' code runs isolated", "T07 only the guard moves main"} <= failed)
+        self.assertEqual(report["T03 time"]["result"], "PASS")          # the operator's clock, declared (F0-1)
         self.assertTrue(all(p["does_not_prove"] for p in report.values()))
 
 

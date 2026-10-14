@@ -4,7 +4,6 @@ A real git repository, real signatures, the durable journal, both judges, the gu
 The trust boundary is a test stand-in that declares every contract verified: this proves the logic, not the
 physical properties of any T (§0.1).
 """
-import os
 import subprocess
 import tempfile
 import unittest
