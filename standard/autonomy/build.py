@@ -26,7 +26,7 @@ from bt.signing import Signer, envelope
 from instruments.scope import feature
 
 from .agent import AgentError, commit_files
-from .context import assemble, task_context, write_scope
+from .context import task_context, write_scope
 from .moves import judge
 from .read_model import ReadModel
 from .research import Research, ResearchError
@@ -40,7 +40,7 @@ class Builder:
 
     def __init__(self, service, signer: Signer, grant: str, store, requests, *, clock, notes, llm=None,
                  sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None,
-                 review_enabled: bool = True, review=None, research_steps: int = 8):
+                 review=None, research_steps: int = 8):
         """grant: the agent's capability. store: the agent's proposals store. requests: the request store (contracts
         and specs by digest)."""
         from instruments.data import EMPTY
@@ -53,7 +53,7 @@ class Builder:
         self.iterations, self.backoff_ms = iterations, backoff_ms
         self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources, steps=research_steps)
         from .candidate import CandidateWorkflow
-        self.candidate, self.last_candidate = (CandidateWorkflow(**(review or {})) if review_enabled else None), None
+        self.candidate, self.last_candidate = CandidateWorkflow(**(review or {})), None
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
     def check(self, base: str, head: str, rid: str, targets: dict) -> list:
@@ -88,8 +88,7 @@ class Builder:
         return problems
 
     # ---- crafting -------------------------------------------------------------------------------------------------
-    def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None,
-              values: dict | None = None) -> str:
+    def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None) -> str:
         self.last_candidate = None
         if self.llm is None:
             raise AgentError("no model is configured: a contributor may implement it (trailer Standard-Request)")
@@ -108,25 +107,20 @@ class Builder:
                       "Return JSON {\"title\": str, \"files\": {path: full new content or null to delete}, \"risks\": str}: "
                       "source files only, never under tests/, as few as possible.\n")
             try:
-                if self.candidate is None:
-                    packet, sources = assemble(context, tree, role="build", scope=scope, documents=documents, values=values)
-                    reply = self.research.dialogue(prompt + packet, tree, key=f"request:{rid}", context=sources)
-                else:                                       # one writer, parallel reviews, bounded corrections
-                    from standard.catalog import effective, load
-                    reply, stats = self.candidate.run(
-                        lambda text, role, **kw: self.research.worker(text, role, key=f"request:{rid}", **kw),
-                        tree, prompt, values=values if values is not None else effective(load(), None),
-                        scope_ok=lambda path: in_scope(rid, path), context=context, scope=scope, documents=documents,
-                        fixed_files={contract_path(rid): contract})
-                    self.last_candidate = stats
-                    if stats["remaining"]:
-                        feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
-                        continue
+                reply, stats = self.candidate.run(
+                    lambda text, role, **kw: self.research.worker(text, role, key=f"request:{rid}", **kw),
+                    tree, prompt,
+                    scope_ok=lambda path: in_scope(rid, path), context=context, scope=scope, documents=documents,
+                    fixed_files={contract_path(rid): contract})
+                self.last_candidate = stats
+                if stats["remaining"]:
+                    feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
+                    continue
             except ResearchError as exc:
-                self.last_candidate = self.candidate.last_stats if self.candidate else None
+                self.last_candidate = self.candidate.last_stats
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
-                self.last_candidate = self.candidate.last_stats if self.candidate else None
+                self.last_candidate = self.candidate.last_stats
                 raise AgentError(f"the implementation: {exc}") from exc
             files = reply.get("files")
             if not isinstance(files, dict) or not files or not all(in_scope(rid, p) and (c is None or isinstance(c, str))
@@ -149,11 +143,6 @@ class Builder:
                 return head
             feedback = "\n".join(problems)[:5000]
         raise AgentError(f"no implementation of {rid} passed the agent's checks: {feedback[:1500]}")
-
-    @staticmethod
-    def _values(view) -> dict:
-        from standard.catalog import effective, load
-        return effective(load(), view["law"]["effective"].get("settings", {}).get("values"))
 
     # ---- the pass ---------------------------------------------------------------------------------------------------
     def _admit(self, view, kind: str, body: dict) -> str:
@@ -196,8 +185,7 @@ class Builder:
                     note.update(base=base, head=self.craft(rid, e["fields"]["title"], spec or b"", contract, base,
                                 targets, context=task_context(view, {"id": f"request:{rid}", "need": "repair",
                                       "op": "implement", "resource": resource, "target": None,
-                                      "opened": e.get("created"), "due": None}, model=model),
-                                values=self._values(view)), state="proposed")
+                                      "opened": e.get("created"), "due": None}, model=model)), state="proposed")
                 except AgentError as exc:
                     note.update(base=base, head=None, state=f"waiting: {exc}", next_at=now + 10 * self.backoff_ms)
                 if self.last_candidate:

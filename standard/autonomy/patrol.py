@@ -14,12 +14,10 @@ import hashlib
 
 from instruments.tree import Snapshot
 
-from standard.catalog import applicable, categories, effective, load, render, slug
-from .context import assemble
+from standard.catalog import categories, contracts, declared_features, effective, load, render_contracts
+from .context import AUTHORITY, assemble, gap_dossiers, task_context
 from .research import ReadScope
 
-from .concepts import AUTHORITY
-from .context import gap_dossiers
 from .read_model import ReadModel
 
 SUSPICION_KEYS = ("law_ref", "surface", "why", "evidence_seen", "determinism_gap", "needs",
@@ -30,7 +28,7 @@ SIMPLICITY = ("Find needless layers, state, dependencies, dead code and duplicat
               "law_ref is design:simplicity; a design proposal is not a law violation or a safety debt.")
 
 
-def rotation(state_path, cat=None) -> str:
+def rotation(state_path) -> str:
     """The next category to patrol, in the catalog's fixed order; the position is kept in U's own file."""
     order = ["simplicity", *categories()]
     try:
@@ -43,29 +41,47 @@ def rotation(state_path, cat=None) -> str:
     return nxt
 
 
-def patrol_rules(category: str, values: dict, features=None) -> list:
-    """The rules of a category an AI reads to check (`ai` in who), rendered as the agent codes to them."""
-    return [render(r, values) for r in (applicable(load(), features) if features is not None else load()["rules"])
-            if slug(r["category"]) == category and "ai" in r["who"]]
-
-
 def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=None,
-                   mode: str = "RUN", model: ReadModel | None = None, rules: list | None = None) -> dict:
-    """Context for a repo-wide or targeted law patrol (`rules`: the catalog rules this round reads for)."""
+                   mode: str = "RUN", model: ReadModel | None = None, tree=None) -> dict:
+    """One mission definition for the interface and the running patrol; tree pins applicability and read scope."""
+    from instruments.scope import relative
+    from instruments.surfaces import scan
+
     model = model or ReadModel(view, findings, routes, qualify)
     model.assert_view(view)
     law, findings, settings = model.law, model.findings, model.settings
+    if focus is not None and (not isinstance(focus, str) or len(focus) > 200):
+        raise ValueError("patrol focus is at most 200 characters")
+    if focus in categories():
+        focus = f"rules:{focus}"
+    parts = (focus or "").split(":")
+    category = parts[1] if parts[0] == "rules" and len(parts) >= 2 else None
+    if parts[0] == "rules" and category not in categories():
+        raise ValueError("unknown catalog category")
+    target = model.target(focus) if focus and parts[0] not in ("simplicity", "rules") else None
+    if focus and parts[0] not in ("simplicity", "rules") and target is None:
+        raise ValueError("patrol focus must name simplicity, a catalog category or an effective target")
+    root = ":".join(parts[2:]) if category else ":".join(parts[1:]) if parts[0] == "simplicity" else ""
+    if root and (not relative(root) or tree is not None and not any(
+            p == root or p.startswith(root + "/") for p in tree.paths())):
+        raise ValueError("exploration scope must name an existing relative file or directory")
+    paths = [p for p in tree.paths() if not root or p == root or p.startswith(root + "/")] if tree is not None else []
+    product = scan(tree, declared=declared_features(settings)) if tree is not None else None
+    # Simplicity reads the contracts triggered by this subsystem, including deterministic block guarantees.
+    local = {p: d for p, d in product["files"].items() if p in paths} if product is not None else {}
+    touched = ({f"surface:{s}" for d in local.values() for s in d["surfaces"]} |
+               {f"construct:{c}" for d in local.values() for c in d["constructs"]}) if parts[0] == "simplicity" and product is not None else None
+    category = category or (focus[6:] if target and focus.startswith("rules-") and focus[6:] in categories() else None)
+    verifier = "ai" if category else None
     dossiers = gap_dossiers(view, model=model, mode=mode)
     selected = dossiers
-    question = (focus or "").split(":")[0]
-    if focus and question != "simplicity":
-        text = ":".join(str(focus).split(":")[:2]) if str(focus).startswith("rules:") else str(focus)
-        selected = [d for d in dossiers if text in (d["id"], d["law"]["resource"]) or text in json.dumps(d["law"])]
+    if focus and parts[0] != "simplicity":
+        selected = [d for d in dossiers if d["id"] == (f"rules-{category}" if category else focus)]
     weak = [d for d in selected if d["state"] in ("unknown", "unmeasured", "open")
             or d["route"]["state"] in (None, "NO_ROUTE", "TRUST_BLOCKED")
             or d["action"]["method"] in ("missing_task", "llm_or_configured_scope")]
-    simplicity = question == "simplicity"
-    return {"kind": "simplicity-patrol" if simplicity else "law-patrol",
+    simplicity = parts[0] == "simplicity"
+    context = {"kind": "simplicity-patrol" if simplicity else "law-patrol",
             "mission": SIMPLICITY if simplicity else "Find possible law violations missed by instruments.",
             "mode": "targeted" if focus else "wide", "focus": focus,
             "basis": view["prefix"], "law_digest": view["law"].get("digest"),
@@ -77,28 +93,34 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=
             "instruments": law.get("instruments", {}),
             "operations": law.get("ops", {}),
             "routes": {op: spec.get("routes", {}) for op, spec in law.get("ops", {}).items()},
-            "rules": rules or [],
+            "scope": {"question": "simplicity" if simplicity else "conformance", "root": root or ".",
+                      "files": len(paths) if tree is not None else None, "mode": "read_only"},
+            "category": category, "verifier": verifier, "touched": sorted(touched) if touched is not None else None,
             "authority": AUTHORITY["patrol"],
             "expected_output": {"suspicions": [{k: "..." for k in SUSPICION_KEYS}]}}
+    if target:
+        context.update(task_context(view, {"id": f"patrol:{focus}", "need": "investigate", "target": focus,
+                                          "resource": target["target"]["resource"]}, model=model))
+        context["authority"] = AUTHORITY["patrol"]
+    if product is not None:
+        context["product"] = product
+        technical = contracts(load(), product["features"], effective(load(), settings.get("values")),
+                              touched=touched, category=category, verifier=verifier, stacks=product["stacks"])
+        context["rule_ids"] = [r["id"] for r in technical["rules"]]
+        context["technical"] = render_contracts(technical)
+    return context
 
 
 def run_patrol(cycle, *, main, focus=None) -> dict:
     """Run one advisory pass inside U, with read/search tools only; keep a private result history.
     cycle: the repair producer (its agent, findings and routes)."""
     from .llm import redact
-    from instruments.surfaces import scan
-    from instruments.scope import relative
 
     if cycle.agent.llm is None:
         raise ValueError("patrol needs a configured model in the agent process")
-    if focus is not None and (not isinstance(focus, str) or len(focus) > 200):
-        raise ValueError("patrol focus is at most 200 characters")
     view, base = cycle.service.view(), main()
     model = ReadModel(view, cycle._findings(), cycle.routes, cycle.service.qualify, main=base)
-    if focus in categories():
-        focus = f"rules:{focus}"
     snapshot = Snapshot(cycle.agent.store, base)
-    product = scan(snapshot, declared=model.settings.get("features", ()))
     state_path = cycle.agent.store.parent / "patrol-rotation.json"
     if focus is None:
         category = rotation(state_path)
@@ -111,26 +133,9 @@ def run_patrol(cycle, *, main, focus=None) -> dict:
         state_path.write_text(json.dumps({**note, "scopes": {**cursors, category: cursor + 1}}))
         if root != ".":
             focus += ":" + root
-    parts = focus.split(":")
-    category = parts[1] if parts[0] == "rules" and len(parts) >= 2 else None
-    if category is not None and category not in categories():
-        raise ValueError("unknown catalog category")
-    if parts[0] not in ("simplicity", "rules") and model.target(focus) is None:
-        raise ValueError("patrol focus must name simplicity, a catalog category or an effective target")
-    root = ":".join(parts[2:]) if category else ":".join(parts[1:]) if parts[0] == "simplicity" else ""
-    if root and (not relative(root) or not any(p == root or p.startswith(root + "/") for p in snapshot.paths())):
-        raise ValueError("exploration scope must name an existing relative file or directory")
-    paths = [p for p in snapshot.paths() if not root or p == root or p.startswith(root + "/")]
-    tree = ReadScope(snapshot, paths)
-    values = effective(load(), model.settings.get("values"))
-    rules = patrol_rules(category, values, product["features"]) if category else []
-    context = patrol_context(view, focus=focus, model=model, rules=rules)
-    context["scope"] = {"question": "simplicity" if parts[0] == "simplicity" else "conformance",
-                        "root": root or ".", "files": len(paths), "mode": "read_only"}
-    context["rule_ids"] = [r.split()[0] for r in rules]
-    # Applicability is observed on the whole product, even when this mission reads one subsystem.
-    context["product"] = product
-    result = (propose_patrol(context, tree, cycle.agent.research) if rules or category is None else
+    context = patrol_context(view, focus=focus, model=model, tree=snapshot)
+    focus, category = context["focus"], context["category"]
+    result = (propose_patrol(context, snapshot, cycle.agent.research) if context["rule_ids"] or category is None else
               {"suspicions": [], "authority": context["authority"], "outcome": "no applicable AI-readable requirements"})
     record = {"basis": context["basis"], "law_digest": context["law_digest"], "main": base,
               "focus": focus, "mode": context["mode"], "scope": context["scope"],
@@ -195,10 +200,11 @@ class Patrol:
 def propose_patrol(context: dict, tree, research, *, key=None) -> dict:
     """Ask a read-only research loop to patrol for possible law violations not yet deterministically born."""
     scope = context.get("scope", {"mode": "read_only"})
-    category = (context.get("focus") or "").split(":")
-    category = category[1] if category[0] == "rules" and len(category) > 1 else None
-    packet, sources = assemble(context, tree, role="explore", scope=scope, touched=None, category=category,
-                               rule_ids=context.get("rule_ids"), documents={"scope": sorted(tree.paths())})
+    root = scope.get("root", ".")
+    tree = ReadScope(tree, [p for p in tree.paths() if root == "." or p == root or p.startswith(root + "/")])
+    packet, sources = assemble(context, tree, role="explore", scope=scope, touched=context.get("touched"),
+                               category=context.get("category"), verifier=context.get("verifier"),
+                               documents={"scope": sorted(tree.paths())})
     prompt = ("Explore this pinned repository scope. Mission: " + context.get("mission", "Find possible law violations.") +
               " Read the catalog requirements and block contracts; investigate only the named question and scope. "
               "Report concrete suspicions, behaviour/guarantees to preserve and verification needed. "

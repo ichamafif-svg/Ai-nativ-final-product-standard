@@ -887,12 +887,13 @@ async function openAgentContext(kind, id) {
     <div class="ctxgrid">
       <section class="ctxcard"><h3>Decision packet</h3>${jsonBlock(ctx.decision)}</section>
       <section class="ctxcard"><h3>Mission</h3>${jsonBlock(ctx.mission)}</section>
-      <section class="ctxcard"><h3>Law trace</h3>${jsonBlock(ctx.law_trace || ctx.law)}</section>
+      <section class="ctxcard"><h3>Law trace</h3>${jsonBlock(ctx.law_trace)}</section>
       <section class="ctxcard"><h3>Réglages des règles</h3>${jsonBlock(ctx.settings)}</section>
-      <section class="ctxcard"><h3>Proof plan</h3>${jsonBlock(ctx.proof_plan || ctx.proof)}</section>
-      <section class="ctxcard"><h3>Ce que l'agent peut faire</h3>${bullets(ctx.agent?.can)}<h3>Interdit</h3>${bullets(ctx.agent?.cannot)}</section>
+      <section class="ctxcard"><h3>Proof plan</h3>${jsonBlock(ctx.proof_plan)}</section>
+      <section class="ctxcard"><h3>Ce que l'agent peut faire</h3>${bullets(ctx.autonomy?.can)}<h3>Interdit</h3>${bullets(ctx.autonomy?.cannot)}</section>
       <section class="ctxcard"><h3>Admission</h3>${jsonBlock(ctx.admission)}</section>
-      ${isPatrol ? `<section class="ctxcard"><h3>Effective law</h3>${jsonBlock(ctx.effective_law)}</section>
+      ${isPatrol ? `<section class="ctxcard"><h3>Périmètre de lecture</h3>${jsonBlock(ctx.scope)}</section>
+      <section class="ctxcard"><h3>Exigences et blocs</h3><pre>${esc(ctx.technical || "Applicabilité indisponible sans instantané du dépôt.")}</pre></section>
       <section class="ctxcard"><h3>Weak spots</h3>${jsonBlock(ctx.weak_spots)}</section>
       <section class="ctxcard"><h3>Known findings</h3>${jsonBlock(ctx.known_findings)}</section>
       <section class="ctxcard"><h3>Expected output</h3>${jsonBlock(ctx.expected_output)}</section>` : ""}

@@ -41,7 +41,8 @@ the existing law language and defines governed moves. The human's signed choices
 Model providers, budgets and schedules in `standard.toml` are execution configuration, never product policy.
 
 Selection uses product features and touched surfaces/constructs, including the draft's new features and declared
-features. `contracts()` supplies the same rule/block/parameter/check reading to construction, review, exploration
+features. `declared_features()` derives these from signed settings, including `@high_value`; scanner inputs and
+model missions use the same projection. `contracts()` supplies the same rule/block/parameter/check reading to construction, review, exploration
 and the interface. `python -m standard.surface rule RULE-ID` prints that contract; `coverage` shows measured state.
 `absorb` describes the intended division of work: it never proves correct block adoption or complete path coverage.
 A rule without a check, a missing parameter or an unknown client mapping stays visible; no opinion becomes proof.
@@ -69,7 +70,9 @@ and simplicity) inspect the same immutable draft in parallel, each with its own 
 write tools, a privileged credential or authority to attest. A reviewer may report no findings. Every concrete finding
 names its path, issue, effect and proposed correction; the constructor fixes it or records a reasoned disagreement.
 Any edit invalidates the reviews. A revised draft must complete review before publication. Review failure is visible,
-not an empty success. Dependencies and design are examined by the same correctness/simplicity readers, without a keyword-triggered pre-pass.
+not an empty success. This is the sole model construction path for BUILD and repair, including in tests; no switch
+bypasses review. Dependencies and design use these same readers. Signed values come from the mission context,
+not a second parameter channel.
 
 Prefer the smallest sufficient design for the current need. Reuse existing mechanisms; justify a new layer,
 dependency or state; remove dead code and obsolete intermediaries. Preserve behaviour and guarantees. Fewer lines or
@@ -93,6 +96,9 @@ Ordinary file reads are paged too. These are the existing research tools, with t
 One patrol mechanism explores a question and a read scope. `simplicity[:path]` examines design;
 `rules:CATEGORY[:path]` examines the AI-readable part of that category. The snapshot wrapper enforces the same file
 boundary for reads, searches and the repository map. Applicability is still determined on the whole product.
+The interface and running patrol use the same mission definition. Simplicity selects the contracts triggered in its
+subsystem, including deterministic block guarantees; a target focus carries that exact target and its measurement.
+Without a repository snapshot, a human context leaves applicability unavailable instead of inventing a rule selection.
 Automatic rounds rotate questions and repository/subsystem scopes, each category keeping its own scope cursor.
 They run after ordinary moves, by default at most once per hour; `[agent] patrol_interval_ms` is
 60000..86400000. Schedule state survives failures and restarts. Manual use:

@@ -156,22 +156,23 @@ class Model(unittest.TestCase):
 
         def transport(provider, prompt):
             prompts.append(prompt)
-            return json.dumps(replies.pop(0))
+            return json.dumps({'findings': []} if prompt.startswith(('ROLE correctness:', 'ROLE simplicity:')) else replies.pop(0))
         log = store.parent / "egress.log"
         agent = Agent(store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")}, log,
-                                                       transport=transport), sandbox=LocalSandbox(),
-                      review_enabled=False)                              # one call per attempt: the candidate workflow has its own test
+                                                       transport=transport), sandbox=LocalSandbox())
         finding = {"status": "found:1", "details": ["app.py:1:secret-rule-0"]}
         head, route = agent.craft("secrets", base, targets=TARGETS, finding=finding)
         self.assertEqual(route, "model")
-        self.assertIn("tests are red", prompts[1])                       # the feedback reached the second attempt
+        builds = [p for p in prompts if p.startswith('ROLE build:')]
+        self.assertEqual(len(builds), 2)
+        self.assertIn("tests are red", builds[1])                        # the feedback reached the second attempt
         self.assertIn("app.py:1:secret-rule-0", prompts[0])              # where the gap is
         self.assertNotIn(KEY, "".join(prompts))                         # what the gap is never leaves
         message = git("-C", str(store), "log", "-1", "--format=%B", head)
         for part in ("Why:", "What: app.py", "Checked by the agent", "Risks: API is empty", "Standard-Target: secrets"):
             self.assertIn(part, message)
         lines = [json.loads(line) for line in log.read_text().splitlines()]
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 6)                                  # both attempts complete the real review path
         self.assertTrue(all(set(line) == {"at", "provider", "model", "tier", "bytes", "redactions", "sha256"}
                             for line in lines))
 

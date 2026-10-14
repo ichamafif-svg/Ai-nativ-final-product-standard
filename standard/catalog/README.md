@@ -28,7 +28,9 @@ Execution settings such as providers, research budgets and patrol schedules stay
 
 `targets()` and `policy_values()` compile release law data. `definition()` links an effective target to the release
 requirements without inventing a mapping for an unknown client target. `select()` chooses triggered requirements;
-`contracts()` joins their exact parameters, blocks and checks. `render_contracts()` serves humans and model missions.
+`contracts()` joins their exact parameters, blocks and checks, with optional category/verifier attention and the
+mission's required rule ids. `render_contracts()` serves humans and model missions. `declared_features()` derives
+features from signed settings and `@high_value` identically for scanner inputs and model context.
 The scanner receives inert catalog data and evaluates observations independently. Code discovery remains in U;
 no catalog function imports an instrument or an agent. Missing implementation or measurement remains visible.
 

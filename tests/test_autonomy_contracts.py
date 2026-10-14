@@ -316,7 +316,7 @@ class ContextAndRoutes(unittest.TestCase):
         self.assertEqual(context['kind'], 'law-patrol')
         self.assertEqual(context['mode'], 'wide')
         self.assertEqual(context['effective_law'], view['law']['effective'])
-        self.assertEqual(context['rules'], [])                      # a targeted patrol: no rotation round
+        self.assertNotIn('technical', context)                     # no repository snapshot to establish applicability
         self.assertTrue(context['weak_spots'])
         self.assertIn('Exploratory patrol only', context['authority'])
 
@@ -474,6 +474,74 @@ class ContextAndRoutes(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_patrol(cycle, main=lambda: base, focus="simplicity:../other")
 
+    def test_signed_features_reach_scanner_constructor_and_patrol_consistently(self):
+        from instruments.coverage import evaluate
+        from standard.autonomy.context import assemble
+        store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()"})
+        view = self.view(self.target())
+        view["law"]["effective"]["settings"] = {"features": ["mtls"], "values": {"high_value": ["payments.send"]}}
+        ctx = task_context(view, {"id": "work", "need": "repair", "resource": "repo:client:custom"})
+        tree = Snapshot(store, base)
+        packet = json.loads(assemble(ctx, tree, role="build", touched=["surface:endpoint"])[0])["packet"]
+        self.assertIn("MSG-SIGN", packet["rule_ids"])
+        from standard.autonomy.candidate import CandidateWorkflow
+        roles = []
+        def ask(prompt, role, **kw):
+            roles.append(role)
+            self.assertIn("MSG-SIGN", prompt)
+            self.assertEqual(json.loads(kw["context"]["parameter/high_value"])["value"], ["payments.send"])
+            return {"files": {"app/new.py": "x = 1"}} if role == "build" else {"findings": []}
+        CandidateWorkflow().run(ask, tree, "Task", context=ctx, touched=["surface:endpoint"], scope_ok=lambda p: True)
+        self.assertEqual(set(roles), {"build", "correctness", "simplicity"})
+        inputs = Instruments.__new__(Instruments)._rules(view)
+        self.assertEqual(inputs["declared"], ["high-value", "mtls"])
+        states = evaluate(tree, inputs["catalog"], inputs["values"], declared=inputs["declared"], probes={}, bandit={})
+        self.assertNotEqual(states["MSG-SIGN"]["state"], "n/a")
+        patrol = patrol_context(view, tree=tree, focus="rules:http-and-apis")
+        self.assertIn("MSG-SIGN", patrol["rule_ids"])
+
+    def test_simplicity_surface_and_model_preserve_scoped_block_contracts(self):
+        from standard.surface.contexts import patrol_packet
+        store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()",
+                                 "domain/order.py": "from standard_blocks.process import run\nrun(['convert'])",
+                                 "other/private.py": "OUTSIDE_CODE = 1"})
+        view, sent = self.view(self.target()), []
+        tree = Snapshot(store, base)
+        human = patrol_packet(view, {}, installed_routes(), lambda needs: None, "simplicity:domain", tree=tree)
+        class Research_:
+            def dialogue(self, prompt, scoped, **kw):
+                sent.append((prompt, scoped, kw))
+                return {"suspicions": []}
+        context = patrol_context(view, focus="simplicity:domain", tree=tree)
+        propose_patrol(context, tree, Research_())
+        prompt, scoped, kw = sent[0]
+        packet = json.loads(prompt[prompt.index('{"packet":'):])["packet"]
+        self.assertEqual(packet["rule_ids"], human["rule_ids"])
+        self.assertEqual(packet["scope"], human["scope"])
+        self.assertEqual(packet["technical"], human["technical"])
+        self.assertIn("INJ-CMD", packet["rule_ids"])
+        self.assertIn("block process:", packet["technical"])
+        self.assertEqual(scoped.paths(), {"domain/order.py"})
+        self.assertNotIn("OUTSIDE_CODE", prompt)
+        with self.assertRaises(ResearchError):
+            Research(None, store.parent / "notes").act(scoped, {"action": "read", "path": "other/private.py"}, kw["context"])
+
+    def test_target_patrol_and_investigation_keep_the_exact_requirement(self):
+        from standard.autonomy.context import assemble
+        target = next(t for t in FLOORS["targets"] if t["id"] == "rules-authorization")
+        store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()"})
+        view, tree = self.view(target), Snapshot(store, base)
+        ctx = task_context(view, {"id": "research", "need": "investigate", "resource": target["resource"],
+                                  "target": target["id"]})
+        packet = json.loads(assemble(ctx, tree, role="investigate")[0])["packet"]
+        self.assertIn("AUTHZ", packet["rule_ids"])
+        patrol = patrol_context(view, focus=target["id"], tree=tree)
+        self.assertEqual(patrol["requirement"], target)
+        self.assertEqual(patrol["category"], "authorization")
+        self.assertIn("AUTHZ", patrol["rule_ids"])
+        with self.assertRaises(ValueError):
+            patrol_context(view, focus="rules", tree=tree)
+
 
 
 class ResearchTools(unittest.TestCase):
@@ -601,8 +669,9 @@ class ResearchTools(unittest.TestCase):
     def test_a_client_scope_is_a_model_candidate_and_never_touches_invariants(self):
         store, base = store_with(FILES)
         gate = Gate({'frontier': Provider('fake', 'anthropic', 'm', 'k')}, store.parent / 'egress.log',
-                    transport=lambda p, prompt: json.dumps({'files': {'tools/check.py': 'print(1)'}}))
-        agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']}, review_enabled=False)
+                    transport=lambda p, prompt: json.dumps({'findings': []} if prompt.startswith(('ROLE correctness:', 'ROLE simplicity:'))
+                                                           else {'files': {'tools/check.py': 'def check(): return 1'}}))
+        agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']})
         check = {'ok': True, 'fixed': None, 'tests': 'green'}
         target = {'id': 'custom', 'resource': 'repo:client:custom', 'property': 'result', 'expect': 'verified'}
         with patch('standard.autonomy.precheck.precheck', return_value=check):

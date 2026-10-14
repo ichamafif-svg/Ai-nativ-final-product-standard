@@ -23,6 +23,7 @@ from .moves import judge
 from .projection import Route
 from .context import task_context
 from .read_model import ReadModel
+from .rules import Rules
 from .work import WorkEngine
 
 
@@ -122,8 +123,7 @@ class Repairer:
                                                        context=task_context(view, {**task,
                                                            "need": task.get("need", "repair"),
                                                            "resource": target["resource"]}, findings,
-                                                           model=model),
-                                                       values=self._values(view))
+                                                           model=model))
                         proposals[key] = {"target": tid, "area": area, "item": item, "base": base,
                                           "head": head, "way": route}
                         stats = getattr(self.agent, "last_candidate", None)
@@ -145,11 +145,6 @@ class Repairer:
         self._remember(proposals)
         return report
 
-    @staticmethod
-    def _values(view) -> dict:
-        from standard.catalog import effective, load
-        return effective(load(), view["law"]["effective"].get("settings", {}).get("values"))
-
     def _judged(self, view, proposals, key, findings, now) -> None:
         """A candidate the scanner refuted is a lesson: forget it, so this pass crafts again with what failed."""
         p = proposals.get(key)
@@ -162,7 +157,7 @@ class Repairer:
             return
         details = [d for prop in ("tests", "regressions", "scoped", "blocks")
                    for d in findings.get(f"{resource}|{prop}", {}).get("details", [])[:3]]
-        rules = explain(details, self._values(view))           # the broken rules, in the text seen before coding
+        rules = explain(details, Rules(view["law"]["effective"]).values())
         why = "the scanner refuted it: " + ", ".join(move["refuted"]) + (" | " + " | ".join(details) if details else "") \
             + (f"\nThe rules behind it:\n{rules}" if rules else "")
         self.memory.record(p["target"], at=now, base=p["base"], head=p["head"], route=p["way"], outcome="judge",

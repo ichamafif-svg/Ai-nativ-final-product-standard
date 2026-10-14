@@ -106,11 +106,11 @@ class Instruments:
 
     def _rules(self, view) -> dict:
         """The catalog, the named values in force and the features only the rules declare, for the scanner."""
-        from standard.catalog import compact, effective
+        from standard.catalog import compact, declared_features, effective
         cat = load_catalog()
-        values = effective(cat, view["law"]["effective"].get("settings", {}).get("values"))
-        declared = ["high-value"] if values.get("high_value") else []
-        return {"catalog": compact(cat), "values": values, "declared": declared,
+        settings = view["law"]["effective"].get("settings", {})
+        values = effective(cat, settings.get("values"))
+        return {"catalog": compact(cat), "values": values, "declared": declared_features(settings, cat),
                 "paths": [str(Path(__file__).resolve().parents[2] / "blocks" / "python")]}
 
     def _due(self, law, resource: str, prop: str, status: str) -> bool:

@@ -251,17 +251,26 @@ def applicable(cat: dict, features) -> list:
     return [r for r in cat["rules"] if set(r["applies"]) <= features and (team or not r.get("team_only"))]
 
 
-def select(cat: dict, features, touched) -> list:
+def select(cat: dict, features, touched, *, required=()) -> list:
     """Triggered build requirements and RUN requirements requiring code wiring. No generation-pass hierarchy."""
     touched = set(touched)
     out = []
     for r in applicable(cat, features):
+        if r["id"] in required:
+            out.append(r)
+            continue
         if r["phase"] == "run" and not r.get("wire"):
             continue
         if r["when"] and not touched & set(r["when"]):
             continue
         out.append(r)
     return sorted(out, key=lambda r: r["id"])
+
+
+def declared_features(settings: dict, cat=None) -> list:
+    """Features from signed policy, shared by mission context and scanner inputs, never model configuration."""
+    values = effective(cat or load(), settings.get("values"))
+    return sorted(set(settings.get("features", ())) | ({"high-value"} if values.get("high_value") else set()))
 
 
 def effective(cat: dict, chosen: dict | None) -> dict:
@@ -332,17 +341,20 @@ def render(rule: dict, values: dict, *, full: bool = True) -> str:
     return "\n".join(lines)
 
 
-def contracts(cat: dict, features, values: dict, *, touched=None, category=None, ids=None, stacks=()) -> dict:
+def contracts(cat: dict, features, values: dict, *, touched=None, category=None, ids=None, stacks=(),
+              required=(), verifier=None) -> dict:
     """The single technical reading used by constructors, reviewers, patrol and the interface.
 
     Applicability describes requirements, not proof. `absorb` states the intended division of responsibility;
     static adoption, a runtime probe and coverage of every execution path remain different claims.
     """
-    chosen = applicable(cat, features) if touched is None or ids is not None else select(cat, features, touched)
+    chosen = applicable(cat, features) if touched is None or ids is not None else select(cat, features, touched, required=required)
     if category is not None:
         chosen = [r for r in chosen if slug(r["category"]) == category]
     if ids is not None:
         chosen = [r for r in chosen if r["id"] in ids]
+    if verifier is not None:
+        chosen = [r for r in chosen if verifier in r["who"]]
     chosen = sorted(chosen, key=lambda r: r["id"])
     block_names = sorted({r["block"] for r in chosen if r["block"]})
     named = {n for r in chosen for n in r.get("values", [])} | \

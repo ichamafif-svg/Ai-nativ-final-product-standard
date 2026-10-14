@@ -1254,6 +1254,7 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 
 | D62 | **Un constructeur, deux reviewers, une patrouille de simplicité.** Contexte sélectionné sur la base et le brouillon ; lecteurs parallèles sans écriture ; corrections bornées et revues renouvelées ; suppressions explicites sous périmètre ; propositions exploratoires sans autorité. Pannes de mesure visibles et couverture des catégories dynamiques raccordée. Détails et limites en §4.9 et §11.8.1 | Implémenté ; les tests locaux ne qualifient pas une installation ni les performances d’un vrai modèle |
 | D63 | **Catalogue commun des exigences.** Cibles, paramètres signés et contrats techniques définis dans le catalogue ; compilation vers la loi existante ; contexte borné commun aux missions et déclarations complètes accessibles par les outils de lecture existants. Dossiers dérivés du contexte, exploration unique avec question/périmètre. Suppression des niveaux de passes et des assemblages parallèles. K/BT et les conditions d’admission restent distincts ; les garanties des blocs ne valent pas preuve d’adoption | Implémenté ; validation locale, sans qualification physique ni démonstration avec un vrai modèle |
+| D64 | **Retrait des chemins résiduels.** Un seul parcours de construction par modèle, revues comprises ; valeurs issues du contexte signé ; projection commune des fonctionnalités déclarées pour scanner et missions ; sélection de catégorie/vérificateur dans le catalogue ; même définition de mission patrol pour surface et exécution. Les champs de contexte portent les mêmes noms dans la console et chez l’agent, sans anciens alias | Implémenté ; cas de cohérence et de refus vérifiés, qualification physique distincte |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1443,6 +1444,17 @@ Les instruments et outils livrés sont le socle invariant de Standard : ils assu
 ---
 
 ### 20.5 Surface commune et boucle de recherche de l’agent
+
+**Nettoyage des chemins hérités (D64).** Motif : les branches de génération sans revue, la sélection propre au patrol et
+les copies de paramètres pouvaient produire des lectures différentes d’une même loi. Contre-exemples falsifiables :
+signer `@high_value = [payments.send]` doit rendre `MSG-SIGN` applicable chez le scanner, le constructeur et le patrol ;
+une exploration `simplicity:domain` utilisant le bloc processus doit recevoir son contrat et ne peut lire `other/`.
+La surface web et la mission en cours portent les mêmes règles, la même pile et le même périmètre. Un contexte sans
+snapshot indique cette absence. Une investigation de catégorie conserve les exigences de sa cible sans dépendre des
+chemins d’un finding. BUILD et réparation lisent les valeurs depuis leur contexte, et leur génération par modèle
+passe toujours par le même constructeur et les deux lecteurs. Les recettes recomputables restent un moyen distinct.
+Impact sur la confiance : aucun déplacement de K/BT ni assouplissement des routes ; l’alignement des fonctionnalités
+déclarées peut rendre une mesure supplémentaire applicable. La revue reste un avis U, jamais une preuve.
 
 `standard/autonomy/read_model.py` est le **modèle de lecture commun**, non un stockage ni un juge. Il représente toutes les sections de la loi effective, même celles sans lien de code connu, et ajoute des relations typées vers ressources, opérations, conditions, capacités, routes, tâches, entités, faits admis, transitions, preuves et dettes du noyau, instruments, findings, emplacements candidats, réglages et références externes. Il fournit aussi les lectures communes des entités, transitions, diagnostics et faits visibles à BUILD/RUN (`standard/surface/read_views.py`) et aux contextes. Un consommateur qui lui donne une vue d'un autre préfixe ou d'une autre loi est refusé. Chaque relation expose `origin` et `status` : déclaration, registre, journal, redevabilité, diagnostic, analyse AST, ou projection non vérifiée ne sont jamais confondus. `python -m standard.surface read-model --repo PATH` rend ce graphe à un humain via la passerelle locale ; l'index AST est Python seulement, syntactique et optionnel. L'interface web n'expose pas le graphe de code entier sans authentification ; ses vues BUILD/RUN sont des projections du même modèle. La télémétrie de production reste une lecture spécialisée, non absorbée par ce graphe ; dire que le modèle est l'arrière de **toutes** les lectures serait encore excessif. Les sources de vérité restent journal, Git et enregistrements des instruments. Le noyau et le checker indépendant ne dépendent pas de `read_model.py`.
 

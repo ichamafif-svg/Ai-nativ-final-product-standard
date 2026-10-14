@@ -98,7 +98,7 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
 
 class Agent:
     def __init__(self, store, *, data=EMPTY, api_key: str | None = None, ask=None, publish=None, llm=None,
-                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None, review_enabled: bool = True,
+                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None,
                  review=None, research_steps: int = 8):
         """data: the same pinned snapshot the instruments use, so that recipes reproduce. scopes: the write scopes
         the rules give the client's own targets. llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and
@@ -118,12 +118,7 @@ class Agent:
                for patterns in self.scopes.values()):
             raise AgentError("custom repair scopes must be configured lists of relative path patterns")
         self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources, steps=research_steps)
-        self.candidate, self.last_candidate = (CandidateWorkflow(**(review or {})) if review_enabled else None), None
-
-    @staticmethod
-    def _values(values) -> dict:
-        from standard.catalog import effective, load
-        return values if values is not None else effective(load(), None)
+        self.candidate, self.last_candidate = CandidateWorkflow(**(review or {})), None
 
     def investigate(self, view, task, base, findings=None, *, model=None):
         from .context import assemble, task_context
@@ -143,12 +138,12 @@ class Agent:
         return commit_files(self.store, base, files, message)
 
     def craft(self, target_id: str, base: str, *, targets: dict | None = None, finding: dict | None = None,
-              lessons: str = "", context=None, values: dict | None = None) -> tuple[str, str]:
+              lessons: str = "", context=None) -> tuple[str, str]:
         """(head, way): "recipe" when the scanner can reproduce it, "model" when a model wrote it.
         Nothing is proposed that the agent's own precheck rejects: it fixes the target, regresses no other one,
         keeps main's tests green and adds no lint or type error."""
         from .precheck import precheck
-        from .context import assemble, write_scope
+        from .context import write_scope
         self.last_candidate = None
         targets = targets or {}
         target = targets.get(target_id, {"id": target_id, "resource": target_id, "property": "?", "expect": "?"})
@@ -186,23 +181,19 @@ class Agent:
                       "changing as few files as possible.\n")
             tier = "frontier" if target_id in FRONTIER or target_id.startswith("rules-") else "small"
             try:
-                if self.candidate is None:
-                    packet, sources = assemble(context, tree, role="build", scope=scope, focus=focus, values=self._values(values))
-                    reply = self.research.dialogue(prompt + packet, tree, tier=tier, key=f"repair:{target_id}", context=sources)
-                else:                                       # one writer, parallel read-only reviews of the same draft
-                    reply, stats = self.candidate.run(
-                        lambda text, role, **kw: self.research.worker(text, role, key=f"repair:{target_id}", tier=tier, **kw),
-                        tree, prompt, values=self._values(values), focus=focus,
-                        scope_ok=lambda path: in_scope(target_id, path, self.scopes), context=context, scope=scope)
-                    self.last_candidate = stats
-                    if stats["remaining"]:
-                        feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
-                        continue
+                reply, stats = self.candidate.run(
+                    lambda text, role, **kw: self.research.worker(text, role, key=f"repair:{target_id}", tier=tier, **kw),
+                    tree, prompt, focus=focus,
+                    scope_ok=lambda path: in_scope(target_id, path, self.scopes), context=context, scope=scope)
+                self.last_candidate = stats
+                if stats["remaining"]:
+                    feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
+                    continue
             except ResearchError as exc:
-                self.last_candidate = self.candidate.last_stats if self.candidate else None
+                self.last_candidate = self.candidate.last_stats
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
-                self.last_candidate = self.candidate.last_stats if self.candidate else None
+                self.last_candidate = self.candidate.last_stats
                 raise AgentError(f"the repair of {target_id}: {exc}") from exc
             files = reply.get("files")
             if not isinstance(files, dict) or not files or not all(in_scope(target_id, p, self.scopes) and (c is None or isinstance(c, str))

@@ -26,7 +26,7 @@ BASE = Tree({"shop/main.py": "from fastapi import FastAPI\nfrom standard_blocks.
              "shop/util.py": "from standard_blocks.process import run\n\ndef convert(a, b):\n    return run(['convert', a, b])\n"})
 
 
-class Passes(unittest.TestCase):
+class Candidates(unittest.TestCase):
     def test_two_read_only_reviewers_share_one_draft_and_run_in_parallel(self):
         import threading
         barrier, seen = threading.Barrier(2), []
@@ -204,15 +204,16 @@ class Passes(unittest.TestCase):
 class Patrol(unittest.TestCase):
     def test_each_round_reads_one_category_of_ai_rules_in_a_fixed_order(self):
         import tempfile
-        from standard.autonomy.patrol import patrol_rules, rotation
-        from standard.catalog import categories
+        from standard.autonomy.patrol import rotation
+        from standard.catalog import categories, contracts
         state = Path(tempfile.mkdtemp()) / "rotation.json"
         rounds = [rotation(state) for _ in range(len(categories()) + 2)]
         self.assertEqual(rounds[:-1], ["simplicity", *categories()])
         self.assertEqual(rounds[-1], "simplicity")                              # and again
-        rules = patrol_rules("input-and-business-logic", effective(load(), None), ["api", "database"])
-        self.assertTrue(any(r.startswith("TRANSACTION") for r in rules))
-        self.assertFalse(any(r.startswith("BIZ-LIMITS") for r in rules))          # deterministic and human only
+        rules = contracts(load(), ["api", "database"], effective(load(), None),
+                          category="input-and-business-logic", verifier="ai")["rules"]
+        self.assertIn("TRANSACTION", [r["id"] for r in rules])
+        self.assertNotIn("BIZ-LIMITS", [r["id"] for r in rules])          # deterministic and human only
 
     def test_simplicity_is_a_design_proposal_and_schedule_failures_are_bounded(self):
         import tempfile

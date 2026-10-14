@@ -111,11 +111,13 @@ class Installation:
 
     def agent_context(self, kind: str, ident: str) -> dict:
         """A human-readable dossier for the same context an agent works under. It is not authority."""
+        from instruments.tree import GitTree
         view, findings = self.client.view(), _json(self.findings)
         main = git(self.repo, "rev-parse", "main").strip()
         model = self.read_model(view, findings, main)
         return build_agent_context(kind, ident, view=view, findings=findings, routes=self.routes,
-                                   qualify=self.client.qualify, requests=self.requests, main=main, model=model)
+                                   qualify=self.client.qualify, requests=self.requests, main=main, model=model,
+                                   tree=GitTree(self.repo, main) if kind == "patrol" else None)
 
     def read_model(self, view: dict, findings: dict, main: str) -> ReadModel:
         return ReadModel(view, findings, self.routes, self.client.qualify, main=main,

@@ -5,8 +5,13 @@ import json
 import re
 from typing import Optional
 
-from .concepts import AUTHORITY
 from .read_model import ReadModel, human_target
+
+AUTHORITY = {
+    "context": "Information only. Submit signed statements; the kernel decides. Agent work cannot certify a fact.",
+    "dossier": "Dossier only. It cannot certify, close or authorize; the kernel decides.",
+    "patrol": "Exploratory patrol only. It produces suspicions, never facts, authorization or closure.",
+}
 
 
 def _routes(law: dict, op_name: Optional[str]) -> dict:
@@ -147,14 +152,14 @@ def task_context(view: dict, task: dict, findings=None, *, model: ReadModel | No
 
 
 def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=(), values=None, documents=None,
-             category=None, rule_ids=None, budget=28_000) -> tuple[str, dict]:
+             category=None, verifier=None, budget=28_000) -> tuple[str, dict]:
     """Common mission reading derived from the catalog and pinned inputs. Large entries are deferred whole.
 
     read(ref=...) retrieves exact declarations/documents; search(in=context, query=...) lists references. These use
     the existing research tools and budgets. Selection changes attention, never applicability or admission.
     """
     from instruments.surfaces import scan
-    from standard.catalog import contracts, effective, load, render, render_contracts
+    from standard.catalog import contracts, declared_features, effective, load, render, render_contracts
     from .repomap import RepoMap
 
     cat = load()
@@ -176,9 +181,11 @@ def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=()
     sources.update({f"policy/{name}": {"definition": spec, "value": settings.get(name), "set": name in settings}
                     for name, spec in cat["policy"]["parameter"].items()})
     sources.update({f"document/{name}": text for name, text in (documents or {}).items()})
-    product = context.get("product") or (scan(tree, declared=settings.get("features", ())) if hasattr(tree, "paths") else {"features": [], "stacks": []})
+    product = context.get("product") or (scan(tree, declared=declared_features({**settings, "values": values}, cat))
+                                         if hasattr(tree, "paths") else {"features": [], "stacks": []})
     technical = contracts(cat, product["features"], values, touched=touched, category=category,
-                          ids=rule_ids, stacks=product["stacks"])
+                          required=context.get("definition", {}).get("rules", ()), verifier=verifier,
+                          stacks=product["stacks"])
     packet = {"role": role, "basis": {"journal": context.get("basis"), "law": context.get("law_digest"),
                                       "code": getattr(tree, "commit", None), "catalog": cat["digest"]},
               "scope": scope or {"mode": "read_only"}, "authority": AUTHORITY["context"],

@@ -16,7 +16,7 @@ from types import MappingProxyType
 from instruments import surfaces
 from instruments.bans import blocks_fact
 from instruments.scope import relative
-from standard.catalog import contracts, load, render, render_contracts, select
+from standard.catalog import contracts, declared_features, effective, load, render, render_contracts
 
 JUDGED = ("How you will be judged: not by you, by Standard's scanner on the exact commit. It measures main's tests "
           "(green), every floor target and rule category (no regression), your write scope (every path inside it) "
@@ -89,12 +89,6 @@ def explain(details, values: dict | None = None, cat: dict | None = None) -> str
     return "\n\n".join(out)
 
 
-def relevant(cat, base, draft, touched, declared=()):
-    """Requirements triggered on either the base or candidate, including new features."""
-    features = sorted(set(surfaces.scan(base, declared)["features"]) | set(surfaces.scan(draft, declared)["features"]))
-    return select(cat, features, touched)
-
-
 def review_findings(reply, role, paths):
     if isinstance(reply, dict) and reply.get("action") in ("finish", "propose"):
         reply = {k: v for k, v in reply.items() if k != "action"}
@@ -114,46 +108,38 @@ def review_findings(reply, role, paths):
 
 class CandidateWorkflow:
     """One construction and bounded advisory review of immutable candidates."""
-    def __init__(self, cat: dict | None = None, *, rounds: int = 2, timeout_s: int = 180):
+    def __init__(self, *, rounds: int = 2, timeout_s: int = 180):
         if type(rounds) is not int or not 1 <= rounds <= 3 or type(timeout_s) is not int or not 1 <= timeout_s <= 600:
             raise ValueError("review rounds must be 1..3, timeout_s 1..600")
-        self.cat, self.rounds, self.timeout_s = cat or load(), rounds, timeout_s
+        self.cat, self.rounds, self.timeout_s = load(), rounds, timeout_s
         self.last_stats = None
 
-    def run(self, ask, base, head: str, *, values: dict, scope_ok, focus=(), touched=(), fixed_files=None,
+    def run(self, ask, base, head: str, *, scope_ok, values=None, focus=(), touched=(), fixed_files=None,
             context=None, scope=None, documents=None) -> tuple[dict, dict]:
         """ask(prompt, role, tree=snapshot, read_only=bool) -> dict; only build/correct may return edits.
         The callback must give each role its own history and confine read-only roles to read/search."""
         stats = self.last_stats = {"rounds": [], "remaining": [], "authority": "proposal_only"}
         context = context or {}
+        settings = context.get("settings", context.get("effective_law", {}).get("settings", {}))
+        values = effective(self.cat, settings.get("values")) if values is None else values
         fixed_files = dict(fixed_files or {})               # human-accepted contract, readable but never editable
         guess = set(touched)
         for path in focus:
             if path in base.paths():
                 d = surfaces.describe(path, base.read(path))
                 guess |= {f"surface:{s}" for s in d["surfaces"]} | {f"construct:{c}" for c in d["constructs"]}
-        declared = (context or {}).get("settings", {}).get("features", ())
-        category_ids = set((context or {}).get("definition", {}).get("rules", []))
+        declared = declared_features({**settings, "values": values}, self.cat)
+        base_product = surfaces.scan(base, declared)
 
-        def selected_rules(tree, triggers):
-            from standard.catalog import applicable
-            chosen = {r["id"]: r for r in relevant(self.cat, base, tree, triggers, declared)}
-            features = set(surfaces.scan(base, declared)["features"]) | set(surfaces.scan(tree, declared)["features"])
-            chosen.update({r["id"]: r for r in applicable(self.cat, features) if r["id"] in category_ids})
-            return [chosen[k] for k in sorted(chosen)]
-
-        rules = selected_rules(base, guess)
-
-        def invoke(text, role, *, tree, read_only, deadline=None, selected=(), paths=(), triggers=(), review=None):
+        def invoke(text, role, *, tree, read_only, deadline=None, paths=(), triggers=(), review=None):
             from .context import assemble
             kw = {"tree": tree, "read_only": read_only}
             if deadline is not None:
                 kw["deadline"] = deadline
             product = surfaces.scan(tree, declared)
-            product["features"] = sorted(set(product["features"]) | set(surfaces.scan(base, declared)["features"]))
+            product["features"] = sorted(set(product["features"]) | set(base_product["features"]))
             packet, sources = assemble({**context, "product": product, "review": review}, tree, role=role, scope=scope,
-                                       touched=triggers, focus=paths, values=values, documents=documents,
-                                       rule_ids={r["id"] for r in selected})
+                                       touched=triggers, focus=paths, values=values, documents=documents)
             text += "\nMission context:\n" + packet
             kw["context"] = sources
             return ask(text, role, **kw)
@@ -178,13 +164,15 @@ class CandidateWorkflow:
 
         result = take(invoke(f"ROLE build: implement the task. {SIMPLICITY}\n{JUDGED}\nTask:\n{head}\n"
                           f"Relevant rules: see mission context.\n{FORMAT}",
-                          "build", tree=base, read_only=False, selected=rules, paths=focus, triggers=guess))
+                          "build", tree=base, read_only=False, paths=focus, triggers=guess))
         for round_no in range(self.rounds):
             if not files:
                 raise ValueError("candidate makes no effective change")
             draft = Overlay(base, {**fixed_files, **files})
             touched = set(surfaces.touched(base, draft)) | guess
-            rules = selected_rules(draft, touched)
+            features = set(base_product["features"]) | set(surfaces.scan(draft, declared)["features"])
+            rules = contracts(self.cat, features, values, touched=touched,
+                              required=context.get("definition", {}).get("rules", ()))["rules"]
             _, left = blocks_fact(base, draft, sorted(files), bans_of(self.cat))
             stats["remaining"] = left
             # Both reviewers receive the exact same snapshot and task, never the writer's rationale.
@@ -196,7 +184,7 @@ class CandidateWorkflow:
             pool = ThreadPoolExecutor(max_workers=2)
             deadline = time.monotonic() + self.timeout_s
             futures = {role: pool.submit(invoke, f"ROLE {role}: {mission} {SIMPLICITY} {REVIEW_FORMAT}\n{review_context}",
-                                         role, tree=draft, read_only=True, deadline=deadline, selected=rules,
+                                         role, tree=draft, read_only=True, deadline=deadline,
                                          paths=sorted(files), triggers=touched, review=review) for role, mission in REVIEWERS.items()}
             try:
                 findings = [f for role, future in futures.items() for f in review_findings(
@@ -215,7 +203,7 @@ class CandidateWorkflow:
                         "Address each observation or decline it with a concrete reason. Do not add unrelated work. "
                         'Include review_responses: [{"id": str, "decision": "fixed" or "declined", "reason": str}]. '
                         f"{FORMAT}Return only edits to this draft; an empty files object retains it.",
-                        "correct", tree=draft, read_only=False, selected=rules, paths=sorted(files), triggers=touched,
+                        "correct", tree=draft, read_only=False, paths=sorted(files), triggers=touched,
                         review={**review, "observations": findings})
             responses = reply.get("review_responses") if isinstance(reply, dict) else None
             if (not isinstance(responses, list) or len(responses) != len(findings)
