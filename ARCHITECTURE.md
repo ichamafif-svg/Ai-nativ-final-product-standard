@@ -262,7 +262,7 @@ Le système part des situations où une personne doit avoir le dernier mot, pas 
 
 **Deux juges.** Le noyau juge chaque coup sur la route qu'il nomme ; le second juge (`bt/checker.py`) restate les routes, les bornes des seuils et l'entrée en vigueur immédiate des règles.
 
-### 4.9 Les règles du code (D54–D58)
+### 4.9 Les règles du code (D54–D59)
 
 Le produit est jugé contre un catalogue de règles, pas contre de la prose. Quatre mécanismes, du plus fort au plus faible :
 
@@ -272,6 +272,8 @@ Le produit est jugé contre un catalogue de règles, pas contre de la prose. Qua
 4. **Lire : la patrouille** tourne d'une catégorie à l'autre sur les règles qu'une IA lit (seule, ou pour la part qu'aucune sonde ne voit). Ses trouvailles sont des propositions, jamais des faits ni des refus.
 
 **Le catalogue** (`standard/catalog`, CC BY-SA 4.0, attribution OWASP) : les 345 exigences d'OWASP ASVS 5.0 (niveaux 1 à 3) portées par 156 règles ou écartées avec leur raison (33 documentation seule, 9 hors dépôt, 2 déjà dans le socle), le CWE Top 25 2025 attaché, des règles d'exploitation (liste de lancement SRE ; DORA, règlement délégué 2024/1774 art. 17, comme motif et non comme prétention de conformité). Chaque règle : un ordre (`do`), ce qu'il ne faut jamais faire, quand elle s'applique (fonctionnalités) et se déclenche (surfaces, constructions lues par `instruments/surfaces.py`), qui la vérifie (déterministe, IA, humain), le bloc qui l'absorbe, la passe, les vérifications, des exemples par langage, ses sources. Aucun mot vague : *sensible*, *critique*, *de confiance* sont des valeurs nommées (`@access`, `@critical`, `@sensitive`…) avec un défaut strict ; l'humain les signe dans les règles du jeu, l'agent peut les proposer.
+
+**Deux piles, un contrat (D59).** Chaque bloc a un contrat unique (`does`, `probes` dans `blocks.toml`) et une implémentation par pile : `[block.X.fastapi]` (`blocks/python/standard_blocks`) et `[block.X.nextjs]` (`blocks/js/nextjs`, paquet `@standard/blocks` : `web` — middleware `guard`, en-têtes, cookies, redirections ; `session` — OIDC avec PKCE et vérification du jeton d'identité par WebCrypto ; `access` — `route(id, …)` et `action(id, …)` ; `input` — schémas Zod stricts, corps borné). Les blocs Next.js sans implémentation (crypto, journaux, données…) gardent leurs interdictions JS (`[block.X.js]`) mais ne doivent rien : l'adoption n'est due que pour un bloc que la pile du produit possède. Le scanner lit la pile et les points d'entrée Next là où vivent les fichiers (`app/**/route.ts`, `pages/api/**`, actions `"use server"`), avec l'identifiant d'accès de chaque export. L'entonnoir montre l'usage du bloc pour la pile du produit. Une application que Standard ne peut pas importer est sondée en HTTP : `@app` est alors l'URL où elle tourne (service de CI, préversion) ; seules les sondes purement HTTP s'exécutent, les autres sont une lacune de la release sur cette pile, jamais une dette.
 
 **Couverture et dette.** Une cible du socle par catégorie (`rules-<catégorie>`, 17) : elle tient quand aucune règle applicable n'est enfreinte ni non mesurée faute de ce que le produit doit déclarer. Le reste (patrouille, lacunes de la release : semgrep, gabarits de tests, sondes du fournisseur d'identité) est visible, jamais une dette. Un bloc pas encore adopté est une dette avec échéance, pas un refus ; un changement qui enfreint une règle mesurée est une régression.
 
@@ -1234,6 +1236,7 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | D56 | **Sondes et couverture.** Sondes de Standard sur l'application du produit (`@app`), dans un processus séparé ; une cible par catégorie de règles ; dette = enfreinte ou non mesurée par manque de déclaration ; patrouille et lacunes de la release visibles, jamais dette ; adoption d'un bloc = dette, pas refus | Arrêtée |
 | D57 | **L'entonnoir en trois passes et la patrouille tournante.** Large, moyenne, fine ; sélection déterministe ; un refus porte le texte de la règle ; ce que chaque passe a montré est consigné pour mesurer l'effet ; la patrouille lit une catégorie par tour | Arrêtée |
 | D58 | **La console des règles.** Couverture par catégorie et par règle ; matrice d'accès signée d'un seul geste ; valeurs nommées éditées et signées dans les règles du jeu ; CLI `coverage` et `rule` | Arrêtée |
+| D59 | **Deux piles, un contrat.** Un contrat par bloc, une implémentation FastAPI et une Next.js (web, session, access, input d'abord) ; adoption due par pile et seulement pour les blocs que la pile possède ; détection des points d'entrée Next par emplacement ; sondes HTTP quand `@app` est une URL ; les blocs JS sont épinglés dans la release | Arrêtée |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
@@ -1328,7 +1331,7 @@ Tout le code hors démonstration appartient à Standard. Aucun produit métier c
 | `standard/autonomy/` | L'agent : lecture des coups (`moves.py`), boucle (`loop.py`), producteurs (`repair.py`, `build.py`), règles du jeu (`rules.py`), Work Engine, contexte | `python -m standard.autonomy run CONFIG` |
 | `standard/surface/` | CLI et interface pour l'humain ; `human.py` signe ses trois gestes (oui, non, règles), `read_views.py` projette BUILD/RUN depuis le modèle commun, `web.py` lit les entrées et sert HTTP ; `static/rules.js` porte la page des règles du jeu et sa signature navigateur ; `telemetry.py` lit les métriques | `python -m standard.surface`, `python -m standard.surface.web CONFIG` |
 | `standard/catalog/` | Le catalogue de règles (données TOML, CC BY-SA 4.0) et ses fonctions pures : validation, sélection par passe, valeurs, rendu | `standard.catalog.load()` |
-| `blocks/` | Les blocs que les produits installent : `python/standard_blocks` (FastAPI), `js/front.mjs` | `secure_app`, `Oidc`, `Access`, `Files`… |
+| `blocks/` | Les blocs que les produits installent : `python/standard_blocks` (FastAPI), `js/nextjs` (`@standard/blocks`, Next.js), `js/front.mjs` | `secure_app`, `Oidc`, `Access`, `Files`… |
 | `tools/` | Installation, hébergement, qualification, rejeu, lanceur de releases et inspection de Standard | `make coverage`, `python tools/qualify.py CONFIG` |
 | `examples/` | Dépôt métier fictif de démonstration et générateur de trafic ; aucun composant requis du socle | `examples/demo/`, `examples/load.py` |
 | `tests/` | Contrats de régression de Standard | `make check`, `make layers` |

@@ -45,7 +45,8 @@ class Catalog(unittest.TestCase):
         broken(lambda c: c["rules"][0].update(check=["probe:mind-reading"]))
         broken(lambda c: c["rules"][0].update(block="", absorb="full"))
         broken(lambda c: c["rules"][0].update(check=["patrol"], who=["det"]))
-        broken(lambda c: c["blocks"]["web"]["bans"].append("rm -rf /"))
+        broken(lambda c: c["blocks"]["web"]["stacks"]["nextjs"]["bans"].append("rm -rf /"))
+        broken(lambda c: c["blocks"]["web"]["stacks"].update(rails={"module": "x", "use": "x", "bans": []}))
 
     def test_team_only_rules_wait_for_a_team(self):
         one = {r["id"] for r in applicable(self.cat, ["api", "high-value"])}

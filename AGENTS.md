@@ -38,9 +38,13 @@ whole: each change goes through three passes (wide, medium, fine) that show only
 comes back with the broken rule's text. `python -m standard.surface rule RULE-ID` prints one rule with the values in
 force; `python -m standard.surface coverage` shows each category's state and debt.
 
-Most rules hold by using a building block (`blocks/python/standard_blocks`, `blocks/js/front.mjs`): `secure_app` for
-the web layer, `Oidc(...).bind(app)` for sign-in and sessions, `Access(...).bind(app)` and `allow("route.id")` on every
-route, `crypto`, `files`, `parse`, `process`, `outbound`, `input`, `render`, `log`, `runtime`, `data`. The APIs a block
+Most rules hold by using a building block (`blocks/python/standard_blocks`, `blocks/js/nextjs`, `blocks/js/front.mjs`).
+FastAPI: `secure_app` for the web layer, `Oidc(...).bind(app)` for sign-in and sessions, `Access(...).bind(app)` and
+`allow("route.id")` on every route, `crypto`, `files`, `parse`, `process`, `outbound`, `input`, `render`, `log`,
+`runtime`, `data`. Next.js (`@standard/blocks`): `guard(values, NextResponse)` as the middleware and
+`securityHeaders(values)` in next.config, `createOidc(...)` for sign-in, `access.route("id", fn)` on every route
+handler and `access.action("id", fn, req)` on every server action, `body(request, Schema)` with a strict Zod schema.
+Each pass shows the use for your product's stack; a block your stack does not have yet is not owed, its bans hold. The APIs a block
 covers are banned elsewhere (`standard/catalog/blocks.toml`); the scanner signs `blocks = clean` only when a change adds
 none. Never copy a block into the product. Values such as `@access`, `@upload_max_bytes` or `@app` are the human's: you
 may draft them, never decide them.

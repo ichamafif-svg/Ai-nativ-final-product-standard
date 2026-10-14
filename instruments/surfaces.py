@@ -85,6 +85,12 @@ JS_TERMS = {
 }
 
 
+NEXT_ROUTE = re.compile(r"(?:^|/)(?:src/)?app/((?:[^/]+/)*)route\.(?:js|mjs|ts)$")
+NEXT_PAGES_API = re.compile(r"(?:^|/)(?:src/)?pages/(api/(?:[^/]+/)*[^/]+?)(?:/index)?\.(?:js|mjs|ts|tsx|jsx)$")
+NEXT_METHOD = re.compile(r"export\s+(?:async\s+function\s+|function\s+|const\s+)(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b")
+NEXT_ACTION = re.compile(r"export\s+(?:async\s+function\s+|const\s+)([A-Za-z_$][\w$]*)")
+JS_ACCESS = re.compile(r"""\.(route|action)\s*\(\s*(['"])([\w.:-]+)\2""")
+JS_EXPORT_ACCESS = re.compile(r"""export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*[\w$.]+\.(?:route|action)\s*\(\s*(['"])([\w.:-]+)\2""")
 EXPRESS = re.compile(r"""\b(app|router|server)\.(get|post|put|patch|delete)\s*\(\s*(['"`])(/[^'"`]*)\3""")
 
 
@@ -322,6 +328,56 @@ def _javascript(source: bytes) -> dict:
             "models": False, "tenant": False, "webrtc": "RTCPeerConnection" in code}
 
 
+def _next_path(segments: str) -> str:
+    """app/(shop)/orders/[id]/ -> /orders/:id (route groups and parallel slots are not in the URL)."""
+    parts = [p for p in segments.strip("/").split("/") if p and not p.startswith(("(", "@"))]
+    parts = [re.sub(r"^\[\[?\.{3}(\w+)\]?\]$", r":\1*", re.sub(r"^\[(\w+)\]$", r":\1", p)) for p in parts]
+    return "/" + "/".join(parts)
+
+
+def _nextjs(path: str, source: bytes, out: dict) -> dict:
+    """Next.js entry points read from where the file lives: App Router route handlers (app/**/route.ts, one endpoint
+    per exported method), Pages Router API routes (pages/api/**, any method), server actions ("use server" files, one
+    `POST action:<name>` per exported function). Each endpoint maps to the id its access.route/action("…") names."""
+    raw = source.decode("utf-8", "replace")
+    endpoints, ids = [], [m.group(3) for m in JS_ACCESS.finditer(raw)]
+    m = NEXT_ROUTE.search(path)
+    if m:
+        endpoints = [f"{verb} {_next_path(m.group(1))}" for verb in sorted(set(NEXT_METHOD.findall(raw)))]
+    m = NEXT_PAGES_API.search(path)
+    if m:
+        endpoints = [f"ANY {_next_path(re.sub(r'/index$', '', m.group(1)))}"]
+    if re.match(r"""\s*(?:/\*.*?\*/\s*|//[^\n]*\n\s*)*(['"])use server\1""", raw, re.S):
+        endpoints = [f"POST action:{name}" for name in sorted(set(NEXT_ACTION.findall(raw)))]
+    if not endpoints:
+        return out
+    named = {m.group(1): m.group(3) for m in JS_EXPORT_ACCESS.finditer(raw)}
+    access = {}
+    for e in endpoints:
+        verb, _, where = e.partition(" ")
+        key = where.removeprefix("action:") if where.startswith("action:") else verb
+        if key in named:
+            access[e] = named[key]
+        elif len(set(ids)) == 1:
+            access[e] = ids[0]
+    surfaces = (set(out["surfaces"]) - {"client-script"}) | {"endpoint"}
+    return {**out, "surfaces": sorted(surfaces), "endpoints": sorted(set(out["endpoints"]) | set(endpoints)),
+            "access": access}
+
+
+def stacks(files: dict) -> list:
+    """The stacks a product is written in, as the catalog names them: fastapi (Python: the Python blocks serve any
+    ASGI app) and nextjs (Next imported, or a Next entry point found)."""
+    out = set()
+    if any(p.endswith(PY) for p in files):
+        out.add("fastapi")
+    if any(i == "next" or i.startswith("next/") for d in files.values() for i in d["imports"]) or \
+            any(NEXT_ROUTE.search(p) or NEXT_PAGES_API.search(p) or re.search(r"(^|/)next\.config\.\w+$", p)
+                for p in files):
+        out.add("nextjs")
+    return sorted(out)
+
+
 def _other(path: str, source: bytes) -> dict:
     surfaces = set()
     text = source.decode("utf-8", "replace")
@@ -346,6 +402,8 @@ def describe(path: str, source: bytes) -> dict:
     if len(source) > MAX_FILE:
         return {"surfaces": [], "constructs": [], "endpoints": [], "imports": [], "models": False, "tenant": False}
     out = _python(source) if path.endswith(PY) else _javascript(source) if path.endswith(JS) else _other(path, source)
+    if path.endswith(JS):
+        out = _nextjs(path, source, out)
     if path.endswith(PY):
         extra = _other(path, source)["surfaces"]
         if extra:
@@ -359,7 +417,7 @@ def _paths(tree) -> list:
 
 def scan(tree, declared=()) -> dict:
     files = {p: describe(p, tree.read(p)) for p in _paths(tree)}
-    return {"features": features_of(files, declared), "files": files}
+    return {"features": features_of(files, declared), "files": files, "stacks": stacks(files)}
 
 
 def features_of(files: dict, declared=()) -> list:
@@ -371,15 +429,15 @@ def features_of(files: dict, declared=()) -> list:
     paths = list(files)
 
     def imported(*mods):
-        return any(i == m or i.startswith(m + ".") for i in imports for m in mods)
+        return any(i == m or i.startswith((m + ".", m + "/")) for i in imports for m in mods)
     found = set()
     if "endpoint" in surfaces or "websocket-endpoint" in surfaces or imported("fastapi", "flask", "django", "starlette",
-                                                                             "express", "fastify", "koa"):
+                                                                             "express", "fastify", "koa", "next"):
         found.add("api")
     if "api" in found and ("template" in surfaces or "html-output" in constructs or "cookie" in surfaces
-                           or "form" in surfaces or imported("jinja2", "fastapi.templating")):
+                           or "form" in surfaces or imported("jinja2", "fastapi.templating", "next", "react")):
         found.add("web")
-    if imported("standard_blocks.session", "authlib", "oidc", "keycloak", "fastapi_users", "django.contrib.auth",
+    if imported("standard_blocks.session", "@standard/blocks/session", "next-auth", "authlib", "oidc", "keycloak", "fastapi_users", "django.contrib.auth",
                 "flask_login") or any(re.search(r"\s/(.*/)?(login|signin|sign-in|logout|token)$", e) for e in endpoints):
         found.add("oidc")
     if "upload-endpoint" in surfaces:
@@ -405,7 +463,8 @@ def features_of(files: dict, declared=()) -> list:
         found.add("webrtc")
     if any(d["tenant"] for d in files.values()):
         found.add("multitenant")
-    if imported("authlib", "oauthlib", "requests_oauthlib", "standard_blocks.session"):
+    if imported("authlib", "oauthlib", "requests_oauthlib", "standard_blocks.session", "@standard/blocks/session",
+                "next-auth"):
         found.add("oauth-client")
     if imported("fastapi.security") or "token-decode" in constructs and "api" in found:
         found.add("resource-server")

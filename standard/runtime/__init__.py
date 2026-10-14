@@ -13,8 +13,10 @@ CATALOG_DATA = ("asvs.toml", "blocks.toml", "values.toml", "vocabulary.toml", "L
 
 def code_digest(root=None) -> str:
     """Bind all privileged assembly code, the reusable core and the rule catalog's data to the installation's genesis
-    (directories contribute their Python files; the catalog's data files are named one by one)."""
+    (directories contribute their Python files; the catalog's data files and the JS blocks are named one by one)."""
     base = Path(root) if root else Path(__file__).resolve().parents[2]
     data = [f"standard/catalog/{name}" for name in CATALOG_DATA]
     data += sorted(str(p.relative_to(base)) for p in (base / "standard" / "catalog" / "rules").glob("*.toml"))
+    data += sorted(str(p.relative_to(base)) for p in (base / "blocks" / "js" / "nextjs").glob("*")
+                   if p.suffix in (".js", ".json"))                           # the Next.js blocks, pinned the same way
     return source_digest(root, sources=SOURCES + tuple(data))

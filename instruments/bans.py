@@ -3,7 +3,7 @@
 Python is read on its syntax tree with imports resolved, as instruments/surfaces.py reads it; JavaScript lexically
 (comments and strings removed). Patterns:
 
-    import:M  call:Q  call-kw:Q:K=V  call-dyn:NAME:I  builtin:N  attr-set:A  js-call:Q  js-import:M
+    import:M  call:Q  call-kw:Q:K=V  call-dyn:NAME:I  builtin:N  attr-set:A  js-call:Q[:arg]  js-word:W  js-import:M
 
 `*` in a qualified name matches one or more segments. The fact the scanner signs on a transition is `blocks`:
 `clean` when the change adds no use of a banned API, `breaks:<n>` otherwise, with `path:line:pattern` details.
@@ -102,9 +102,12 @@ def uses(path: str, source: bytes, patterns) -> list:
             kind, _, rest = p.partition(":")
             if kind == "attr-set":
                 rx = re.compile(rf"\.{re.escape(rest)}\s*=(?!=)")
+            elif kind == "js-word":
+                rx = re.compile(rf"(?<![\w$.]){re.escape(rest)}(?![\w$])")
             elif kind == "js-call":
                 target, _, arg = rest.partition(":")
-                rx = re.compile(rf"\b{re.escape(target)}\s*\(" + (rf"\s*(['\"]){re.escape(arg)}\1" if arg else ""))
+                before = r"(?<![\w$.])" if "." in target else r"(?<![\w$])"   # a bare name may be a method
+                rx = re.compile(rf"{before}{re.escape(target)}\s*\(" + (rf"\s*(['\"]){re.escape(arg)}\1" if arg else ""))
                 code_or_raw = raw if arg else code
                 out += [(code_or_raw[:m.start()].count("\n") + 1, p) for m in rx.finditer(code_or_raw)]
                 continue

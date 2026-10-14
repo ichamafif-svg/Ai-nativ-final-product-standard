@@ -164,5 +164,5 @@ way = "less"
 
 [app]
 type = "text"
-doc = "the product's ASGI application, module:attribute (e.g. shop.main:app), which Standard's probes start in-process. No default: until it is set, every probe of the running app is a coverage debt."
+doc = "the product's ASGI application, module:attribute (e.g. shop.main:app), which Standard's probes start in-process; or, for a product Standard cannot import (Next.js), the URL where it runs (e.g. http://127.0.0.1:3000 in CI), probed over HTTP only. No default: until it is set, every probe of the running app is a coverage debt."
 way = "less"

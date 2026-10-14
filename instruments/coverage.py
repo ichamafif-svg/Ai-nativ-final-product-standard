@@ -33,8 +33,20 @@ from .tree import Measure
 STATIC_PROBES = ("sri", "migrations-reversible", "lock-hashes")
 RUN_PROBES = ("tls", "https-redirect", "no-vcs", "dir-listing", "egress", "telemetry", "idor", "redirects",
               "idp-password-policy", "idp-brute-force", "idp-mfa", "idp-reset", "idp-enumeration", "csrf-pages")
-PYTHON_BLOCKS = ("web", "session", "access", "crypto", "files", "parse", "process", "outbound", "input", "render",
-                 "log", "runtime", "data")
+def adoptable(block: dict, stack: str) -> str | None:
+    """The module a product on this stack adopts for the block, or None: no implementation on that stack yet (the
+    bans still hold, nothing is owed), or an implementation that is configuration, not code."""
+    impl = block["stacks"].get(stack)
+    module = (impl or {}).get("module", "")
+    return module if re.fullmatch(r"[\w@][\w@/.-]*", module) and (stack != "fastapi" or "/" not in module) else None
+
+
+def adopted(module: str, imports) -> bool:
+    """Python: the module, a submodule, or the package; JS: the package path or a re-export of it (a local
+    `@/lib/standard` wrapper that imports it counts, since its import is in the tree too)."""
+    package = module.split(".")[0] if "/" not in module else module.rsplit("/", 1)[0]
+    return any(i == module or i.startswith(module + ".") or i.startswith(module + "/") or i == package
+               for i in imports)
 
 
 def slug(category: str) -> str:
@@ -109,6 +121,15 @@ def app_probes(tree, values: dict, paths=()) -> dict:
     from .rule_probes import APP_PROBES
     if not values.get("app"):
         return {p: ["unrun:declare @app", []] for p in APP_PROBES}
+    if re.match(r"https?://", str(values["app"])):              # a product Standard cannot import: probed over HTTP
+        endpoints = sorted({e for d in surfaces.scan(tree)["files"].values() for e in d["endpoints"]})
+        payload = {"base_url": values["app"], "values": values, "endpoints": endpoints}
+        try:
+            r = subprocess.run([sys.executable, "-I", str(Path(__file__).with_name("rule_probes.py"))],
+                               input=json.dumps(payload).encode(), capture_output=True, timeout=900)
+            return json.loads(r.stdout)
+        except Exception as exc:
+            return {p: [f"unrun:{type(exc).__name__}", []] for p in APP_PROBES}
     work = _materialise(tree)
     payload = {"app": values["app"], "values": values, "paths": list(paths)}
     try:
@@ -127,6 +148,7 @@ def evaluate(tree, catalog: dict, values: dict, *, declared=(), probes=None, ban
     present = {f"surface:{s}" for d in scan["files"].values() for s in d["surfaces"]} | \
         {f"construct:{c}" for d in scan["files"].values() for c in d["constructs"]}
     imports = {i for d in scan["files"].values() for i in d["imports"]}
+    stacks = scan["stacks"]
     team = "team" in features
     blocks = catalog["blocks"]
     probes = probes if probes is not None else None
@@ -148,10 +170,11 @@ def evaluate(tree, catalog: dict, values: dict, *, declared=(), probes=None, ban
         if found:
             return ["fail", [f"{p}:{line}:{pat}" for p, line, pat in found[:30]]]
         triggered = not rule["when"] or bool(present & set(rule["when"]))
-        if name in PYTHON_BLOCKS and triggered and "lang:python" in features:
-            module = f"standard_blocks.{name}"
-            if not any(i == module or i.startswith(module + ".") or i == "standard_blocks" for i in imports):
-                return [f"unrun:adopt {module}", [f"{module} is not used where the rule applies"]]
+        if triggered:
+            for stack in stacks:
+                module = adoptable(blocks[name], stack)
+                if module and not adopted(module, imports):
+                    return [f"unrun:adopt {module}", [f"{module} is not used where the rule applies ({stack})"]]
         return ["pass" if triggered else "na", []]
 
     out = {}

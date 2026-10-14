@@ -1,0 +1,16 @@
+{
+  "name": "@standard/blocks",
+  "version": "0.1.0",
+  "description": "Standard's building blocks for Next.js products: the rules hold by using the block.",
+  "type": "module",
+  "exports": {
+    "./values": "./values.js",
+    "./web": "./web.js",
+    "./session": "./session.js",
+    "./access": "./access.js",
+    "./input": "./input.js",
+    "./front": "../front.mjs"
+  },
+  "peerDependencies": { "next": ">=14", "zod": ">=3.22" },
+  "peerDependenciesMeta": { "zod": { "optional": true } }
+}

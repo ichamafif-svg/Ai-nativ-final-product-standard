@@ -46,11 +46,13 @@ def bans_of(cat: dict) -> dict:
     return {name: b["bans"] for name, b in cat["blocks"].items() if b["bans"]}
 
 
-def house_example(tree, block: str, limit: int = 2) -> list:
+def house_example(tree, block: str, limit: int = 2, stack: str = "fastapi") -> list:
     """Where this repository already uses the block: the code the agent should look like (deterministic: sorted)."""
-    module = f"standard_blocks.{block}"
+    impl = load()["blocks"].get(block, {}).get("stacks", {}).get(stack) or {}
+    module = impl.get("module", f"standard_blocks.{block}")
+    suffix = surfaces.PY if stack == "fastapi" else surfaces.JS
     out = []
-    for path in sorted(p for p in tree.paths() if p.endswith(".py") and not surfaces.SKIP.search(p)):
+    for path in sorted(p for p in tree.paths() if p.endswith(suffix) and not surfaces.SKIP.search(p)):
         text = tree.read(path).decode("utf-8", "replace")
         if module not in text:
             continue
@@ -58,7 +60,7 @@ def house_example(tree, block: str, limit: int = 2) -> list:
         for n, line in enumerate(text.splitlines(), 1):
             if line.lstrip().startswith(("from ", "import ")):
                 continue
-            if module in line or any(re.search(rf"\b{re.escape(name)}\s*\(", line) for name in names):
+            if module in line or any(re.search(rf"(?<![\w$]){re.escape(name)}\s*\(", line) for name in names):
                 out.append(f"{path}:{n}: {line.strip()[:120]}")
                 break
         if len(out) >= limit:
@@ -69,24 +71,44 @@ def house_example(tree, block: str, limit: int = 2) -> list:
 def _names(text: str, module: str) -> list:
     """Names imported from the block: `from m import a, b` or `from m import (a,\n b)`; `x as y` gives y."""
     m = re.search(rf"from {re.escape(module)} import (?:\(([^)]*)\)|([^\n]+))", text)
-    if not m:
-        return []
-    return [part.split(" as ")[-1].strip() for part in (m.group(1) or m.group(2)).split(",") if part.strip()]
+    if m:
+        return [part.split(" as ")[-1].strip() for part in (m.group(1) or m.group(2)).split(",") if part.strip()]
+    m = re.search(rf"""import\s*\{{([^}}]*)\}}\s*from\s*['"]{re.escape(module)}['"]""", text)      # JS
+    return [part.split(" as ")[-1].strip() for part in m.group(1).split(",") if part.strip()] if m else []
 
 
-def brief(rules: list, values: dict, tree) -> str:
-    """The rules of one pass: full text for what a block does not absorb fully, one line for the rest, then where
-    this repository already uses each block."""
+def product_stacks(tree) -> list:
+    """The product's stacks (fastapi, nextjs), read from its paths and JS imports only: cheap enough for every pass."""
+    files = {p: {"imports": surfaces.describe(p, tree.read(p))["imports"] if p.endswith(surfaces.JS) else []}
+             for p in tree.paths() if not surfaces.SKIP.search(p)}
+    return surfaces.stacks(files)
+
+
+def uses(cat: dict, block: str, stacks) -> list:
+    """`use` lines of a block for these stacks; a stack without the block says the bans still hold."""
+    b = cat["blocks"][block]
+    out = []
+    for stack in stacks or ["fastapi"]:
+        impl = b["stacks"].get(stack) or b["stacks"].get("any") or b["stacks"].get("js")
+        out.append(f"use    ({stack}) {impl['use']}" if impl and impl.get("use") else
+                   f"use    ({stack}) no block on this stack yet: do not use the banned APIs, ask for a human decision")
+    return out
+
+
+def brief(rules: list, values: dict, tree, cat: dict | None = None) -> str:
+    """The rules of one pass: full text for what a block does not absorb fully, one line for the rest, then each
+    block's use on the product's stack, then where this repository already uses each block."""
     if not rules:
         return ""
+    cat = cat or load()
+    stacks = product_stacks(tree)
     lines = [render(r, values, full=r["absorb"] != "full") for r in rules]
-    blocks = sorted({r["block"] for r in rules if r["block"] and r["block"] in _PY_BLOCKS})
-    house = [f"  {b}: {e}" for b in blocks for e in house_example(tree, b)]
-    return "\n\n".join(lines) + ("\n\nThis repository already does it this way:\n" + "\n".join(house) if house else "")
-
-
-_PY_BLOCKS = ("web", "session", "access", "crypto", "files", "parse", "process", "outbound", "input", "render", "log",
-              "runtime", "data")
+    blocks = sorted({r["block"] for r in rules if r["block"] in cat["blocks"]})
+    code = [b for b in blocks if any(s in cat["blocks"][b]["stacks"] for s in ("fastapi", "nextjs"))]
+    use = [f"block {b}\n" + "\n".join(uses(cat, b, stacks)) for b in code]
+    house = [f"  {b}: {e}" for b in code for s in stacks for e in house_example(tree, b, stack=s)]
+    return "\n\n".join(lines) + ("\n\nBlocks for this product:\n" + "\n".join(use) if use else "") + \
+        ("\n\nThis repository already does it this way:\n" + "\n".join(house) if house else "")
 
 
 def explain(details, values: dict | None = None, cat: dict | None = None) -> str:
@@ -102,13 +124,15 @@ def explain(details, values: dict | None = None, cat: dict | None = None) -> str
             if rid in by_id and rid not in shown:
                 shown.add(rid)
                 out.append(render(by_id[rid], values))
-        m = re.search(r":\d+:((?:import|call|call-kw|call-dyn|builtin|attr-set|js-call|js-import):\S+)$", d)
+        m = re.search(r":\d+:((?:import|call|call-kw|call-dyn|builtin|attr-set|js-call|js-import|js-word):\S+)$", d)
         if m:
             block = next((n for n, b in cat["blocks"].items() if m.group(1) in b["bans"]), None)
             if block and f"block:{block}" not in shown:
                 shown.add(f"block:{block}")
                 b = cat["blocks"][block]
-                out.append(f"block {block}: {b['does']}\nuse    {b['use']}\nbans   {', '.join(b['bans'])}")
+                stacks = [s for s in ("fastapi", "nextjs") if s in b["stacks"]] or ["any"]
+                out.append(f"block {block}: {b['does']}\n" + "\n".join(uses(cat, block, stacks)) +
+                           f"\nbans   {', '.join(b['bans'])}")
     return "\n\n".join(out)
 
 

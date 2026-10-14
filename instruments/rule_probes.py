@@ -7,6 +7,11 @@ scanner's state:  python -I rule_probes.py < {"app": "module:attr", "values": {.
 
 The app is driven in-process through httpx's ASGI transport at https://probe.invalid: no socket, no network. Session
 probes replace the identity provider by a fake one through the session block's own transport hook.
+
+HTTP mode, for products Standard cannot import (Next.js): `@app` is the URL where the product runs (a CI service, a
+preview), {"base_url": "...", "routes": [{"path", "methods"}]} with the routes the scanner read from the tree. Only
+the probes that need nothing but HTTP run (HTTP_PROBES, rate-limit last since the product sees one address); the
+others are a gap of this release on that stack, never a debt.
 """
 from __future__ import annotations
 
@@ -32,6 +37,23 @@ APP_PROBES = ("headers", "cookies", "cors", "csrf", "methods", "errors", "no-sto
               "upload-type", "zip-slip", "oidc-flow", "session-rotation", "logout", "session-timeout", "reauth",
               "log-redaction")
 
+HTTP_PROBES = ("headers", "cookies", "cors", "csrf", "methods", "errors", "no-store", "param-pollution",
+               "unauthenticated", "health", "rate-limit")
+
+
+def http_routes(endpoints) -> list:
+    """Scanner endpoints ("GET /orders/:id", "ANY /api/x", "POST action:y") as probe routes; actions are not URLs."""
+    out = {}
+    for e in endpoints:
+        method, _, path = e.partition(" ")
+        if not path.startswith("/"):
+            continue
+        methods = ["GET", "POST"] if method == "ANY" else [method]
+        r = out.setdefault(path, {"path": path, "url": re.sub(r":\w+\*?", "1", path), "methods": [], "uploads": [],
+                                  "route": None})
+        r["methods"] = sorted(set(r["methods"]) | set(methods) - {"HEAD", "OPTIONS"})
+    return [r for _, r in sorted(out.items()) if r["methods"]]
+
 
 def _routes(app):
     out = []
@@ -50,16 +72,19 @@ def _routes(app):
 
 
 class Probe:
-    def __init__(self, app, values: dict):
+    def __init__(self, app, values: dict, *, base_url: str | None = None, routes=None):
         import httpx
-        self.app, self.values, self.httpx = app, values, httpx
-        self.routes = _routes(app)
+        self.app, self.values, self.httpx, self.base_url = app, values, httpx, base_url
+        self.routes = routes if routes is not None else _routes(app)
         self.public = set(values.get("public", ["GET /health"]))
         self.callers = 0
 
     def client(self, cookies=None):
         """A client from a fresh address each time, so one probe's rate limit never answers another's."""
         self.callers += 1
+        if self.base_url:
+            return self.httpx.AsyncClient(base_url=self.base_url, cookies=cookies or {}, follow_redirects=False,
+                                          timeout=10)
         caller = (f"192.0.2.{self.callers % 250 + 1}", 40000 + self.callers)
         return self.httpx.AsyncClient(transport=self.httpx.ASGITransport(app=self.app, raise_app_exceptions=False,
                                                                          client=caller),
@@ -442,7 +467,23 @@ class Probe:
         return await self._session(body)
 
 
+def run_http(payload: dict) -> dict:
+    values = payload.get("values", {})
+    probe = Probe(None, values, base_url=payload["base_url"], routes=http_routes(payload.get("endpoints", [])))
+    out = {p: ["gap", ["needs the app in-process (FastAPI); over HTTP not yet"]] for p in APP_PROBES
+           if p not in HTTP_PROBES}
+    for name in HTTP_PROBES:
+        try:
+            bad, empty = asyncio.run(getattr(probe, name.replace("-", "_"))())
+            out[name] = ["na", []] if empty else ["fail", bad[:30]] if bad else ["pass", []]
+        except Exception as exc:
+            out[name] = [f"unrun:{type(exc).__name__}", [traceback.format_exception_only(exc)[-1].strip()[:200]]]
+    return out
+
+
 def run(payload: dict) -> dict:
+    if payload.get("base_url"):
+        return run_http(payload)
     sys.path[:0] = [os.getcwd(), *payload.get("paths", [])]
     os.environ["STANDARD_VALUES"] = json.dumps(payload.get("values", {}))
     os.environ.setdefault("STANDARD_FILES_DIR", tempfile.mkdtemp())

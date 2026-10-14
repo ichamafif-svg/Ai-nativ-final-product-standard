@@ -34,8 +34,10 @@ REQUIRED = {"id": str, "do": str, "applies": list, "when": list, "who": list, "b
 OPTIONAL = {"never": str, "values": list, "wire": list, "team_only": bool, **{k: str for k in EXAMPLES}}
 CHECK = re.compile(r"blocks|patrol|human|mypy|fact:[a-z_]+|probe:[a-z0-9-]+|test:[a-z0-9-]+|bandit:B\d{3}"
                    r"|semgrep:standard\.[a-z0-9-]+")
-BAN = re.compile(r"(import|call|builtin|attr-set|js-call|js-import):[\w.*]+(:[\w.]+)?"
+BAN = re.compile(r"(import|call|builtin|attr-set|js-word):[\w.*$]+(:[\w.]+)?"
+                 r"|js-call:[\w.*$()]+(:[\w.-]+)?|js-import:[\w@/.:-]+"
                  r"|call-kw:[\w.*]+:\w+=\w+|call-dyn:[\w.]+:\d")
+STACKS = ("fastapi", "nextjs", "js", "any")       # js: bans for any JavaScript; any: no code, a configuration
 VALUE_REF = re.compile(r"@([a-z_]+)")
 
 
@@ -67,11 +69,15 @@ def validate(cat: dict) -> None:
         if spec.get("type") not in VALUE_TYPES or not spec.get("doc") or spec.get("way") not in ("less", "more"):
             raise CatalogError(f"value {name}: type, doc and way")
     for name, b in blocks.items():
-        if not all(isinstance(b.get(k), str) for k in ("module", "does", "use")):
-            raise CatalogError(f"block {name}: module, does, use")
-        for ban in b["bans"]:
-            if not BAN.fullmatch(ban):
-                raise CatalogError(f"block {name}: ban {ban}")
+        if not isinstance(b.get("does"), str) or not isinstance(b.get("probes"), list) or not b["stacks"]:
+            raise CatalogError(f"block {name}: does, probes and at least one stack")
+        for stack, impl in b["stacks"].items():
+            if stack not in STACKS or not all(isinstance(impl.get(k), str) for k in ("module", "use")) \
+                    or not isinstance(impl.get("bans"), list):
+                raise CatalogError(f"block {name}.{stack}: module, use, bans")
+            for ban in impl["bans"]:
+                if not BAN.fullmatch(ban):
+                    raise CatalogError(f"block {name}.{stack}: ban {ban}")
     seen, carried = set(), {}
     for r in cat["rules"]:
         rid = r.get("id", "?")
@@ -140,9 +146,27 @@ def compact(cat: dict) -> dict:
     return {"rules": cat["rules"], "blocks": cat["blocks"]}
 
 
+def _blocks(raw: dict) -> dict:
+    """Each block's contract with its stacks; `module`, `use` and `bans` summarise them (the FastAPI module and use
+    when it exists; the bans of every stack, each checked on its own language)."""
+    out = {}
+    for name, b in raw.items():
+        stacks = {k: v for k, v in b.items() if isinstance(v, dict)}
+        main = stacks.get("fastapi") or stacks.get("nextjs") or next(iter(stacks.values()), {})
+        out[name] = {**{k: v for k, v in b.items() if not isinstance(v, dict)}, "stacks": stacks,
+                     "module": main.get("module", ""), "use": main.get("use", ""),
+                     "bans": sorted({p for impl in stacks.values() for p in impl.get("bans", [])})}
+    return out
+
+
+def implementation(cat: dict, block: str, stack: str) -> dict | None:
+    """The block's implementation on a stack (fastapi, nextjs), or None when that stack has no such block yet."""
+    return cat["blocks"][block]["stacks"].get(stack)
+
+
 @functools.lru_cache(maxsize=1)
 def load() -> dict:
-    blocks = _read("blocks.toml")["block"]
+    blocks = _blocks(_read("blocks.toml")["block"])
     cat = {"vocabulary": _read("vocabulary.toml"), "values": _read("values.toml"), "blocks": blocks,
            "asvs": _read("asvs.toml"), "rules": _rules()}
     validate(cat)
