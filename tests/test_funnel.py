@@ -259,6 +259,21 @@ class MeasurementFailures(unittest.TestCase):
         rows = [r for r in inventory() if r["target"].startswith("rules-")]
         self.assertEqual(len(rows), 17)
         self.assertTrue(all(r["measurement"] == "REGISTERED" and r["repair"] == "model in scope" for r in rows))
+        unknown = {"id": "rules-invented", "resource": "repo:rules:invented", "property": "failing"}
+        self.assertEqual(inventory([unknown])[0]["measurement"], "MISSING")
+        from instruments.coverage import category_measure
+        with self.assertRaisesRegex(ValueError, "unknown rule category"):
+            category_measure({}, load(), "invented")
+
+    def test_candidate_cannot_replace_or_configure_the_sast_scanner(self):
+        from importlib.util import find_spec
+        if find_spec("bandit") is None:
+            self.skipTest("requires the installed scanner (CI installs the pinned dependency)")
+        from instruments.probes import sast
+        tree = Tree({"bandit.py": "raise RuntimeError('candidate scanner executed')\n",
+                     ".bandit": "[bandit]\nexclude = app.py\n",
+                     "app.py": "import subprocess\nsubprocess.run(user_input, shell=True)\n"})
+        self.assertIn("B602", sast(tree, {}).findings)
 
 
 class CandidateChanges(unittest.TestCase):

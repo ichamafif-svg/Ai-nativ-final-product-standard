@@ -85,7 +85,8 @@ build request for a transversal refactor. A design opinion creates no safety obl
 
 ## Measurement limits
 
-A failed, malformed or partial Bandit report is unmeasured, never clean. `make coverage` inventories dynamic rule
+SAST and catalog checks share one isolated Bandit runner. Candidate modules and .bandit files cannot replace or
+configure it. A failed, malformed or partial report, including omitted requested files, is unmeasured, never clean. `make coverage` inventories dynamic rule
 categories as well as fixed probes. A block import is presence only: static coverage also looks for resolved calls
 (and application binding for Python access/sessions). This remains syntactic evidence; runtime probes are needed to
 verify behaviour, and universal traversal of the block is not proved by static wiring. JavaScript scanning resolves

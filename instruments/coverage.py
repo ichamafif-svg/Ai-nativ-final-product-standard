@@ -54,9 +54,9 @@ def slug(category: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", category.lower()).strip("-")
 
 
-def _materialise(tree) -> Path:
+def _materialise(tree, paths=None) -> Path:
     work = Path(tempfile.mkdtemp())
-    for p in sorted(tree.paths()):
+    for p in sorted(tree.paths() if paths is None else paths):
         dest = work / p
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(tree.read(p))
@@ -103,14 +103,15 @@ def static_probe(name: str, tree) -> tuple[str, list]:
     raise KeyError(name)
 
 
-def bandit_findings(tree) -> dict:
-    """test id -> ['path:line'] for product Python files, `# nosec` ignored."""
-    files = [p for p in sorted(tree.paths()) if p.endswith(".py") and not surfaces.SKIP.search(p)]
+def bandit_report(tree, files) -> dict:
+    """One isolated, complete scanner invocation shared by SAST and catalog checks.
+    Only requested Python sources are materialised: product .bandit files cannot configure the scanner, and -I
+    prevents a product bandit.py/sitecustomize.py from replacing the trusted installed tool."""
     if not files:
-        return {}
-    work = _materialise(tree)
+        return {"results": [], "errors": [], "metrics": {}}
+    work = _materialise(tree, files)
     try:
-        r = subprocess.run([sys.executable, "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", "--", *files],
+        r = subprocess.run([sys.executable, "-I", "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", "--", *files],
                            cwd=work, capture_output=True, timeout=900)
         report = json.loads(r.stdout)
         if (r.returncode not in (0, 1) or not isinstance(report, dict)
@@ -136,8 +137,15 @@ def bandit_findings(tree) -> dict:
             raise ValueError("inconsistent bandit report")
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    return report
+
+
+def bandit_findings(tree) -> dict:
+    """test id -> locations; any unavailable or incomplete scan raises instead of returning an empty result."""
+    files = [p for p in sorted(tree.paths()) if p.endswith(".py") and not surfaces.SKIP.search(p)]
+    report = bandit_report(tree, files)
     out = {}
-    for x in results:
+    for x in report["results"]:
         out.setdefault(x["test_id"], []).append(f"{x['filename'].removeprefix('./')}:{x['line_number']}")
     return out
 
@@ -280,6 +288,8 @@ def category_measure(states: dict, catalog: dict, category: str, *, regression: 
     Standard measured counts: a change that makes a rule apply before the product adopted its block leaves a debt
     with a due date, not a refused change; a change that breaks a measured rule is refused."""
     rules = [r for r in catalog["rules"] if slug(r["category"]) == category]
+    if not rules:
+        raise ValueError("unknown rule category")
     kept = ("failing", "measured", "partial") if regression else ("failing", "uncovered", "measured", "partial")
     universe = {r["id"] for r in rules if states[r["id"]]["state"] in kept}
     # Every rule's state first (the console's coverage map reads them), then why each failing or unmeasured one is.

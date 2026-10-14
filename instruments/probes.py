@@ -10,10 +10,6 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
 
 from .tree import Measure, git, verdict  # noqa: F401  (git: shared with U's precheck)
 
@@ -127,18 +123,11 @@ def deps_age(tree, ctx) -> Measure:
 
 def sast(tree, ctx) -> Measure:
     """bandit on the snapshot's Python files, `# nosec` ignored: the measured code does not configure its instrument."""
+    from .coverage import bandit_report
     files = sorted(p for p in tree.paths() if p.endswith(".py"))
-    with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
-        for p in files:
-            (work / p).parent.mkdir(parents=True, exist_ok=True)
-            (work / p).write_bytes(tree.read(p))
-        r = subprocess.run([sys.executable, "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", "--", *files],
-                           cwd=work, capture_output=True, timeout=900)
-    data = json.loads(r.stdout)
-    covered = {k.removeprefix("./") for k in data["metrics"] if k != "_totals"} - {e["filename"] for e in data["errors"]}
+    data = bandit_report(tree, files)
     high = [x for x in data["results"] if x["issue_severity"] == "HIGH"]
-    return Measure(frozenset(files), frozenset(covered) & frozenset(files), tuple(x["test_id"] for x in high),
+    return Measure(frozenset(files), frozenset(files), tuple(x["test_id"] for x in high),
                    tuple(f"{x['filename'].removeprefix('./')}:{x['line_number']}:{x['test_id']} {x['issue_text']}"
                          for x in high))
 

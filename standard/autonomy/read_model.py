@@ -58,7 +58,9 @@ def measurement_for(target: dict, law: dict) -> dict:
     if declared and not (set(target.get("sources", [])) & set(declared.get("sources", []))):
         declared = None
     from instruments.probes import probe_for
-    if probe_for(target["id"]) is not None:
+    from standard.catalog import categories
+    tid = target["id"]
+    if probe_for(tid) is not None and (not tid.startswith("rules-") or tid[6:] in categories()):
         return {"kind": "registered_probe", "method": f"instruments.probes.probe_for({target['id']})",
                 "declared": declared}
     if target["id"] == "inventory":
