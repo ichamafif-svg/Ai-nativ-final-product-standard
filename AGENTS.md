@@ -72,6 +72,9 @@ D68 (ARCHITECTURE.md §4.10) is decided, not yet implemented: transversal proper
 secrets, keys, data filtering, resources, logs, files) move to the execution platform; only `access` and `render`
 stay blocks.
 Do not extend the blocks it absorbs.
+D69 (§4.11), also decided, not implemented: each mission will carry the capability map of its bac; a refusal
+record says what capability is missing and which interface serves the need. Adapt the design, or draft the value
+for the human to sign; never work around a wall.
 
 Standard also consumes its own Python blocks directly from `blocks.python.standard_blocks` in this checkout;
 products install the same source as `standard_blocks`. No copy, bootstrap alias or alternate implementation.

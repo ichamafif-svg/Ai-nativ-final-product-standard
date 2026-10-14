@@ -316,6 +316,37 @@ Statut : décision arrêtée, en cours de mise en œuvre. §4.9 et §20.7 décri
 
 **Mise en œuvre**, dans cet ordre : bac et sondes de murs ; passerelle d'entrée et session ; service de sortie, courtier de secrets et expurgation ; services de clés et de fichiers ; proxy de base de données et politiques RLS ; retrait des blocs absorbés et de leurs entrées `[block.*]`, en bascule unique sans alias (projet en v0).
 
+### 4.11 Murs doubles : l'intérieur explique, l'extérieur garantit (D69)
+
+Statut : décision arrêtée, non implémentée.
+
+**Principe.** L'agent conçoit librement à l'intérieur de limites physiques strictes. Les murs empêchent, les observations enseignent : un conflit entre le code et une frontière devient une information d'ingénierie, sans que la sécurité ne se relâche jamais d'elle-même. Un même mur ne peut pas faire les deux sans risque : un mur qui explique tout livre la carte des défenses à un agent compromis. Chaque domaine a donc deux murs emboîtés.
+
+- **Le mur intérieur parle.** C'est celui qu'une erreur honnête touche. Il refuse et produit un enregistrement de refus destiné à l'agent.
+- **Le mur extérieur se tait.** C'est la garantie : le noyau, sans exception. Il ne dit rien à l'agent. Le toucher signifie que le mur intérieur a été contourné ou qu'il ne couvre pas ce cas : c'est une alarme pour la plateforme et le contrôle caché (§11.7), jamais une leçon pour l'agent.
+
+Si le mur intérieur cède, le mur extérieur tient toujours.
+
+| Domaine | Mur intérieur (parle) | Mur extérieur (se tait) |
+|---|---|---|
+| Réseau | Tout le trafic du bac est routé vers le proxy de sortie, qui explique chaque refus | Le bac n'a que le lien vers le proxy ; seccomp refuse sockets bruts et nouveaux namespaces |
+| Ressources | Limites douces des groupes de contrôle (`memory.high`) : ralentissement et avertissement | Limites dures (`memory.max`, `pids.max`, CPU) : arrêt |
+| Appels système | Seccomp en notification pour ce qui s'explique (un appel que l'agent peut remplacer par une interface) | Seccomp en refus pour tout le reste |
+| Fichiers | Dossiers déclarés dans la carte des capacités ; tentative d'écriture ailleurs expliquée | Montages en lecture seule, namespace de montage |
+| Données | Bloc access dans le code | Row-Level Security dans Postgres (D68) |
+
+**1. La carte des capacités, avant de concevoir.** Chaque mission (`context.missions.assemble`) reçoit la carte du bac où le produit tournera : hôtes autorisés, services (sortie, clés, fichiers, base via le proxy), références de secrets sans valeurs, dossiers inscriptibles, limites de ressources. Elle est dérivée des mêmes données que les murs, jamais rédigée à part. L'essentiel du gain est là : un agent qui découvre les murs en s'y cognant produit des contournements et de mauvaises abstractions.
+
+**2. L'enregistrement de refus (mur intérieur).** Émis par la plateforme, jamais par le code du produit : opération tentée, composant, capacité manquante, interface autorisée qui répond au besoin, et chemin pour la demander. Règle : **un refus ne dit jamais plus que ce que la carte des capacités déclarait déjà** ; il ne nomme ni le mécanisme, ni la règle, ni le seuil qui l'a produit. Ces enregistrements sont des diagnostics, pas des faits signés.
+
+**3. Qui tranche.** Une capacité refusée que la loi interdit : l'agent adapte son code. Une capacité dont le produit a légitimement besoin (un hôte absent de `@hosts`, une limite trop basse) : l'agent rédige la valeur, l'humain la signe dans les règles du jeu. Rien ne s'élargit automatiquement. Des refus répétés contre le même mur sous des formes différentes ne sont plus un apprentissage : ils deviennent un signal pour le contrôle caché.
+
+**4. Où les refus apparaissent.** Pendant le précontrôle et les tests, ils reviennent à l'agent dans le dossier du candidat. En production, un refus du mur intérieur est un incident qui ouvre une WorkItem ; une alarme du mur extérieur est escaladée à l'humain.
+
+**Mesure.** Les sondes de §4.10 vérifient les deux murs séparément : chaque tentative doit être refusée par le mur intérieur avec un enregistrement, puis, mur intérieur retiré, par le mur extérieur sans aucun retour vers l'intérieur du bac. Le taux d'alarmes du mur extérieur pendant un travail ordinaire mesure la qualité du mur intérieur : une erreur honnête qui l'atteint révèle un trou de couverture du mur intérieur, pas une faute de l'agent.
+
+**Confiance.** Le mur intérieur, la carte et les enregistrements sont hors TCB du produit : ils aident, ils ne garantissent rien. Seul le mur extérieur porte les invariants de §4.10. Un mur intérieur défaillant dégrade l'apprentissage, jamais la sécurité.
+
 ## 5. Architecture en couches
 
 ### 5.1 Quatre couches autour du noyau
@@ -1295,6 +1326,7 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 
 | D67 | **Python ne signifie pas FastAPI.** Motif : les scripts et agents Python étaient classés FastAPI par leur extension, alors que neuf blocs ne dépendent pas de ce framework. Définitions `.python` génériques et `.fastapi` pour les intégrations ; héritage résolu une seule fois dans le catalogue, puis transmis comme données inertes aux instruments et aux missions. Dépendances web regroupées dans l'extra `[web]` du paquet 0.3.0 ; les helpers ASGI de runtime/render sont nommés explicitement. Falsificateurs : un CLI reçoit une API FastAPI, un produit FastAPI perd la protection outbound, ou une primitive ne peut être importée sans le framework. Impact confiance : K/BT et conditions d'admission inchangés ; modification des programmes épinglés de détection/couverture et de l'empreinte de release. | Correction implémentée et vérifiée ; revue des blocs consignée en §20.7, sans prétendre avoir corrigé ces écarts ni qualifié leur déploiement |
 | D68 | **Les invariants transversaux sont imposés par la plateforme, plus par l'adoption de blocs.** Motif : les cinq écarts de §20.7 viennent tous d'une propriété transversale réimplémentée bloc par bloc, et le scanner constate l'adoption sans pouvoir l'imposer. Le produit tourne dans un bac (Bubblewrap, réseau vide, cgroups, seccomp, fichiers en lecture seule) ; passerelle d'entrée unique portant la session OIDC, proxy de sortie transparent, courtier de secrets, service de clés, proxy Postgres avec Row-Level Security (§4.10). Restent en blocs : access, render. Le produit écoute sur la boucle locale privée de son bac, reliée par la plateforme ; l'identité lui arrive en jeton court signé, vérifié par le bloc access. La plateforme fait partie de la release (les deux hébergements l'exécutent) et une seule définition du bac sert au précontrôle, aux tests et à la production. Passerelle et proxys écrits pour Standard en Rust. Falsificateurs : un processus du bac atteint le réseau hors du service de sortie ; une valeur de secret apparaît dans le bac, dans un journal ou dans une sortie vers un autre hôte ; une requête dépasse `@request_timeout_s` sans réponse de délai ; deux clés en collision après normalisation atteignent le produit ; une requête lit ou modifie une ligne d'un autre propriétaire ou locataire ; un en-tête d'identité non posé par la passerelle atteint le produit. Impact confiance : K, T, second juge et admission inchangés ; plateforme hors K+T, mesurée par des sondes de T ; elle devient la base de confiance du produit. Remplace D60 et D67 pour les blocs absorbés ; les corrections de §20.7 deviennent caduques à la bascule | Arrêtée ; étape 1 en cours (bac unique de l'agent avec filtre et groupes de contrôle, 14 murs mesurés), voir §4.10 |
+| D69 | **Murs doubles et carte des capacités.** Motif : un mur qui se contente de refuser n'apprend rien à l'agent, et un mur qui explique tout livre la carte des défenses. Chaque domaine a un mur intérieur qui parle (proxy de sortie, limites douces, seccomp en notification, dossiers déclarés, bloc access) et un mur extérieur qui se tait (namespaces, limites dures, seccomp en refus, lecture seule, RLS). Chaque mission reçoit la carte des capacités, dérivée des mêmes données que les murs ; un refus du mur intérieur produit un enregistrement structuré qui n'en dit jamais plus que la carte ; un contact avec le mur extérieur est une alarme pour le contrôle caché. Rien ne s'élargit automatiquement : l'agent rédige une valeur, l'humain la signe (§4.11). Falsificateurs : un enregistrement de refus nomme un mécanisme, une règle ou un seuil absent de la carte ; le mur extérieur renvoie une information à l'intérieur du bac ; une capacité s'élargit sans signature humaine ; une erreur honnête ordinaire atteint le mur extérieur sans être comptée comme trou du mur intérieur. Impact confiance : mur intérieur, carte et enregistrements hors base de confiance du produit ; seul le mur extérieur porte les invariants de D68 | Arrêtée ; non implémentée |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
 
