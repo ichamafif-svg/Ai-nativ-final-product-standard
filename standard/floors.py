@@ -24,31 +24,11 @@ import hashlib
 from pathlib import Path
 
 from kernel import FORMAT, Release, floor0_digest
-from standard.catalog import categories
+from standard.catalog import load as catalog, policy_values, targets
 
 ROLES = ("owner", "inventory_source", "scanner")
 DAY = 86_400_000
 MINUTE = 60_000
-
-# (id, resource, property, expect, fresh days, due days) observed by @scanner, repaired by `remediate`.
-TECHNICAL = (
-    ("vulns", "repo:deps:vulns", "high", "none", 1, 7),
-    ("deps-age", "repo:deps:age", "major_behind", "none", 7, 30),
-    ("licenses", "repo:deps:licenses", "policy", "compliant", 7, 30),
-    ("secrets", "repo:code:secrets", "leaks", "none", 1, 1),
-    ("sast", "repo:code:sast", "high", "none", 1, 30),
-    ("ci", "repo:ci:main", "status", "green", 1, 2),
-    ("actions", "repo:ci:actions", "pinned", "all", 7, 30),
-    ("sbom", "repo:supply:sbom", "state", "current", 7, 7),
-)
-# The rule catalog (standard/catalog), one target per category: it holds when no rule that applies to the product is
-# failing or left unmeasured by what the product declares. Its debt is repaired like a technical measure.
-RULES = tuple((f"rules-{c}", f"repo:rules:{c}", "failing", "none", 1, 30) for c in categories())
-# Observed by @scanner, repaired by the human at the provider: only the guard moves main.
-SETTINGS = (
-    ("branch", "repo:settings:main", "protection", "guard-only", 1, 7),
-    ("lineage", "repo:main:lineage", "unjudged", "none", 1, 1),
-)
 
 # D33: the facts that open a right are measurements of a pinned instrument. The kernel admits them only from the
 # scanner, with this method and coverage, fresh; anyone else (a reviewer, an engineer) cannot sign them, so a person
@@ -80,7 +60,9 @@ RUN = ("candidate", "previous", "proven", "live", "running", "good",       # D36
 CONTRACTS = {
     "observe": {
         "floors": {"form": "composite", "jobs": ["floors"], "resources": ["repo:"],
-                   "properties": ["coverage", *sorted({t[2] for t in TECHNICAL + SETTINGS})],
+                   "properties": ["coverage", *sorted({t["property"] for t in targets()
+                                                       if t["resource"].startswith("repo:") and not t["id"].startswith("rules-")
+                                                       and t["id"] != "inventory"})],
                    "attested": ["the pinned third-party data snapshot (D17)", "the provider's settings of main"]},
         "suite": {"form": "reproducible", "jobs": ["remediation", "feature", "contribution"],
                   "resources": ["repo:"],
@@ -103,12 +85,6 @@ INSTRUMENTS = {   # property -> (method, coverage, fresh)
     **{p: (f"{PROGRAMS}/production", "run:sources:all", 2 * MINUTE if p == "window" else 15 * MINUTE)
        for p in RUN},
 }
-
-
-def _target(ident, resource, prop, expect, fresh, due, coverage, source, **extra):
-    return {"id": ident, "kind": "property", "coverage": coverage, "resource": resource, "property": prop,
-            "expect": expect, "min_level": "real", "fresh_ms": fresh * DAY, "due_ms": due * DAY, "owner": "@owner",
-            "sources": [source], **extra}
 
 
 DECISION = {"observed": ["decision", "approve", "real", "human"]}        # the human's yes, on the exact resource
@@ -139,9 +115,7 @@ FLOORS = {
     "levels": ["unknown", "real"],
     "ttl": {"pending": DAY, "unredeemed": DAY, "reconcile": DAY, "proof": DAY, "observation": DAY},
     # The floor value of every setting a route compares with: the loosest the rules may set (F0-12, D36).
-    "settings": {"burn_fast": "14.4", "failing": 5, "rollback_horizon_min": 240, "rollback_migrations": 1000,
-                 "restarts_per_hour": 11, "freeze_below": 0, "canary_max_error_delta": "2",
-                 "canary_min_requests": 20, "canary_bake_min": 1},
+    "settings": policy_values("floor"),
     # Closure on independent proof: every effect leaves a proof obligation only independent evidence closes.
     "evidence": {"evidence": {"fields": {"under": "id", "resource": "resource", "subject": "id", "level": "str"}}},
     "discharges": {"evidence": [{"obligation": "proof", "key": "subject", "min_level": "real"}]},
@@ -209,23 +183,7 @@ FLOORS = {
     },
     "conditions": {},
     # Coverage: each declared universe must be observed complete by an independent source, or it is a gap.
-    "targets": [
-        {"id": "inventory", "kind": "coverage", "resource": "repo:inventory:all", "property": "coverage",
-         "expect": "complete", "min_level": "real", "fresh_ms": DAY, "due_ms": DAY, "owner": "@owner",
-         "sources": ["@inventory_source"], "repair": "inventory-refresh"},
-        {"id": "run-sources", "kind": "coverage", "resource": "run:sources:all", "property": "coverage",
-         "expect": "complete", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": 60 * MINUTE,
-         "owner": "@owner", "sources": ["@scanner"], "human": True},
-        {"id": "run-slo", "kind": "property", "coverage": "run-sources", "resource": "run:service:all",
-         "property": "slo", "expect": "met", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": 30 * MINUTE,
-         "owner": "@owner", "sources": ["@scanner"], "repair": "rollback"},
-        {"id": "run-live", "kind": "property", "coverage": "run-sources", "resource": "run:release:all",
-         "property": "lag", "expect": "none", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": DAY,
-         "owner": "@owner", "sources": ["@scanner"], "repair": "deploy"},
-        *(_target(*t, "inventory", "@scanner", repair="remediate") for t in TECHNICAL),
-        *(_target(*t, "inventory", "@scanner", repair="remediate") for t in RULES),
-        *(_target(*t, "inventory", "@scanner", human=True) for t in SETTINGS),
-    ],
+    "targets": targets(),
     "obligations": [],
     # D34: what the product must do, as a request whose contract is a file of acceptance tests a person signs.
     # The contract is signed only once the scanner saw every one of its tests fail on main (a test already passing
@@ -250,16 +208,7 @@ RELEASE = Release(FLOORS, ROLES)
 # key here is a choice inside the socle; the kernel refuses a rule looser than the floors above.
 RECOMMENDED = {
     "routes": {"restart": []},                  # restarting stays the human's call until the rules say otherwise
-    "settings": {
-        # production, read by the kernel through the routes (the floors' values are the loosest allowed)
-        "rollback_horizon_min": 30, "restarts_per_hour": 2, "canary_max_error_delta": "0.5",
-        "canary_min_requests": 100, "canary_bake_min": 10,
-        # what the scanner measures and the console shows
-        "objective": "99.9", "p99_ms": 1000, "window_s": 300, "late_periods": 2, "burn_slow": "6",
-        "deploy_days": "mon,tue,wed,thu,fri,sat,sun", "deploy_hours": "00-24", "deploy_tz": "UTC",
-        "canary_percent": 10, "base_url": "",
-        "components": {}, "slos": {}, "probes": {}, "silences": {},
-    },
+    "settings": {**policy_values("recommended"), **{name: {} for name in catalog()["policy"]["section"]}},
 }
 
 

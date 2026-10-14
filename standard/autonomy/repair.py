@@ -17,11 +17,11 @@ from instruments.scope import REPAIR
 from standard.floors import FLOORS
 
 from .agent import Agent, AgentError
-from .funnel import explain, record as funnel_record
+from .candidate import explain, record as candidate_record
 from .memory import Memory
 from .moves import judge
 from .projection import Route
-from .context import model_packet, task_context
+from .context import task_context
 from .read_model import ReadModel
 from .work import WorkEngine
 
@@ -119,23 +119,23 @@ class Repairer:
                     if key not in proposals:
                         head, route = self.agent.craft(tid, base, targets=targets, lessons=self.memory.lessons(tid),
                                                        finding=model.finding(target["resource"], target["property"]),
-                                                       law_text=model_packet(task_context(view, {**task,
+                                                       context=task_context(view, {**task,
                                                            "need": task.get("need", "repair"),
                                                            "resource": target["resource"]}, findings,
-                                                           model=model)),
+                                                           model=model),
                                                        values=self._values(view))
                         proposals[key] = {"target": tid, "area": area, "item": item, "base": base,
                                           "head": head, "way": route}
-                        stats = getattr(self.agent, "last_funnel", None)
+                        stats = getattr(self.agent, "last_candidate", None)
                         self.memory.record(tid, at=now, base=base, head=head, route=route, outcome="crafted",
-                                           **({"why": funnel_record(stats)} if stats else {}))
+                                           **({"why": candidate_record(stats)} if stats else {}))
                         report["crafted"][tid] = proposals[key]
                     p = proposals[key]
                     report["candidates"][tid] = p["head"]
                     outcome, reason = "proposed", "candidate"
             except AgentError as exc:
-                stats = getattr(self.agent, "last_funnel", None)
-                why = str(exc) + ("\n" + funnel_record(stats) if stats else "")
+                stats = getattr(self.agent, "last_candidate", None)
+                why = str(exc) + ("\n" + candidate_record(stats) if stats else "")
                 self.memory.record(tid, at=now, base=base, outcome="agent", why=why)
                 report["candidates"][tid] = f"agent: {exc}"
                 outcome, reason = "attempt_failed", "agent_error"

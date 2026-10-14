@@ -14,10 +14,12 @@ import hashlib
 
 from instruments.tree import Snapshot
 
-from standard.catalog import categories, effective, load, render
+from standard.catalog import applicable, categories, effective, load, render, slug
+from .context import assemble
+from .research import ReadScope
 
 from .concepts import AUTHORITY
-from .drift_map import gap_dossiers
+from .context import gap_dossiers
 from .read_model import ReadModel
 
 SUSPICION_KEYS = ("law_ref", "surface", "why", "evidence_seen", "determinism_gap", "needs",
@@ -32,26 +34,19 @@ def rotation(state_path, cat=None) -> str:
     """The next category to patrol, in the catalog's fixed order; the position is kept in U's own file."""
     order = ["simplicity", *categories()]
     try:
-        last = json.loads(state_path.read_text()).get("category")
+        note = json.loads(state_path.read_text())
+        last = note.get("category")
     except (OSError, ValueError):
-        last = None
+        note, last = {}, None
     nxt = order[(order.index(last) + 1) % len(order)] if last in order else order[0]
-    state_path.write_text(json.dumps({"category": nxt}))
+    state_path.write_text(json.dumps({**note, "category": nxt}))
     return nxt
 
 
 def patrol_rules(category: str, values: dict, features=None) -> list:
     """The rules of a category an AI reads to check (`ai` in who), rendered as the agent codes to them."""
-    import re as _re
-    out = []
-    for r in load()["rules"]:
-        slug = _re.sub(r"[^a-z0-9]+", "-", r["category"].lower()).strip("-")
-        if slug != category or "ai" not in r["who"]:
-            continue
-        if features is not None and not set(r["applies"]) <= set(features):
-            continue
-        out.append(render(r, values))
-    return out
+    return [render(r, values) for r in (applicable(load(), features) if features is not None else load()["rules"])
+            if slug(r["category"]) == category and "ai" in r["who"]]
 
 
 def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=None,
@@ -62,13 +57,14 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=
     law, findings, settings = model.law, model.findings, model.settings
     dossiers = gap_dossiers(view, model=model, mode=mode)
     selected = dossiers
-    if focus:
-        text = str(focus)
+    question = (focus or "").split(":")[0]
+    if focus and question != "simplicity":
+        text = ":".join(str(focus).split(":")[:2]) if str(focus).startswith("rules:") else str(focus)
         selected = [d for d in dossiers if text in (d["id"], d["law"]["resource"]) or text in json.dumps(d["law"])]
     weak = [d for d in selected if d["state"] in ("unknown", "unmeasured", "open")
             or d["route"]["state"] in (None, "NO_ROUTE", "TRUST_BLOCKED")
             or d["action"]["method"] in ("missing_task", "llm_or_configured_scope")]
-    simplicity = focus == "simplicity"
+    simplicity = question == "simplicity"
     return {"kind": "simplicity-patrol" if simplicity else "law-patrol",
             "mission": SIMPLICITY if simplicity else "Find possible law violations missed by instruments.",
             "mode": "targeted" if focus else "wide", "focus": focus,
@@ -89,33 +85,55 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=
 def run_patrol(cycle, *, main, focus=None) -> dict:
     """Run one advisory pass inside U, with read/search tools only; keep a private result history.
     cycle: the repair producer (its agent, findings and routes)."""
-    from .advisory_llm import propose_patrol
     from .llm import redact
+    from instruments.surfaces import scan
+    from instruments.scope import relative
 
     if cycle.agent.llm is None:
-        raise ValueError("law patrol needs a configured model in the agent process")
+        raise ValueError("patrol needs a configured model in the agent process")
     if focus is not None and (not isinstance(focus, str) or len(focus) > 200):
         raise ValueError("patrol focus is at most 200 characters")
     view, base = cycle.service.view(), main()
     model = ReadModel(view, cycle._findings(), cycle.routes, cycle.service.qualify, main=base)
-    tree = Snapshot(cycle.agent.store, base)
-    rules = []
-    if focus is None:                                  # a round of the rotation: one category of AI-read rules
-        from instruments.surfaces import scan
-        category = rotation(cycle.agent.store.parent / "patrol-rotation.json")
-        values = effective(load(), view["law"]["effective"].get("settings", {}).get("values"))
-        rules = patrol_rules(category, values, scan(tree)["features"] if hasattr(tree, "paths") else None)
+    if focus in categories():
+        focus = f"rules:{focus}"
+    snapshot = Snapshot(cycle.agent.store, base)
+    product = scan(snapshot, declared=model.settings.get("features", ()))
+    state_path = cycle.agent.store.parent / "patrol-rotation.json"
+    if focus is None:
+        category = rotation(state_path)
         focus = "simplicity" if category == "simplicity" else f"rules:{category}"
+        roots = [".", *sorted({p.split("/", 1)[0] for p in snapshot.paths() if "/" in p})]
+        note = json.loads(state_path.read_text())
+        cursors = note.get("scopes", {})
+        cursor = cursors.get(category, 0)
+        root = roots[cursor % len(roots)]
+        state_path.write_text(json.dumps({**note, "scopes": {**cursors, category: cursor + 1}}))
+        if root != ".":
+            focus += ":" + root
+    parts = focus.split(":")
+    category = parts[1] if parts[0] == "rules" and len(parts) >= 2 else None
+    if category is not None and category not in categories():
+        raise ValueError("unknown catalog category")
+    if parts[0] not in ("simplicity", "rules") and model.target(focus) is None:
+        raise ValueError("patrol focus must name simplicity, a catalog category or an effective target")
+    root = ":".join(parts[2:]) if category else ":".join(parts[1:]) if parts[0] == "simplicity" else ""
+    if root and (not relative(root) or not any(p == root or p.startswith(root + "/") for p in snapshot.paths())):
+        raise ValueError("exploration scope must name an existing relative file or directory")
+    paths = [p for p in snapshot.paths() if not root or p == root or p.startswith(root + "/")]
+    tree = ReadScope(snapshot, paths)
+    values = effective(load(), model.settings.get("values"))
+    rules = patrol_rules(category, values, product["features"]) if category else []
     context = patrol_context(view, focus=focus, model=model, rules=rules)
-
-    class ReadOnlyResearch:
-        def dialogue(self, prompt, snapshot, *, key):
-            return cycle.agent.research.dialogue(prompt, snapshot, key=key,
-                                                 allowed_actions=("read", "search"))
-
-    result = propose_patrol(context, tree, ReadOnlyResearch())
+    context["scope"] = {"question": "simplicity" if parts[0] == "simplicity" else "conformance",
+                        "root": root or ".", "files": len(paths), "mode": "read_only"}
+    context["rule_ids"] = [r.split()[0] for r in rules]
+    # Applicability is observed on the whole product, even when this mission reads one subsystem.
+    context["product"] = product
+    result = (propose_patrol(context, tree, cycle.agent.research) if rules or category is None else
+              {"suspicions": [], "authority": context["authority"], "outcome": "no applicable AI-readable requirements"})
     record = {"basis": context["basis"], "law_digest": context["law_digest"], "main": base,
-              "focus": focus, "mode": context["mode"],
+              "focus": focus, "mode": context["mode"], "scope": context["scope"],
               "next": "Serve an existing debt within its scope, or create a human-contracted build request for a refactor.",
               **result}
     current = cycle.service.view()
@@ -172,3 +190,35 @@ class Patrol:
             report = {"state": "unavailable", "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
         self.notes.write_text(json.dumps({"next_at": now + self.interval_ms, **report}))
         return report
+
+
+def propose_patrol(context: dict, tree, research, *, key=None) -> dict:
+    """Ask a read-only research loop to patrol for possible law violations not yet deterministically born."""
+    scope = context.get("scope", {"mode": "read_only"})
+    category = (context.get("focus") or "").split(":")
+    category = category[1] if category[0] == "rules" and len(category) > 1 else None
+    packet, sources = assemble(context, tree, role="explore", scope=scope, touched=None, category=category,
+                               rule_ids=context.get("rule_ids"), documents={"scope": sorted(tree.paths())})
+    prompt = ("Explore this pinned repository scope. Mission: " + context.get("mission", "Find possible law violations.") +
+              " Read the catalog requirements and block contracts; investigate only the named question and scope. "
+              "Report concrete suspicions, behaviour/guarantees to preserve and verification needed. "
+              "Do not claim facts, close gaps, authorize work or change law. Return JSON {\"suspicions\": "
+              f"[objects with only these keys: {', '.join(SUSPICION_KEYS)}]}}.\n" + packet)
+    reply = research.dialogue(prompt, tree, key=key or f"patrol:{context.get('focus') or 'wide'}",
+                              allowed_actions=("read", "search"), context=sources)
+    if not isinstance(reply, dict) or not isinstance(reply.get("suspicions"), list):
+        raise ValueError("exploration unavailable: expected a suspicions list")
+    suspicions = reply["suspicions"]
+    out = []
+    for item in (suspicions[:50] if isinstance(suspicions, list) else []):
+        if not isinstance(item, dict) or not isinstance(item.get("law_ref"), str) or not item["law_ref"]:
+            continue
+        filtered = {k: item[k][:2000] for k in ("law_ref", "surface", "why", "determinism_gap",
+                                                  "suggested_action", "confidence")
+                    if isinstance(item.get(k), str)}
+        for k in ("evidence_seen", "needs"):
+            if isinstance(item.get(k), list):
+                filtered[k] = [v[:500] for v in item[k][:20] if isinstance(v, str)]
+        filtered["authority"] = "proposal_only"
+        out.append(filtered)
+    return {"suspicions": out, "authority": context["authority"]}

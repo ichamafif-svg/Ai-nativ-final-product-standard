@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Optional
 
 from .concepts import AUTHORITY
@@ -127,6 +128,9 @@ def task_context(view: dict, task: dict, findings=None, *, model: ReadModel | No
             "proof_plan": proof, "autonomy": _autonomy(task, target, operation),
             "decision": _decision(task, target, operation, routes, proof),
             "authority": AUTHORITY["context"]}
+    if target:
+        context["definition"] = model.target(target["id"])["definition"]
+        context["measurement"] = model.target(target["id"])["measurement"]
     refs = {f"law:targets/{target['id']}"} if target else set()
     if op_name:
         refs.add(f"law:ops/{op_name}")
@@ -142,10 +146,93 @@ def task_context(view: dict, task: dict, findings=None, *, model: ReadModel | No
     return context
 
 
-def model_packet(context: dict) -> str:
-    """Versioned structured input for a model; authority remains with the signed admission path."""
-    return json.dumps({"schema": "standard-agent-context/v1", "packet": context}, sort_keys=True,
-                      ensure_ascii=False)
+def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=(), values=None, documents=None,
+             category=None, rule_ids=None, budget=28_000) -> tuple[str, dict]:
+    """Common mission reading derived from the catalog and pinned inputs. Large entries are deferred whole.
+
+    read(ref=...) retrieves exact declarations/documents; search(in=context, query=...) lists references. These use
+    the existing research tools and budgets. Selection changes attention, never applicability or admission.
+    """
+    from instruments.surfaces import scan
+    from standard.catalog import contracts, effective, load, render, render_contracts
+    from .repomap import RepoMap
+
+    cat = load()
+    law = context.get("effective_law", {})
+    settings = context.get("settings", law.get("settings", {}))
+    values = effective(cat, settings.get("values")) if values is None else values
+    sources = {}
+    for section, entries in law.items():
+        if isinstance(entries, dict):
+            sources.update({f"law/{section}/{name}": value for name, value in entries.items()})
+        elif isinstance(entries, list) and all(isinstance(v, dict) and "id" in v for v in entries):
+            sources.update({f"law/{section}/{v['id']}": v for v in entries})
+        else:
+            sources[f"law/{section}"] = entries
+    sources.update({f"rule/{r['id']}": render(r, values) for r in cat["rules"]})
+    sources.update({f"block/{name}": block for name, block in cat["blocks"].items()})
+    sources.update({f"parameter/{name}": {"definition": spec, "value": values.get(name), "set": name in values}
+                    for name, spec in cat["values"].items()})
+    sources.update({f"policy/{name}": {"definition": spec, "value": settings.get(name), "set": name in settings}
+                    for name, spec in cat["policy"]["parameter"].items()})
+    sources.update({f"document/{name}": text for name, text in (documents or {}).items()})
+    product = context.get("product") or (scan(tree, declared=settings.get("features", ())) if hasattr(tree, "paths") else {"features": [], "stacks": []})
+    technical = contracts(cat, product["features"], values, touched=touched, category=category,
+                          ids=rule_ids, stacks=product["stacks"])
+    packet = {"role": role, "basis": {"journal": context.get("basis"), "law": context.get("law_digest"),
+                                      "code": getattr(tree, "commit", None), "catalog": cat["digest"]},
+              "scope": scope or {"mode": "read_only"}, "authority": AUTHORITY["context"],
+              "selection": "Omitted requirements still apply. Read complete deferred entries before deciding; "
+                           "use read(ref, offset) or search(in=context, query) for pinned declarations/documents.",
+              "rule_ids": [r["id"] for r in technical["rules"]],
+              "documents": sorted(f"document/{name}" for name in (documents or {}))}
+    deferred = []
+
+    def add(name, value):
+        sources[f"mission/{name}"] = value
+        if len(json.dumps({**packet, name: value}, ensure_ascii=False)) < budget - 2000:
+            packet[name] = value
+        else:
+            deferred.append(f"mission/{name}")
+
+    for name in ("task", "requirement", "definition", "measurement", "operation", "autonomy", "decision", "proof_plan", "law_trace"):
+        if context.get(name):
+            add(name, context[name])
+    names = set(re.findall(r"@([a-z_]+)", json.dumps(context.get("law_trace", context.get("operation", {})))))
+    for name in sorted(names & cat["policy"]["parameter"].keys()):
+        add(f"policy/{name}", sources[f"policy/{name}"])
+    add("technical", render_contracts(technical))
+    for name in ("mission", "findings", "facts", "known_gaps", "weak_spots"):
+        if context.get(name):
+            add(name, context[name])
+    if hasattr(tree, "paths"):
+        paths = sorted(tree.paths())
+        focus = sorted(set(focus) & set(paths))
+        add("repository", {"files": len(paths), "focus": focus, "map": RepoMap(tree).render(limit=4000, focus=focus)})
+        for path in focus[:4]:
+            if getattr(tree, "entries", {}).get(path, ("",))[0] == "120000":
+                continue
+            raw = tree.read(path)
+            if b"\x00" not in raw:
+                add(f"code/{path}", raw.decode(errors="replace"))
+    packet["deferred"] = deferred
+    # Strings are immutable and each role receives its own inventory, even during parallel review.
+    sources = {ref: value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+               for ref, value in sources.items()}
+    return json.dumps({"schema": "standard-agent-context/v2", "packet": packet}, ensure_ascii=False, sort_keys=True), sources
+
+
+def write_scope(kind: str, ident: str, scopes=None) -> dict:
+    """A description of the instrument's exact definitions; the scanner remains the enforcer."""
+    from instruments.scope import FEATURE, REPAIR, RESERVED, WORKFLOWS
+    from instruments.suite import contract_path
+    pattern = FEATURE if kind == "build" or ident.startswith("rules-") else WORKFLOWS if ident == "actions" else REPAIR.get(ident)
+    return {"kind": kind, "id": ident, "path_regex": pattern,
+            "custom_globs": [] if pattern else (scopes or {}).get(ident, []), "reserved_regex": RESERVED.pattern,
+            "reserved_exception": WORKFLOWS if kind == "repair" and ident == "actions" else None,
+            "protected_contract": contract_path(ident) if kind == "build" else None,
+            "new_paths": "same scope and relative-path checks as existing paths",
+            "authority": "reading aid only; host and independent scanner enforce scope"}
 
 
 def render_context(context: dict) -> str:
@@ -178,3 +265,64 @@ def render_context(context: dict) -> str:
                  + json.dumps(context["grants"], sort_keys=True))
     lines.append(context["authority"])
     return "\n".join(lines)
+
+
+def _task_for(tasks: list, target_id: str) -> Optional[dict]:
+    return next((t for t in tasks if t.get("target") == target_id and t.get("need") in ("repair", "human")),
+                next((t for t in tasks if t.get("target") == target_id), None))
+
+
+def _action(target: dict, task: Optional[dict], role: dict) -> dict:
+    if role["level"] == "human":
+        return {"owner": "human", "method": "human", "can_repair": False,
+                "why": "no move of the rules repairs it: the human does (a provider's settings)"}
+    if not target.get("repair"):
+        return {"owner": "observer", "method": "observe", "can_repair": False,
+                "why": "the law declares no repair operation"}
+    if task is None:
+        return {"owner": "unknown", "method": "missing_task", "can_repair": False,
+                "why": "no projected task exists at this prefix"}
+    if role["method"] == "recipe":
+        return {"owner": "agent", "method": "recipe", "can_repair": task.get("state") == "AVAILABLE",
+                "why": "a trusted recipe can be independently reproduced"}
+    if task.get("state") == "HUMAN_REVIEW":
+        return {"owner": "human", "method": "decision", "can_repair": False,
+                "why": "the projected need waits for the human's decision"}
+    if role["level"] == "decision":
+        return {"owner": "agent", "method": "candidate + human decision", "can_repair": task.get("state") == "AVAILABLE",
+                "why": "the rules keep this move for the human: the agent proposes, the human decides"}
+    return {"owner": "agent", "method": "llm_or_configured_scope", "can_repair": task.get("state") == "AVAILABLE",
+            "why": "the agent proposes code; the scanner's facts on the exact commit decide which route holds"}
+
+
+def gap_dossiers(view: dict, findings=None, routes=(), qualify=None, *, mode: str = "RUN",
+                 model: ReadModel | None = None) -> list:
+    """Return one deterministic dossier per target of the effective law."""
+    model = model or ReadModel(view, findings, routes, qualify)
+    model.assert_view(view)
+    tasks = model.plan(mode)["tasks"]
+    out = []
+    for row in model.targets():
+        target, finding = row["target"], row["finding"]
+        task = _task_for(tasks, target["id"])
+        ctx_task = task or {"id": f"target:{target['id']}", "need": "repair" if target.get("repair") else "attest",
+                            "op": target.get("repair"), "resource": target["resource"], "target": target["id"],
+                            "opened": None, "due": None}
+        context = task_context(view, ctx_task, model=model)
+        status = row["state"]
+        out.append({"id": target["id"], "state": status,
+                    "law": {k: target.get(k) for k in ("id", "resource", "property", "expect", "repair", "human",
+                                                       "fresh_ms", "due_ms", "sources")},
+                    "drift": {"status": finding.get("status"), "where": list(finding.get("details", []))[:50],
+                              "source": "instrument" if finding else "health"},
+                    "obligations": row["debt"],
+                    "route": {"task": task, "state": task and task.get("state"),
+                              "choices": (task or {}).get("routes", [])},
+                    "action": _action(target, task, row["role"]),
+                    "proof_to_close": context["proof_plan"],
+                    "decision": context["decision"],
+                    "autonomy": context["autonomy"],
+                    "methods": ["deterministic", "instrument"] + (["recipe"] if row["role"]["method"] == "recipe" else [])
+                               + ["llm_reading"],
+                    "authority": AUTHORITY["dossier"]})
+    return out

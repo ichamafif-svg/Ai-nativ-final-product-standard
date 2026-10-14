@@ -1,5 +1,5 @@
 """The rule catalog (standard/catalog): every ASVS 5.0 requirement accounted for, every name defined, one text for the
-agent before coding and in a refusal, and a deterministic choice of what each funnel pass shows."""
+agent before coding and in a refusal, and a deterministic choice of what each candidate workflow pass shows."""
 import copy
 import sys
 import unittest
@@ -54,23 +54,19 @@ class Catalog(unittest.TestCase):
         self.assertNotIn("MULTI-APPROVAL", one)
         self.assertIn("MULTI-APPROVAL", team)
 
-    def test_each_pass_shows_only_what_the_change_triggers(self):
+    def test_selection_uses_applicability_and_touched_surfaces_without_passes(self):
         features = ["api", "web", "database", "oidc", "upload", "crypto", "outbound-http", "lang:python"]
-        wide = [r["id"] for r in select(self.cat, features, ["surface:endpoint"], "wide")]
-        self.assertIn("NO-OWN-AUTH", wide)
-        self.assertNotIn("PWD-POLICY", wide)                   # the identity provider's, checked by probes
-        self.assertNotIn("NO-OWN-AUTH", [r["id"] for r in select(self.cat, features, [], "wide")])
-        self.assertEqual(select(self.cat, features, [], "fine"), [])                    # nothing touched
-        fine = [r["id"] for r in select(self.cat, features, ["construct:sql-call"], "fine")]
-        self.assertEqual(fine, ["INJ-SQL"])
-        medium = [r["id"] for r in select(self.cat, features, ["surface:upload-endpoint"], "medium")]
-        self.assertIn("UPLOAD-LIMITS", medium)
-        self.assertNotIn("INJ-SQL", medium)
-        again = [r["id"] for r in select(self.cat, list(reversed(features)), ["surface:upload-endpoint"], "medium")]
-        self.assertEqual(medium, again)                                                  # deterministic
-        typical = applicable(self.cat, features)
-        text = [r for r in typical if r["absorb"] == "none"]
-        self.assertLess(len(text), 20)                       # what the AI keeps as text for a typical product
+        endpoint = [r["id"] for r in select(self.cat, features, ["surface:endpoint"])]
+        self.assertIn("NO-OWN-AUTH", endpoint)
+        self.assertNotIn("PWD-POLICY", endpoint)
+        self.assertNotIn("NO-OWN-AUTH", [r["id"] for r in select(self.cat, features, [])])
+        sql = [r["id"] for r in select(self.cat, features, ["construct:sql-call"])]
+        self.assertIn("INJ-SQL", sql)
+        upload = [r["id"] for r in select(self.cat, features, ["surface:upload-endpoint"])]
+        self.assertIn("UPLOAD-LIMITS", upload)
+        self.assertNotIn("INJ-SQL", upload)
+        self.assertEqual(upload, [r["id"] for r in select(self.cat, list(reversed(features)), ["surface:upload-endpoint"])])
+        self.assertTrue(all("pass" not in r for r in self.cat["rules"]))
 
     def test_the_rule_text_resolves_values_and_says_when_one_is_missing(self):
         upload = next(r for r in self.cat["rules"] if r["id"] == "UPLOAD-LIMITS")
@@ -90,6 +86,47 @@ class Catalog(unittest.TestCase):
             with self.assertRaises(CatalogError):
                 check_value(self.cat, name, bad)
 
+    def test_catalog_compiles_the_same_targets_and_policy_used_by_the_law_and_editor(self):
+        from standard.catalog import targets, policy_values, instruction, definition
+        from standard.floors import FLOORS, RECOMMENDED
+        from standard.autonomy.rules import SCHEMA, change
+        self.assertEqual(targets(self.cat), FLOORS["targets"])
+        self.assertEqual(policy_values("floor"), FLOORS["settings"])
+        self.assertEqual(SCHEMA.keys(), self.cat["policy"]["parameter"].keys())
+        self.assertEqual(policy_values("recommended")["objective"], RECOMMENDED["settings"]["objective"])
+        self.assertIn("never by weakening tests", instruction("ci"))
+        self.assertTrue(all("instruction" not in t for t in FLOORS["targets"]))
+        self.assertEqual(definition({"id": "client-custom", "resource": "repo:custom"})["origin"],
+                         "client law; no catalog mapping")
+        with self.assertRaises(ValueError):
+            change({}, settings={"canary_percent": 51})
+        with self.assertRaises(ValueError):
+            change({}, settings={"research_steps": 10})
+
+    def test_contracts_preserve_exact_policy_and_separate_absorption_from_evidence(self):
+        from standard.catalog import contracts, render_contracts
+        values = effective(self.cat, {"access": {"orders.read": ["buyer"]}})
+        packet = contracts(self.cat, ["api"], values, ids={"AUTHZ"}, stacks=["nextjs"])
+        text = render_contracts(packet)
+        self.assertIn('"orders.read": ["buyer"]', text)
+        self.assertIn("access.route", text)
+        self.assertIn("unauthenticated", text)
+        self.assertIn("critical", packet["parameters"])
+        self.assertIn("public", packet["parameters"])
+        self.assertIn("partial", text)
+        self.assertIn("not evidence", text)
+        self.assertEqual(packet["rules"][0]["checks"], next(r["check"] for r in self.cat["rules"] if r["id"] == "AUTHZ"))
+
+    def test_malformed_maintenance_and_policy_declarations_are_refused(self):
+        for mutate in (lambda c: c["targets"][0].update(fresh_ms=0),
+                       lambda c: c["targets"].append(c["targets"][0]),
+                       lambda c: c["policy"]["parameter"]["objective"].update(bounds=["99", "50"]),
+                       lambda c: c["policy"]["section"]["slos"].update(fields=["unregistered"])):
+            cat = copy.deepcopy(self.cat)
+            mutate(cat)
+            with self.assertRaises(CatalogError):
+                validate(cat)
+
     def test_the_catalog_is_part_of_the_release(self):
         from standard.runtime import CATALOG_DATA, code_digest
         import tempfile, shutil
@@ -102,6 +139,12 @@ class Catalog(unittest.TestCase):
         rule.write_text(rule.read_text().replace("bound parameter", "parameter"))
         self.assertNotEqual(code_digest(root), before)
         self.assertIn("values.toml", CATALOG_DATA)
+        for name in ("maintenance.toml", "policy.toml"):
+            self.assertIn(name, CATALOG_DATA)
+            source = root / "standard" / "catalog" / name
+            baseline = code_digest(root)
+            source.write_text(source.read_text() + "\n# pin check\n")
+            self.assertNotEqual(code_digest(root), baseline)
 
 
 if __name__ == "__main__":

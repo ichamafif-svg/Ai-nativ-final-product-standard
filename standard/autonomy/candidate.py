@@ -1,6 +1,6 @@
 """U — selected rule context, one writer and two parallel read-only reviewers.
 
-Catalog wide/medium/fine are context selectors, not mandatory generation passes. Reviews share an immutable draft
+The catalog selects applicable technical requirements. Reviews share an immutable draft
 and get separate research histories. Only the writer edits; bounded corrections must be reviewed again. Reviews,
 including an empty report or a reasoned disagreement, are advisory, never scanner facts or admission authority.
 """
@@ -16,7 +16,7 @@ from types import MappingProxyType
 from instruments import surfaces
 from instruments.bans import blocks_fact
 from instruments.scope import relative
-from standard.catalog import load, render, select
+from standard.catalog import contracts, load, render, render_contracts, select
 
 JUDGED = ("How you will be judged: not by you, by Standard's scanner on the exact commit. It measures main's tests "
           "(green), every floor target and rule category (no regression), your write scope (every path inside it) "
@@ -64,69 +64,13 @@ def bans_of(cat: dict) -> dict:
     return {name: b["bans"] for name, b in cat["blocks"].items() if b["bans"]}
 
 
-def house_example(tree, block: str, limit: int = 2, stack: str = "fastapi") -> list:
-    """Where this repository already uses the block: the code the agent should look like (deterministic: sorted)."""
-    impl = load()["blocks"].get(block, {}).get("stacks", {}).get(stack) or {}
-    module = impl.get("module", f"standard_blocks.{block}")
-    suffix = surfaces.PY if stack == "fastapi" else surfaces.JS
-    out = []
-    for path in sorted(p for p in tree.paths() if p.endswith(suffix) and not surfaces.SKIP.search(p)):
-        text = tree.read(path).decode("utf-8", "replace")
-        if module not in text:
-            continue
-        names = _names(text, module)
-        for n, line in enumerate(text.splitlines(), 1):
-            if line.lstrip().startswith(("from ", "import ")):
-                continue
-            if module in line or any(re.search(rf"(?<![\w$]){re.escape(name)}\s*\(", line) for name in names):
-                out.append(f"{path}:{n}: {line.strip()[:120]}")
-                break
-        if len(out) >= limit:
-            break
-    return out
-
-
-def _names(text: str, module: str) -> list:
-    """Names imported from the block: `from m import a, b` or `from m import (a,\n b)`; `x as y` gives y."""
-    m = re.search(rf"from {re.escape(module)} import (?:\(([^)]*)\)|([^\n]+))", text)
-    if m:
-        return [part.split(" as ")[-1].strip() for part in (m.group(1) or m.group(2)).split(",") if part.strip()]
-    m = re.search(rf"""import\s*\{{([^}}]*)\}}\s*from\s*['"]{re.escape(module)}['"]""", text)      # JS
-    return [part.split(" as ")[-1].strip() for part in m.group(1).split(",") if part.strip()] if m else []
-
-
-def product_stacks(tree) -> list:
-    """The product's stacks (fastapi, nextjs), read from its paths and JS imports only: cheap enough for every pass."""
-    files = {p: {"imports": surfaces.describe(p, tree.read(p))["imports"] if p.endswith(surfaces.JS) else []}
-             for p in tree.paths() if not surfaces.SKIP.search(p)}
-    return surfaces.stacks(files)
-
-
-def uses(cat: dict, block: str, stacks) -> list:
-    """`use` lines of a block for these stacks; a stack without the block says the bans still hold."""
-    b = cat["blocks"][block]
-    out = []
-    for stack in stacks or ["fastapi"]:
-        impl = b["stacks"].get(stack) or b["stacks"].get("any") or b["stacks"].get("js")
-        out.append(f"use    ({stack}) {impl['use']}" if impl and impl.get("use") else
-                   f"use    ({stack}) no block on this stack yet: do not use the banned APIs, ask for a human decision")
-    return out
-
-
 def brief(rules: list, values: dict, tree, cat: dict | None = None) -> str:
-    """The rules of one pass: full text for what a block does not absorb fully, one line for the rest, then each
-    block's use on the product's stack, then where this repository already uses each block."""
-    if not rules:
-        return ""
+    """Render the catalog's common contracts; U supplies only observed features and stacks."""
+    from standard.catalog import contracts, render_contracts
     cat = cat or load()
-    stacks = product_stacks(tree)
-    lines = [render(r, values, full=r["absorb"] != "full") for r in rules]
-    blocks = sorted({r["block"] for r in rules if r["block"] in cat["blocks"]})
-    code = [b for b in blocks if any(s in cat["blocks"][b]["stacks"] for s in ("fastapi", "nextjs"))]
-    use = [f"block {b}\n" + "\n".join(uses(cat, b, stacks)) for b in code]
-    house = [f"  {b}: {e}" for b in code for s in stacks for e in house_example(tree, b, stack=s)]
-    return "\n\n".join(lines) + ("\n\nBlocks for this product:\n" + "\n".join(use) if use else "") + \
-        ("\n\nThis repository already does it this way:\n" + "\n".join(house) if house else "")
+    product = surfaces.scan(tree)
+    return render_contracts(contracts(cat, product["features"], values, ids={r["id"] for r in rules},
+                                      stacks=product["stacks"]))
 
 
 def explain(details, values: dict | None = None, cat: dict | None = None) -> str:
@@ -149,16 +93,15 @@ def explain(details, values: dict | None = None, cat: dict | None = None) -> str
                 shown.add(f"block:{block}")
                 b = cat["blocks"][block]
                 stacks = [s for s in ("fastapi", "nextjs") if s in b["stacks"]] or ["any"]
-                out.append(f"block {block}: {b['does']}\n" + "\n".join(uses(cat, block, stacks)) +
-                           f"\nbans   {', '.join(b['bans'])}")
+                out.append(render_contracts(contracts(cat, cat["vocabulary"]["features"], values,
+                    ids={r["id"] for r in cat["rules"] if r["block"] == block}, stacks=stacks)))
     return "\n\n".join(out)
 
 
-def relevant(cat, base, draft, touched):
-    """Union of context levels, including features the candidate introduces."""
-    features = sorted(set(surfaces.scan(base)["features"]) | set(surfaces.scan(draft)["features"]))
-    chosen = {r["id"]: r for level in ("wide", "medium", "fine") for r in select(cat, features, touched, level)}
-    return [chosen[k] for k in sorted(chosen)]
+def relevant(cat, base, draft, touched, declared=()):
+    """Requirements triggered on either the base or candidate, including new features."""
+    features = sorted(set(surfaces.scan(base, declared)["features"]) | set(surfaces.scan(draft, declared)["features"]))
+    return select(cat, features, touched)
 
 
 def review_findings(reply, role, paths):
@@ -178,32 +121,54 @@ def review_findings(reply, role, paths):
     return out
 
 
-class Funnel:
-    """Candidate workflow; the retained name refers to rule selection, not three generation passes."""
+class CandidateWorkflow:
+    """One construction and bounded advisory review of immutable candidates."""
     def __init__(self, cat: dict | None = None, *, rounds: int = 2, timeout_s: int = 180):
         if type(rounds) is not int or not 1 <= rounds <= 3 or type(timeout_s) is not int or not 1 <= timeout_s <= 600:
             raise ValueError("review rounds must be 1..3, timeout_s 1..600")
         self.cat, self.rounds, self.timeout_s = cat or load(), rounds, timeout_s
         self.last_stats = None
 
-    def run(self, ask, base, head: str, *, values: dict, scope_ok, focus=(), wide_touched=(), fixed_files=None) -> tuple[dict, dict]:
+    def run(self, ask, base, head: str, *, values: dict, scope_ok, focus=(), touched=(), fixed_files=None,
+            context=None, scope=None, documents=None) -> tuple[dict, dict]:
         """ask(prompt, role, tree=snapshot, read_only=bool) -> dict; only build/correct may return edits.
         The callback must give each role its own history and confine read-only roles to read/search."""
         stats = self.last_stats = {"rounds": [], "remaining": [], "authority": "proposal_only"}
         fixed_files = dict(fixed_files or {})               # human-accepted contract, readable but never editable
-        guess = set(wide_touched)
+        guess = set(touched)
         for path in focus:
             if path in base.paths():
                 d = surfaces.describe(path, base.read(path))
                 guess |= {f"surface:{s}" for s in d["surfaces"]} | {f"construct:{c}" for c in d["constructs"]}
-        rules = relevant(self.cat, base, base, guess)
-        design = ""
-        if "surface:dependency" in guess or re.search(r"new dependenc|new architecture|nouvelle dépendance|réorganis", head, re.I):
-            reply = ask(f"ROLE design: assess the smallest design before implementation. {SIMPLICITY} "
-                        f"{REVIEW_FORMAT}\nTask:\n{head}\nRules:\n{brief(rules, values, base, self.cat)}",
-                        "design", tree=base, read_only=True)
-            design = json.dumps(review_findings(reply, "design", set(base.paths()) | {"."}))
-            stats["design"] = design
+        declared = (context or {}).get("settings", {}).get("features", ())
+        category_ids = set((context or {}).get("definition", {}).get("rules", []))
+
+        def selected_rules(tree, triggers):
+            from standard.catalog import applicable
+            chosen = {r["id"]: r for r in relevant(self.cat, base, tree, triggers, declared)}
+            features = set(surfaces.scan(base, declared)["features"]) | set(surfaces.scan(tree, declared)["features"])
+            chosen.update({r["id"]: r for r in applicable(self.cat, features) if r["id"] in category_ids})
+            return [chosen[k] for k in sorted(chosen)]
+
+        rules = selected_rules(base, guess)
+
+        def invoke(text, role, *, tree, read_only, deadline=None, selected=(), paths=(), triggers=()):
+            kw = {"tree": tree, "read_only": read_only}
+            if deadline is not None:
+                kw["deadline"] = deadline
+            if context is not None:
+                from .context import assemble
+                product = surfaces.scan(tree, declared)
+                product["features"] = sorted(set(product["features"]) | set(surfaces.scan(base, declared)["features"]))
+                packet, sources = assemble({**context, "product": product}, tree, role=role, scope=scope, touched=triggers,
+                                           focus=paths, values=values, documents=documents,
+                                           rule_ids={r["id"] for r in selected})
+                text += "\nMission context:\n" + packet
+                kw["context"] = sources
+            return ask(text, role, **kw)
+
+        def rule_text(selected, tree):
+            return brief(selected, values, tree, self.cat) if context is None else "see mission context"
         files = {}
 
         def take(reply):
@@ -223,28 +188,30 @@ class Funnel:
                     del files[path]
             return {k: v for k, v in reply.items() if k != "files"}
 
-        result = take(ask(f"ROLE build: implement the task. {SIMPLICITY}\n{JUDGED}\nTask:\n{head}\n"
-                          f"Design observations (advisory): {design or 'none'}\n"
-                          f"Relevant rules:\n{brief(rules, values, base, self.cat)}\n{FORMAT}",
-                          "build", tree=base, read_only=False))
+        result = take(invoke(f"ROLE build: implement the task. {SIMPLICITY}\n{JUDGED}\nTask:\n{head}\n"
+                          f"Relevant rules:\n{rule_text(rules, base)}\n{FORMAT}",
+                          "build", tree=base, read_only=False, selected=rules, paths=focus, triggers=guess))
         for round_no in range(self.rounds):
             if not files:
                 raise ValueError("candidate makes no effective change")
             draft = Overlay(base, {**fixed_files, **files})
             touched = set(surfaces.touched(base, draft)) | guess
-            rules = relevant(self.cat, base, draft, touched)
+            rules = selected_rules(draft, touched)
             _, left = blocks_fact(base, draft, sorted(files), bans_of(self.cat))
             stats["remaining"] = left
             # Both reviewers receive the exact same snapshot and task, never the writer's rationale.
-            material = json.dumps(files, sort_keys=True)
-            context = (f"Task and original context:\n{head}\nBase: {getattr(base, 'commit', 'base')}\n"
-                       f"Candidate: {draft.commit}\nEdits (null deletes):\n{material}\n"
-                       f"Rules:\n{brief(rules, values, draft, self.cat)}\n"
-                       f"Deterministic findings:\n{explain(left, values, self.cat)}\n{JUDGED}")
+            material = json.dumps({p: {"deleted": c is None, "characters": len(c) if c is not None else 0}
+                                   for p, c in files.items()}, sort_keys=True)
+            review_context = (f"Task and original context:\n{head}\nBase: {getattr(base, 'commit', 'base')}\n"
+                       f"Candidate: {draft.commit}\nChanges (read full files from this snapshot):\n{material}\n"
+                       f"Rules:\n{rule_text(rules, draft)}\n"
+                       f"Deterministic findings (raw):\n{json.dumps(left)}\n"
+                       f"Explanation:\n{explain(left, values, self.cat)}\n{JUDGED}")
             pool = ThreadPoolExecutor(max_workers=2)
             deadline = time.monotonic() + self.timeout_s
-            futures = {role: pool.submit(ask, f"ROLE {role}: {mission} {SIMPLICITY} {REVIEW_FORMAT}\n{context}",
-                                         role, tree=draft, read_only=True, deadline=deadline) for role, mission in REVIEWERS.items()}
+            futures = {role: pool.submit(invoke, f"ROLE {role}: {mission} {SIMPLICITY} {REVIEW_FORMAT}\n{review_context}",
+                                         role, tree=draft, read_only=True, deadline=deadline, selected=rules,
+                                         paths=sorted(files), triggers=touched) for role, mission in REVIEWERS.items()}
             try:
                 findings = [f for role, future in futures.items() for f in review_findings(
                     future.result(timeout=max(0, deadline - time.monotonic())), role, set(base.paths()) | draft.paths())]
@@ -257,12 +224,12 @@ class Funnel:
             stats["rounds"].append(row)
             if not findings and not left:
                 return {**result, "files": dict(files)}, stats
-            reply = ask(f"ROLE correct: you are the sole writer. {SIMPLICITY}\n{context}\n"
+            reply = invoke(f"ROLE correct: you are the sole writer. {SIMPLICITY}\n{review_context}\n"
                         f"Reviewer observations: {json.dumps(findings)}\n"
                         "Address each observation or decline it with a concrete reason. Do not add unrelated work. "
                         'Include review_responses: [{"id": str, "decision": "fixed" or "declined", "reason": str}]. '
                         f"{FORMAT}Return only edits to this draft; an empty files object retains it.",
-                        "correct", tree=draft, read_only=False)
+                        "correct", tree=draft, read_only=False, selected=rules, paths=sorted(files), triggers=touched)
             responses = reply.get("review_responses") if isinstance(reply, dict) else None
             if (not isinstance(responses, list) or len(responses) != len(findings)
                     or any(not isinstance(r, dict) or not isinstance(r.get("id"), str) for r in responses)

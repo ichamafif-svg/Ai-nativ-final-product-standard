@@ -19,9 +19,9 @@ from standard.autonomy.agent import Agent, AgentError
 from standard.autonomy.build import Builder
 from standard.autonomy.context import render_context, task_context
 from standard.autonomy.repair import Repairer
-from standard.autonomy.drift_map import gap_dossiers
+from standard.autonomy.context import gap_dossiers
 from standard.autonomy.patrol import patrol_context
-from standard.autonomy.advisory_llm import propose_patrol, propose_reading
+from standard.autonomy.patrol import propose_patrol
 from standard.autonomy.read_model import target_state
 from standard.autonomy.llm import Gate, Provider
 from standard.autonomy.patrol import run_patrol
@@ -309,21 +309,8 @@ class ContextAndRoutes(unittest.TestCase):
         self.assertIn('llm_reading', dossier['methods'])
         self.assertIn('Dossier only', dossier['authority'])
 
-    def test_llm_drift_reading_is_a_proposal_only(self):
-        sent = []
-        class Research_:
-            def dialogue(self, prompt, tree, key):
-                sent.append((prompt, key))
-                return {'hypothesis': 'config drift', 'suggested_files': ['client.py'],
-                        'suggested_fix': 'inspect the failing branch', 'confidence': 'low',
-                        'requires_human': True, 'facts': ['not accepted']}
-        reply = propose_reading({'id': 'client-specific'}, object(), Research_())
-        self.assertEqual(sorted(reply), sorted(['hypothesis', 'suggested_files', 'suggested_fix',
-                                               'confidence', 'requires_human']))
-        self.assertNotIn('facts', reply)
-        self.assertIn('cannot certify evidence', sent[0][0])
 
-    def test_law_patrol_context_carries_full_law_and_weak_spots_without_a_drift_map_requirement(self):
+    def test_patrol_human_context_keeps_full_declarations_and_weak_spots(self):
         view = self.view(self.target())
         context = patrol_context(view, {}, installed_routes(), lambda needs: None)
         self.assertEqual(context['kind'], 'law-patrol')
@@ -336,7 +323,7 @@ class ContextAndRoutes(unittest.TestCase):
     def test_law_patrol_llm_returns_suspicions_only(self):
         sent = []
         class Research_:
-            def dialogue(self, prompt, tree, key):
+            def dialogue(self, prompt, tree, key, **kwargs):
                 sent.append((prompt, key))
                 return {'suspicions': [{'law_ref': 'target:client-specific', 'surface': 'repo:client',
                                         'why': 'custom parser is not covered', 'evidence_seen': ['client.py'],
@@ -344,17 +331,17 @@ class ContextAndRoutes(unittest.TestCase):
                                         'suggested_action': 'add a scanner', 'confidence': 'medium',
                                         'facts': ['not allowed']}],
                         'facts': ['not allowed']}
-        reply = propose_patrol({'focus': None, 'authority': 'Exploratory patrol only.'}, object(), Research_())
+        reply = propose_patrol({'focus': None, 'authority': 'Exploratory patrol only.'}, Snapshot(*store_with(FILES)), Research_())
         self.assertEqual(reply['suspicions'][0]['authority'], 'proposal_only')
         self.assertNotIn('facts', reply['suspicions'][0])
-        self.assertIn('complete rules in force', sent[0][0])
+        self.assertIn('catalog requirements and block contracts', sent[0][0])
 
     def test_agent_patrol_runs_read_only_and_records_its_advisory_result(self):
         root = Path(tempfile.mkdtemp())
         (root / 'store').mkdir()
         calls = []
         class Research_:
-            def dialogue(self, prompt, tree, *, key, allowed_actions):
+            def dialogue(self, prompt, tree, *, key, allowed_actions, context):
                 calls.append((key, allowed_actions))
                 return {'suspicions': [{'law_ref': 'target:client-specific', 'why': 'possible blind spot',
                                         'facts': ['forbidden']}]}
@@ -362,7 +349,7 @@ class ContextAndRoutes(unittest.TestCase):
         cycle = SimpleNamespace(agent=SimpleNamespace(llm=object(), research=Research_(), store=root / 'store'),
                                 service=SimpleNamespace(view=lambda: view, qualify=lambda contracts: None),
                                 _findings=lambda: {}, routes=installed_routes())
-        with patch('standard.autonomy.patrol.Snapshot', return_value=SimpleNamespace(commit='main-head')):
+        with patch('standard.autonomy.patrol.Snapshot', return_value=Snapshot(*store_with(FILES))):
             result = run_patrol(cycle, main=lambda: 'main-head')
         self.assertEqual(calls[0][1], ('read', 'search'))
         self.assertEqual(result['suspicions'][0]['authority'], 'proposal_only')
@@ -397,17 +384,15 @@ class ContextAndRoutes(unittest.TestCase):
             def admit(self, statement): raise AssertionError('a producer never submits')
         class Agent_:
             def craft(self, *args, **kwargs):
-                sent.append(kwargs['law_text'])
+                sent.append(kwargs['context'])
                 return 'head', 'model'
         root = Path(tempfile.mkdtemp())
         view['law']['effective']['settings'] = {'objective': '99.9'}
         repairer = Repairer(Service(), WorkEngine(root / 'work.db'), Agent_(), installed_routes(), clock=lambda: 2,
                             state_path=root / 'proposals.json')
         self.assertEqual(repairer.run(view, 'base')['candidates']['ci'], 'head')
-        packet = json.loads(sent[0])
-        self.assertEqual(packet['schema'], 'standard-agent-context/v1')
-        self.assertIn('client-custom-name', packet['packet']['effective_law']['conditions'])
-        self.assertEqual(packet['packet']['effective_law']['settings']['objective'], '99.9')
+        self.assertIn('client-custom-name', sent[0]['effective_law']['conditions'])
+        self.assertEqual(sent[0]['settings']['objective'], '99.9')
 
     def test_generic_precheck_does_not_claim_an_unmeasured_target_fixed(self):
         store, base = store_with(FILES)
@@ -429,8 +414,66 @@ class ContextAndRoutes(unittest.TestCase):
                                                         'need': 'repair', 'op': 'implement'})
         with patch.object(builder, 'check', return_value=[]):
             builder.craft('r', 'example', b'spec', b'contract', base, {}, context=context)
-        self.assertIn('client-custom-name', sent[0])
+        self.assertIn('standard-agent-context/v2', sent[0])
+        self.assertNotIn('client-custom-name', sent[0])
         self.assertIn('repo:feature:{request}/{base}/{head}', sent[0])
+
+    def test_bounded_context_preserves_full_declarations_and_documents_for_reading(self):
+        from standard.autonomy.context import assemble, write_scope
+        store, base = store_with({"app.py": "x = 1", "unrelated.py": "PRIVATE_UNRELATED_CODE = 1"})
+        view = self.view(self.target())
+        view["law"]["effective"]["conditions"]["large-client-condition"] = {"description": "x" * 60000}
+        context = task_context(view, {"id": "work", "resource": "repo:client:custom", "target": "client-specific", "op": "remediate"})
+        document = "a" * 45000 + "ACCEPTANCE_TAIL"
+        prompt, sources = assemble(context, Snapshot(store, base), role="build", scope=write_scope("repair", "ci"),
+                                   documents={"acceptance": document})
+        self.assertLess(len(prompt), 28000)
+        self.assertNotIn("PRIVATE_UNRELATED_CODE", prompt)
+        self.assertNotIn("large-client-condition", prompt)
+        self.assertIn("law/conditions/large-client-condition", sources)
+        self.assertEqual(sources["document/acceptance"], document)
+        research = Research(None, store.parent / "notes")
+        part = research.act(Snapshot(store, base), {"action": "read", "ref": "document/acceptance", "offset": 40000}, sources)
+        self.assertIn("ACCEPTANCE_TAIL", part["text"])
+        self.assertIsNone(part["next_offset"])
+        self.assertIn("law/conditions/large-client-condition", research.act(Snapshot(store, base),
+                      {"action": "search", "in": "context", "query": "large-client"}, sources)["refs"])
+        with self.assertRaises(ResearchError):
+            research.act(Snapshot(store, base), {"action": "read", "ref": "/etc/passwd"}, sources)
+
+    def test_scoped_patrol_cannot_read_or_search_outside_its_subsystem(self):
+        from standard.autonomy.research import ReadScope
+        store, base = store_with({"app/a.py": "visible = 1", "other/b.py": "OUTSIDE_MARKER = 1"})
+        research = Research(None, store.parent / "notes")
+        tree = ReadScope(Snapshot(store, base), {"app/a.py"})
+        with self.assertRaises(ResearchError):
+            research.act(tree, {"action": "read", "path": "other/b.py"})
+        self.assertEqual(research.act(tree, {"action": "search", "query": "OUTSIDE_MARKER"})["matches"], [])
+        with self.assertRaises(ResearchError):
+            research.act(tree, {"action": "read", "path": "../other/b.py"})
+
+    def test_patrol_uses_whole_product_applicability_and_records_exact_scope(self):
+        store, base = store_with({"app/main.py": "from fastapi import FastAPI\napp = FastAPI()",
+                                 "domain/order.py": "def order(): return 1", "other/private.py": "OUTSIDE_CODE = 1"})
+        sent = []
+        class Research_:
+            def dialogue(self, prompt, tree, **kw):
+                sent.append((prompt, tree.paths(), kw))
+                return {"suspicions": []}
+        view = self.view(self.target())
+        cycle = SimpleNamespace(agent=SimpleNamespace(llm=object(), research=Research_(), store=store),
+                                service=SimpleNamespace(view=lambda: view, qualify=lambda needs: None),
+                                _findings=lambda: {}, routes=installed_routes())
+        record = run_patrol(cycle, main=lambda: base, focus="rules:authorization:domain")
+        self.assertEqual(sent[0][1], {"domain/order.py"})
+        self.assertIn("AUTHZ", sent[0][0])
+        self.assertNotIn("OUTSIDE_CODE", sent[0][0])
+        self.assertEqual(record["scope"]["root"], "domain")
+        self.assertEqual(record["state"], "proposed")
+        self.assertEqual(sent[0][2]["allowed_actions"], ("read", "search"))
+        with self.assertRaises(ValueError):
+            run_patrol(cycle, main=lambda: base, focus="simplicity:../other")
+
 
 
 class ResearchTools(unittest.TestCase):
@@ -559,7 +602,7 @@ class ResearchTools(unittest.TestCase):
         store, base = store_with(FILES)
         gate = Gate({'frontier': Provider('fake', 'anthropic', 'm', 'k')}, store.parent / 'egress.log',
                     transport=lambda p, prompt: json.dumps({'files': {'tools/check.py': 'print(1)'}}))
-        agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']}, funnel=False)
+        agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']}, review_enabled=False)
         check = {'ok': True, 'fixed': None, 'tests': 'green'}
         target = {'id': 'custom', 'resource': 'repo:client:custom', 'property': 'result', 'expect': 'verified'}
         with patch('standard.autonomy.precheck.precheck', return_value=check):

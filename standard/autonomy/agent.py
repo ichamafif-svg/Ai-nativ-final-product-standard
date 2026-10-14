@@ -20,24 +20,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from instruments.probes import SECRETS
 from instruments.tree import Snapshot
 from instruments.data import EMPTY
 from instruments.recipes import recipes_for
 from instruments.scope import relative, repair as in_scope
-from .funnel import Funnel
+from .candidate import CandidateWorkflow
 from .research import Research, ResearchError
 
 MODEL = os.environ.get("STANDARD_AGENT_MODEL", "claude-sonnet-5-5")
-TASKS = {
-    "vulns": "Upgrade the vulnerable pinned dependencies in requirements.txt to the lowest fixed versions; keep exact pins.",
-    "deps-age": "Upgrade the pinned dependencies that are a major version behind, adapting the code if needed.",
-    "licenses": "Replace dependencies whose license is not permissive.",
-    "sast": "Fix the high-severity issues reported by bandit without changing behaviour.",
-    "ci": "Make the failing test suite pass by fixing the code, never by weakening tests.",
-    "actions": "Pin every GitHub Action to a full commit SHA, with the version in a comment.",
-    "secrets": "Remove every hard-coded secret marked <REDACTED>: read it from an environment variable instead.",
-}
 REDACTED = b"<REDACTED>"
 
 
@@ -85,42 +75,10 @@ def commit_files(store, base: str, files: dict, message: str) -> str:
     return head
 
 
-def model_context(tree, limit: int = 120_000, *, redact: bool = False) -> str:
-    from instruments.surfaces import JS, PY, TEMPLATES
-    parts, size, omitted = [], 0, []
-    for path in sorted(tree.paths()):
-        if not path.endswith(PY + JS + TEMPLATES + (".css", ".md", ".txt", ".toml", ".yml", ".yaml", ".json")):
-            continue
-        raw = tree.read(path)
-        if b"\x00" in raw:
-            continue
-        if any(rx.search(raw) for rx in SECRETS):
-            if not redact:
-                continue                                   # a detected secret never leaves
-            for rx in SECRETS:
-                raw = rx.sub(REDACTED, raw)
-        try:
-            text = raw.decode()
-        except UnicodeDecodeError:
-            continue
-        if size + len(text) > limit:
-            omitted.append(path)
-            continue
-        parts.append(f"=== {path} ===\n{text}")
-        size += len(text)
-    return "\n".join(parts) + ("\nContext bound reached; read/search omitted files: " + ", ".join(omitted[:30]) if omitted else "")
-
-
 FRONTIER = ("sast", "ci", "deps-age")                  # judgment-heavy: the frontier tier; the rest: small
-RULES_TASK = ("Bring the failing rules of this category back (each finding names the rule and the check that failed): "
-              "use the building block the rule names (standard_blocks.<block>), never the API it bans; declare what a "
-              "probe needs (an access id per route, Access(...).bind(app), Oidc(...).bind(app), runtime.install(app)). "
-              "Do not weaken or remove a check.")
-
-
 def task_of(target_id: str) -> str | None:
-    """The instruction for a target: a technical measure, or a category of the rule catalog."""
-    return TASKS.get(target_id) or (RULES_TASK if target_id.startswith("rules-") else None)
+    from standard.catalog import instruction
+    return instruction(target_id)
 
 
 def dossier(target: dict, status: str, details: list, files: list, check: dict, title: str, risks: str = "") -> str:
@@ -140,7 +98,7 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
 
 class Agent:
     def __init__(self, store, *, data=EMPTY, api_key: str | None = None, ask=None, publish=None, llm=None,
-                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None, funnel: bool = True,
+                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None, review_enabled: bool = True,
                  review=None, research_steps: int = 8):
         """data: the same pinned snapshot the instruments use, so that recipes reproduce. scopes: the write scopes
         the rules give the client's own targets. llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and
@@ -160,7 +118,7 @@ class Agent:
                for patterns in self.scopes.values()):
             raise AgentError("custom repair scopes must be configured lists of relative path patterns")
         self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources, steps=research_steps)
-        self.funnel, self.last_funnel = (Funnel(**(review or {})) if funnel else None), None
+        self.candidate, self.last_candidate = (CandidateWorkflow(**(review or {})) if review_enabled else None), None
 
     @staticmethod
     def _values(values) -> dict:
@@ -168,14 +126,16 @@ class Agent:
         return values if values is not None else effective(load(), None)
 
     def investigate(self, view, task, base, findings=None, *, model=None):
-        from .context import model_packet, task_context
+        from .context import assemble, task_context
+        context = task_context(view, task, findings, model=model)
         tree = Snapshot(self.store, base)
+        packet, sources = assemble(context, tree, role="investigate")
         prompt = ("Find a way to serve this missing need. Inspect, research, reuse or experiment with a tool. "
                   "Return a summary and proposed tool files if useful, the required independent verification and any "
                   "operator action. Do not claim the requirement is closed or register a new trusted instrument.\n"
-                  + model_packet(task_context(view, task, findings, model=model)))
+                  + packet)
         try:
-            return self.research.dialogue(prompt, tree, key=task["id"])
+            return self.research.dialogue(prompt, tree, key=task["id"], context=sources)
         except ResearchError as exc:
             raise AgentError(str(exc)) from exc
 
@@ -183,16 +143,20 @@ class Agent:
         return commit_files(self.store, base, files, message)
 
     def craft(self, target_id: str, base: str, *, targets: dict | None = None, finding: dict | None = None,
-              lessons: str = "", law_text: str = "", values: dict | None = None) -> tuple[str, str]:
+              lessons: str = "", context=None, values: dict | None = None) -> tuple[str, str]:
         """(head, way): "recipe" when the scanner can reproduce it, "model" when a model wrote it.
         Nothing is proposed that the agent's own precheck rejects: it fixes the target, regresses no other one,
         keeps main's tests green and adds no lint or type error."""
         from .precheck import precheck
-        from .repomap import RepoMap
-        self.last_funnel = None
+        from .context import assemble, write_scope
+        self.last_candidate = None
         targets = targets or {}
         target = targets.get(target_id, {"id": target_id, "resource": target_id, "property": "?", "expect": "?"})
         finding = finding or {"status": "?", "details": []}
+        context = context or {"task": {"id": f"repair:{target_id}", "need": "repair", "target": target_id},
+                              "requirement": target, "findings": finding}
+        scope = write_scope("repair", target_id, self.scopes)
+        focus = [str(d).split(":")[0] for d in finding["details"]]
         tree = Snapshot(self.store, base)
         recipe = recipes_for(self.data).get(target_id)
         files = recipe(tree) if recipe is not None else None
@@ -214,32 +178,31 @@ class Agent:
             instruction = task_of(target_id) or "Serve the client requirement within the write scope the rules give it."
             prompt = (f"Repository maintenance. Target `{target_id}`.\nTask: {instruction}\n"
                       f"Requirement: {target['resource']} must have {target['property']} = {target['expect']}; "
-                      f"the independent instrument reports {finding['status']}.\nWhere:\n{where}\n{law_text}\n"
+                      f"the independent instrument reports {finding['status']}.\nWhere:\n{where}\n"
                       + (f"Earlier attempts that did not pass:\n{lessons}\n" if lessons else "")
                       + (f"Your previous candidate was rejected by your own checks:\n{feedback}\n" if feedback else "")
                       + (f"Release data of the pinned dependencies:\n{upgrades}\n" if upgrades else "")
-                      + f"Repository map:\n{RepoMap(tree).render(focus=[d.split(':')[0] for d in finding['details']])}\n"
-                      f"Return JSON {{\"title\": str, \"files\": {{path: full new content or null to delete}}, \"risks\": str}}, "
-                      f"changing as few files as possible.\n\n"
-                      f"{model_context(tree, redact=target_id == 'secrets')}")
+                      + "Return JSON {\"title\": str, \"files\": {path: full new content or null to delete}, \"risks\": str}, "
+                      "changing as few files as possible.\n")
             tier = "frontier" if target_id in FRONTIER or target_id.startswith("rules-") else "small"
             try:
-                if self.funnel is None:
-                    reply = self.research.dialogue(prompt, tree, tier=tier, key=f"repair:{target_id}")
+                if self.candidate is None:
+                    packet, sources = assemble(context, tree, role="build", scope=scope, focus=focus, values=self._values(values))
+                    reply = self.research.dialogue(prompt + packet, tree, tier=tier, key=f"repair:{target_id}", context=sources)
                 else:                                       # one writer, parallel read-only reviews of the same draft
-                    reply, stats = self.funnel.run(
+                    reply, stats = self.candidate.run(
                         lambda text, role, **kw: self.research.worker(text, role, key=f"repair:{target_id}", tier=tier, **kw),
-                        tree, prompt, values=self._values(values), focus=[d.split(":")[0] for d in finding["details"]],
-                        scope_ok=lambda path: in_scope(target_id, path, self.scopes))
-                    self.last_funnel = stats
+                        tree, prompt, values=self._values(values), focus=focus,
+                        scope_ok=lambda path: in_scope(target_id, path, self.scopes), context=context, scope=scope)
+                    self.last_candidate = stats
                     if stats["remaining"]:
                         feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
                         continue
             except ResearchError as exc:
-                self.last_funnel = self.funnel.last_stats if self.funnel else None
+                self.last_candidate = self.candidate.last_stats if self.candidate else None
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
-                self.last_funnel = self.funnel.last_stats if self.funnel else None
+                self.last_candidate = self.candidate.last_stats if self.candidate else None
                 raise AgentError(f"the repair of {target_id}: {exc}") from exc
             files = reply.get("files")
             if not isinstance(files, dict) or not files or not all(in_scope(target_id, p, self.scopes) and (c is None or isinstance(c, str))

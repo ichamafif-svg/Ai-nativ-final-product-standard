@@ -1,0 +1,218 @@
+# Product requirements of this release. Compiled into law; never agent-editable policy.
+# Runtime models, budgets and schedules do not belong here.
+
+[[target]]
+id = "inventory"
+kind = "coverage"
+resource = "repo:inventory:all"
+property = "coverage"
+expect = "complete"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 86400000
+owner = "@owner"
+sources = ["@inventory_source"]
+repair = "inventory-refresh"
+
+[[target]]
+id = "run-sources"
+kind = "coverage"
+resource = "run:sources:all"
+property = "coverage"
+expect = "complete"
+min_level = "real"
+fresh_ms = 900000
+due_ms = 3600000
+owner = "@owner"
+sources = ["@scanner"]
+human = true
+
+[[target]]
+id = "run-slo"
+kind = "property"
+coverage = "run-sources"
+resource = "run:service:all"
+property = "slo"
+expect = "met"
+min_level = "real"
+fresh_ms = 900000
+due_ms = 1800000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "rollback"
+
+[[target]]
+id = "run-live"
+kind = "property"
+coverage = "run-sources"
+resource = "run:release:all"
+property = "lag"
+expect = "none"
+min_level = "real"
+fresh_ms = 900000
+due_ms = 86400000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "deploy"
+
+[[target]]
+id = "vulns"
+kind = "property"
+coverage = "inventory"
+resource = "repo:deps:vulns"
+property = "high"
+expect = "none"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 604800000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Upgrade the vulnerable pinned dependencies in requirements.txt to the lowest fixed versions; keep exact pins."
+
+[[target]]
+id = "deps-age"
+kind = "property"
+coverage = "inventory"
+resource = "repo:deps:age"
+property = "major_behind"
+expect = "none"
+min_level = "real"
+fresh_ms = 604800000
+due_ms = 2592000000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Upgrade the pinned dependencies that are a major version behind, adapting the code if needed."
+
+[[target]]
+id = "licenses"
+kind = "property"
+coverage = "inventory"
+resource = "repo:deps:licenses"
+property = "policy"
+expect = "compliant"
+min_level = "real"
+fresh_ms = 604800000
+due_ms = 2592000000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Replace dependencies whose license is not permissive."
+
+[[target]]
+id = "secrets"
+kind = "property"
+coverage = "inventory"
+resource = "repo:code:secrets"
+property = "leaks"
+expect = "none"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 86400000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Remove every hard-coded secret marked <REDACTED>: read it from an environment variable instead."
+
+[[target]]
+id = "sast"
+kind = "property"
+coverage = "inventory"
+resource = "repo:code:sast"
+property = "high"
+expect = "none"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 2592000000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Fix the high-severity issues reported by bandit without changing behaviour."
+
+[[target]]
+id = "ci"
+kind = "property"
+coverage = "inventory"
+resource = "repo:ci:main"
+property = "status"
+expect = "green"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 172800000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Make the failing test suite pass by fixing the code, never by weakening tests."
+
+[[target]]
+id = "actions"
+kind = "property"
+coverage = "inventory"
+resource = "repo:ci:actions"
+property = "pinned"
+expect = "all"
+min_level = "real"
+fresh_ms = 604800000
+due_ms = 2592000000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Pin every GitHub Action to a full commit SHA, with the version in a comment."
+
+[[target]]
+id = "sbom"
+kind = "property"
+coverage = "inventory"
+resource = "repo:supply:sbom"
+property = "state"
+expect = "current"
+min_level = "real"
+fresh_ms = 604800000
+due_ms = 604800000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+
+[[target]]
+id = "rules-{category}"
+kind = "property"
+coverage = "inventory"
+resource = "repo:rules:{category}"
+property = "failing"
+expect = "none"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 2592000000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "Bring the failing rules of this category back (each finding names the rule and the check that failed): use the stack implementation of the block each rule names, preserve its guarantees and never use its banned APIs; wire the probes, access declarations and application bindings its contract requires. Do not weaken or remove a check."
+
+[[target]]
+id = "branch"
+kind = "property"
+coverage = "inventory"
+resource = "repo:settings:main"
+property = "protection"
+expect = "guard-only"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 604800000
+owner = "@owner"
+sources = ["@scanner"]
+human = true
+
+[[target]]
+id = "lineage"
+kind = "property"
+coverage = "inventory"
+resource = "repo:main:lineage"
+property = "unjudged"
+expect = "none"
+min_level = "real"
+fresh_ms = 86400000
+due_ms = 86400000
+owner = "@owner"
+sources = ["@scanner"]
+human = true

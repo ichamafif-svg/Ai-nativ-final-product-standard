@@ -24,29 +24,12 @@ from standard.catalog import CatalogError, check_value, effective, load as load_
 from standard.floors import FLOORS
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-# key -> (type, bounds or choices). The kernel adds its own floor for the settings a route compares with.
-SCHEMA = {
-    "objective": ("num", (50.0, 99.999)), "failing": ("num", (0.1, 50.0)), "p99_ms": ("num", (1.0, 60_000.0)),
-    "window_s": ("int", (60, 3600)), "late_periods": ("int", (1, 10)),
-    "burn_fast": ("num", (1.0, 100.0)), "burn_slow": ("num", (1.0, 100.0)),
-    "rollback_horizon_min": ("int", (1, 240)), "rollback_migrations": ("int", (0, 1000)),
-    "restarts_per_hour": ("int", (0, 11)), "freeze_below": ("num", (0.0, 100.0)),
-    "deploy_days": ("days", None), "deploy_hours": ("hours", None), "deploy_tz": ("tz", None),
-    "canary_percent": ("int", (1, 50)), "canary_bake_min": ("int", (1, 240)),
-    "canary_max_error_delta": ("num", (0.0, 10.0)), "canary_min_requests": ("int", (10, 100_000)),
-    "base_url": ("url", None),
-}
-SECTIONS = {"components": {"objective", "p99_ms", "counted"}, "probes": {"spec"},
-            "slos": {"name", "sli", "threshold_ms", "target", "window_d", "selector", "state"},
-            "silences": {"target_of", "until", "reason"}}
-FIELD = {"counted": ("toggle", None), "spec": ("spec", None), "name": ("text", None),
-         "sli": ("choice", ("availability", "latency")), "threshold_ms": ("num", (1.0, 60_000.0)),
-         "target": ("num", (50.0, 99.999)), "window_d": ("int", (1, 90)), "selector": ("selector", None),
-         "state": ("toggle", None), "target_of": ("text", None), "until": ("int", (0, 10 ** 14)),
-         "reason": ("text", None), "objective": ("num", (50.0, 99.999)), "p99_ms": ("num", (1.0, 60_000.0))}
-SCOPE_ID = {"components": r"c-[0-9a-f]{12}", "probes": r"p-[a-z0-9]{1,16}", "slos": r"s-[a-z0-9]{1,16}",
-            "silences": r"m-[a-z0-9]{1,16}"}
-
+# Editor projections of the catalog's signed policy schema. Runtime agent configuration is separate.
+_policy = load_catalog()["policy"]
+SCHEMA = {name: (spec["type"], spec.get("bounds")) for name, spec in _policy["parameter"].items()}
+FIELD = {name: (spec["type"], spec.get("bounds")) for name, spec in _policy["field"].items()}
+SECTIONS = {name: set(spec["fields"]) for name, spec in _policy["section"].items()}
+SCOPE_ID = {name: spec["id"] for name, spec in _policy["section"].items()}
 
 class RulesError(ValueError):
     pass
@@ -104,7 +87,7 @@ def parse(kind: str, spec, key: str, value):
         number = float(value)
     except ValueError:
         raise RulesError(f"{key} is a number") from None
-    low, high = spec
+    low, high = (float(v) for v in spec)
     if not low <= number <= high:
         raise RulesError(f"{key} is between {low} and {high}")
     return int(number) if kind == "int" else (str(int(number)) if number == int(number) else value)

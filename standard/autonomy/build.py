@@ -25,8 +25,8 @@ from bt.signing import Signer, envelope
 
 from instruments.scope import feature
 
-from .agent import AgentError, commit_files, model_context
-from .context import task_context, model_packet
+from .agent import AgentError, commit_files
+from .context import assemble, task_context, write_scope
 from .moves import judge
 from .read_model import ReadModel
 from .research import Research, ResearchError
@@ -40,7 +40,7 @@ class Builder:
 
     def __init__(self, service, signer: Signer, grant: str, store, requests, *, clock, notes, llm=None,
                  sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None,
-                 funnel: bool = True, review=None, research_steps: int = 8):
+                 review_enabled: bool = True, review=None, research_steps: int = 8):
         """grant: the agent's capability. store: the agent's proposals store. requests: the request store (contracts
         and specs by digest)."""
         from instruments.data import EMPTY
@@ -52,8 +52,8 @@ class Builder:
             cache_roots=(self.store.parent / "venvs",)), data or EMPTY
         self.iterations, self.backoff_ms = iterations, backoff_ms
         self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources, steps=research_steps)
-        from .funnel import Funnel
-        self.funnel, self.last_funnel = (Funnel(**(review or {})) if funnel else None), None
+        from .candidate import CandidateWorkflow
+        self.candidate, self.last_candidate = (CandidateWorkflow(**(review or {})) if review_enabled else None), None
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
     def check(self, base: str, head: str, rid: str, targets: dict) -> list:
@@ -90,41 +90,43 @@ class Builder:
     # ---- crafting -------------------------------------------------------------------------------------------------
     def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None,
               values: dict | None = None) -> str:
-        self.last_funnel = None
+        self.last_candidate = None
         if self.llm is None:
             raise AgentError("no model is configured: a contributor may implement it (trailer Standard-Request)")
-        from .repomap import RepoMap
         tree, feedback = Snapshot(self.store, base), ""
+        context = context or {"task": {"id": f"request:{rid}", "need": "implement", "resource": f"build:request/{rid}"}}
+        scope = write_scope("build", rid)
+        documents = {"specification": spec.decode(errors="replace"), "acceptance": contract.decode(errors="replace")}
         for _ in range(self.iterations):
             prompt = (f"Implement a feature request in this repository.\nRequest {rid}: {title}\n\n"
-                      f"Specification:\n{spec.decode(errors='replace')[:8000]}\n\n"
+                      f"Specification preview (read full ref=document/specification):\n{documents['specification'][:1200]}\n\n"
                       f"Its acceptance tests, signed by the product owner (they will be added as "
                       f"{contract_path(rid)}; you may not change them, nor any other test):\n"
-                      f"{contract.decode(errors='replace')[:8000]}\n\n"
-                      + (model_packet(context) + "\n" if context is not None else "")
+                      f"Acceptance preview (read full ref=document/acceptance):\n{documents['acceptance'][:1200]}\n\n"
                       + (f"Your previous candidate did not pass:\n{feedback}\n\n" if feedback else "")
-                      + f"Repository map:\n{RepoMap(tree).render()}\n\n"
-                      f"Return JSON {{\"title\": str, \"files\": {{path: full new content or null to delete}}, \"risks\": str}}: "
-                      f"source files only, never under tests/, as few as possible.\n\n{model_context(tree)}")
+                      + "Read the complete specification and acceptance contract before implementing or reviewing. "
+                      "Return JSON {\"title\": str, \"files\": {path: full new content or null to delete}, \"risks\": str}: "
+                      "source files only, never under tests/, as few as possible.\n")
             try:
-                if self.funnel is None:
-                    reply = self.research.dialogue(prompt, tree, key=f"request:{rid}")
+                if self.candidate is None:
+                    packet, sources = assemble(context, tree, role="build", scope=scope, documents=documents, values=values)
+                    reply = self.research.dialogue(prompt + packet, tree, key=f"request:{rid}", context=sources)
                 else:                                       # one writer, parallel reviews, bounded corrections
                     from standard.catalog import effective, load
-                    reply, stats = self.funnel.run(
+                    reply, stats = self.candidate.run(
                         lambda text, role, **kw: self.research.worker(text, role, key=f"request:{rid}", **kw),
                         tree, prompt, values=values if values is not None else effective(load(), None),
-                        scope_ok=lambda path: in_scope(rid, path), wide_touched=("surface:endpoint",),
+                        scope_ok=lambda path: in_scope(rid, path), context=context, scope=scope, documents=documents,
                         fixed_files={contract_path(rid): contract})
-                    self.last_funnel = stats
+                    self.last_candidate = stats
                     if stats["remaining"]:
                         feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
                         continue
             except ResearchError as exc:
-                self.last_funnel = self.funnel.last_stats if self.funnel else None
+                self.last_candidate = self.candidate.last_stats if self.candidate else None
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
-                self.last_funnel = self.funnel.last_stats if self.funnel else None
+                self.last_candidate = self.candidate.last_stats if self.candidate else None
                 raise AgentError(f"the implementation: {exc}") from exc
             files = reply.get("files")
             if not isinstance(files, dict) or not files or not all(in_scope(rid, p) and (c is None or isinstance(c, str))
@@ -138,9 +140,9 @@ class Builder:
                        f"floor target regressed. The independent instruments measure it again.\n"
                        + (f"\nRisks: {str(reply.get('risks', ''))[:1500]}\n" if reply.get("risks") else "")
                        + f"\nStandard-Request: {rid}\n")
-            if self.last_funnel:
-                from .funnel import record
-                message += "\nAdvisory workflow: " + record(self.last_funnel) + "\n"
+            if self.last_candidate:
+                from .candidate import record
+                message += "\nAdvisory workflow: " + record(self.last_candidate) + "\n"
             head = commit_files(self.store, base, blobs, message)
             problems = self.check(base, head, rid, targets)
             if not problems:
@@ -198,9 +200,9 @@ class Builder:
                                 values=self._values(view)), state="proposed")
                 except AgentError as exc:
                     note.update(base=base, head=None, state=f"waiting: {exc}", next_at=now + 10 * self.backoff_ms)
-                if self.last_funnel:
-                    from .funnel import record
-                    note["workflow"] = record(self.last_funnel)
+                if self.last_candidate:
+                    from .candidate import record
+                    note["workflow"] = record(self.last_candidate)
             report[rid] = note.get("state")
         self.notes.write_text(json.dumps(notes, indent=2, sort_keys=True))
         return report

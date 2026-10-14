@@ -13,20 +13,6 @@ const OPS = {
   restart: ["Redémarrer sans coupure", { failing: "si trop de requêtes échouent", burn: "si le budget brûle vite" }],
   abort: ["Retirer un canari", { auto: "toujours possible : retirer un canari est sûr" }],
 };
-const THRESHOLDS = {
-  burn_fast: ["Brûlure rapide", "multiple du rythme du budget, pour agir seul"], failing: ["Échecs", "% de requêtes en échec, pour agir seul"],
-  rollback_horizon_min: ["Horizon de retour", "minutes après la bascule"], rollback_migrations: ["Migrations traversées", "au plus, pour revenir seul (0 : jamais)"],
-  restarts_per_hour: ["Redémarrages", "déjà faits dans l'heure, au plus"], freeze_below: ["Gel sous budget", "% de budget restant en dessous duquel on ne déploie plus seul"],
-  canary_max_error_delta: ["Écart du canari", "points d'erreurs de plus que la version en place, au plus"],
-  canary_min_requests: ["Requêtes du canari", "au moins, avant de promouvoir"], canary_bake_min: ["Cuisson du canari", "minutes, au moins"],
-};
-const PRODUCTION = {
-  objective: ["Objectif de disponibilité", "%"], p99_ms: ["Latence p99", "ms"], window_s: ["Fenêtre de jugement", "s"],
-  late_periods: ["Tâche planifiée en retard", "périodes"], burn_slow: ["Brûlure lente (ticket)", "×"],
-  deploy_days: ["Jours de mise en production", "mon,tue,…"], deploy_hours: ["Heures", "HH-HH"], deploy_tz: ["Fuseau", "ex. Europe/Paris"],
-  canary_percent: ["Part du trafic du canari", "%"], base_url: ["URL du produit (sondes)", "https://…"],
-};
-
 export function createRules({ $, esc, fact, ago, getSigner, envelope }) {
   let data = null;
 
@@ -92,16 +78,13 @@ export function createRules({ $, esc, fact, ago, getSigner, envelope }) {
       <p id="rulesmsg" class="small quiet"></p>
       <section><h2>Qui joue quoi</h2><p class="small quiet">Coché : l'agent joue seul quand les faits du scanner tiennent. Décoché : le coup t'attend dans Décisions. Ta décision reste toujours possible.</p>
         <div class="rows">${moves}</div></section>
-      <section><h2>Seuils des routes</h2><div class="panel sets">${Object.entries(THRESHOLDS).map(([k, v]) => input(k, v, R.bounds[k])).join("")}</div></section>
-      <section><h2>Production</h2><div class="panel sets">${Object.entries(PRODUCTION).map(([k, v]) => input(k, v)).join("")}</div></section>
+      <section><h2>Seuils des routes</h2><div class="panel sets">${Object.entries(R.policy.parameter).filter(([, v]) => v.group === "threshold").map(([k, v]) => input(k, [v.label, v.help], R.bounds[k])).join("")}</div></section>
+      <section><h2>Production</h2><div class="panel sets">${Object.entries(R.policy.parameter).filter(([, v]) => v.group === "production").map(([k, v]) => input(k, [v.label, v.help])).join("")}</div></section>
       <section><h2>Valeurs nommées <span class="quiet small">${Object.keys(R.values).length}</span></h2>
         <p class="small quiet">Chaque mot vague des règles de sécurité (sensible, critique, de confiance…) est une valeur ici. Non fixée, elle prend sa valeur stricte par défaut : refuser, la plus petite limite, la durée la plus courte. L'agent peut la proposer, seule ta signature la met en vigueur.</p>
         <div class="panel sets">${Object.entries(R.values).map(([k, v]) => `<div class="set"><div class="sl"><b>@${esc(k)}</b><span class="small quiet">${esc(v.doc)}${v.rules.length ? ` · règles : ${esc(v.rules.join(", "))}` : ""}${v.chosen ? "" : " · valeur par défaut"}</span></div>
           <div class="sv"><input type="text" data-value="${esc(k)}" value='${esc(v.current === undefined || v.current === null ? "" : JSON.stringify(v.current))}' placeholder="non fixée : règle non couverte" ${dis}><button class="btn tiny" data-savevalue="${esc(k)}" ${dis}>Signer</button></div></div>`).join("")}</div></section>
-      ${sections("slos", ["name", "sli", "target", "window_d", "threshold_ms", "selector", "state"], "SLO")}
-      ${sections("components", ["objective", "p99_ms", "counted"], "Composants")}
-      ${sections("probes", ["spec"], "Sondes")}
-      ${sections("silences", ["target_of", "until", "reason"], "Silences")}
+      ${Object.entries(R.policy.section).map(([name, spec]) => sections(name, spec.fields, spec.label)).join("")}
       <section class="cols"><div class="panel"><h2>Historique</h2><div class="rows">${R.history.map((h) => `<div class="rowi"><div class="main">${h.kind === "genesis" ? "Règles initiales" : "Règles changées"}
           <div class="facts">${fact(`par ${h.author}`, "")}${fact(ago(h.at), "")}</div></div></div>`).join("")}</div></div></section>`;
     const msg = $("#rulesmsg");

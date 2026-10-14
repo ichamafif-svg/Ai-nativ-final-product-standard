@@ -6,7 +6,7 @@ one capability, and never closes a debt.
 """
 from .agent import Agent, AgentError
 from .build import Builder
-from .drift_map import gap_dossiers
+from .context import gap_dossiers
 from .loop import Loop
 from .moves import judge, moves, queue
 from .patrol import patrol_context

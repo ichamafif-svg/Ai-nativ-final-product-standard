@@ -93,7 +93,7 @@ class Detection(unittest.TestCase):
         head = Tree({"app/main.py": "import re\nre.compile(user)\n", "app/other.py": "import pickle\npickle.loads(b'')\n"})
         self.assertEqual(surfaces.touched(base, head), ["construct:regex"])
         cat = load()
-        fine = [r["id"] for r in select(cat, ["api", "lang:python"], surfaces.touched(base, head), "fine")]
+        fine = [r["id"] for r in select(cat, ["api", "lang:python"], surfaces.touched(base, head))]
         self.assertEqual(fine, ["REDOS", "REGEX-ESCAPE"])
 
     def test_an_express_server_is_read_like_a_fastapi_one(self):

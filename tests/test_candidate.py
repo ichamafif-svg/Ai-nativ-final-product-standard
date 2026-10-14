@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from standard.autonomy.funnel import JUDGED, Funnel, Overlay, explain, record  # noqa: E402
+from standard.autonomy.candidate import JUDGED, CandidateWorkflow, Overlay, explain, record  # noqa: E402
 from standard.catalog import effective, load  # noqa: E402
 
 
@@ -40,7 +40,7 @@ class Passes(unittest.TestCase):
             with self.assertRaises(TypeError):
                 tree.files["changed.py"] = b"no"
             return {"findings": []}
-        result, stats = Funnel().run(ask, BASE, "Add an export.", values={}, scope_ok=lambda p: p.startswith("shop/"))
+        result, stats = CandidateWorkflow().run(ask, BASE, "Add an export.", values={}, scope_ok=lambda p: p.startswith("shop/"))
         self.assertEqual({r for r, _, _ in seen}, {"build", "correctness", "simplicity"})
         reviews = [(digest, ro) for role, digest, ro in seen if role != "build"]
         self.assertEqual(reviews[0], reviews[1])
@@ -63,7 +63,7 @@ class Passes(unittest.TestCase):
                 return {"findings": [{"path": "shop/export.py", "issue": "shell injection", "effect": "executes input",
                                       "suggestion": "use the process block"}]}
             return {"findings": []}
-        result, stats = Funnel().run(ask, BASE, "Export.", values={}, scope_ok=lambda p: True)
+        result, stats = CandidateWorkflow().run(ask, BASE, "Export.", values={}, scope_ok=lambda p: True)
         self.assertEqual(len(stats["rounds"]), 2)
         self.assertNotEqual(stats["rounds"][0]["candidate"], stats["rounds"][1]["candidate"])
         self.assertEqual(stats["remaining"], [])
@@ -71,7 +71,7 @@ class Passes(unittest.TestCase):
         self.assertTrue(all("INJ-CMD" in text for role, _, text in seen if role in ("correctness", "simplicity")))
 
     def test_a_review_is_not_an_edit_or_authority_and_failure_is_visible(self):
-        flow = Funnel()
+        flow = CandidateWorkflow()
         def ask(text, role, **kw):
             return {"files": {"shop/a.py": "x = 1"}} if role == "build" else {"allowed": True, "files": {}}
         with self.assertRaisesRegex(ValueError, "REVIEW_UNAVAILABLE"):
@@ -81,7 +81,7 @@ class Passes(unittest.TestCase):
     def test_no_effect_out_of_scope_and_missing_deletions_are_refused(self):
         for files in ({"tests/x.py": ""}, {"shop/absent.py": None}, {"../x.py": ""}, {}):
             with self.assertRaises(ValueError):
-                Funnel().run(lambda *a, **k: {"files": files}, BASE, "Task", values={},
+                CandidateWorkflow().run(lambda *a, **k: {"files": files}, BASE, "Task", values={},
                              scope_ok=lambda p: not p.startswith("tests/"))
         overlay = Overlay(BASE, {"shop/util.py": None, "a.ts": "export const x = 1"})
         self.assertNotIn("shop/util.py", overlay.paths())
@@ -92,7 +92,7 @@ class Passes(unittest.TestCase):
     def test_a_refusal_is_explained_with_the_text_seen_before_coding(self):
         text = explain(["shop/x.py:3:call:hashlib.md5", "rules-authorization: AUTHZ: probe:access-matrix fail"])
         self.assertIn("block crypto", text)
-        self.assertIn("AUTHZ  [wide", text)
+        self.assertIn("AUTHZ  [verify", text)
         self.assertIn("allow(id)", text)
 
     def test_reasoned_disagreement_is_recorded_without_a_reviewer_veto(self):
@@ -102,7 +102,7 @@ class Passes(unittest.TestCase):
                 {"id": "simplicity:0", "decision": "declined", "reason": "the public contract requires this state"}]}
             return {"findings": [{"path": "shop/a.py", "issue": "extra state", "effect": "more concepts",
                                   "suggestion": "remove it"}]} if role == "simplicity" else {"findings": []}
-        result, stats = Funnel().run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
+        result, stats = CandidateWorkflow().run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
         self.assertEqual(result["files"], {"shop/a.py": "x = 1"})
         self.assertEqual(stats["rounds"][0]["responses"][0]["decision"], "declined")
 
@@ -114,16 +114,17 @@ class Passes(unittest.TestCase):
             return {"findings": [{"path": "shop/a.py", "issue": "wrong value", "effect": "wrong result",
                                   "suggestion": "use 2"}]} if role == "correctness" else {"findings": []}
         with self.assertRaisesRegex(ValueError, "budget exhausted"):
-            Funnel(rounds=1).run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
+            CandidateWorkflow(rounds=1).run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
 
-    def test_dependency_design_is_examined_before_the_writer(self):
+    def test_dependencies_use_the_same_constructor_and_reviewers(self):
         seen = []
         base = Tree({"requirements.txt": "packaging==24.1"})
         def ask(text, role, **kw):
             seen.append(role)
             return {"files": {"requirements.txt": "packaging==24.2"}} if role == "build" else {"findings": []}
-        Funnel().run(ask, base, "Upgrade", values={}, scope_ok=lambda p: True, focus=["requirements.txt"])
-        self.assertEqual(seen[:2], ["design", "build"])
+        CandidateWorkflow().run(ask, base, "Upgrade", values={}, scope_ok=lambda p: True, focus=["requirements.txt"])
+        self.assertEqual(seen[0], "build")
+        self.assertEqual(set(seen), {"build", "correctness", "simplicity"})
 
     def test_accepted_contract_is_in_the_shared_draft_but_cannot_be_edited(self):
         path = "tests/acceptance/test_r.py"
@@ -132,11 +133,11 @@ class Passes(unittest.TestCase):
                 return {"files": {"shop/a.py": "x = 1"}}
             self.assertEqual(tree.read(path), b"assert True")
             return {"action": "finish", "findings": []}
-        result, _ = Funnel().run(ask, BASE, "Task", values={}, scope_ok=lambda p: True,
+        result, _ = CandidateWorkflow().run(ask, BASE, "Task", values={}, scope_ok=lambda p: True,
                                 fixed_files={path: b"assert True"})
         self.assertNotIn(path, result["files"])
         with self.assertRaises(ValueError):
-            Funnel().run(lambda *a, **kw: {"files": {path: None}}, BASE, "Task", values={},
+            CandidateWorkflow().run(lambda *a, **kw: {"files": {path: None}}, BASE, "Task", values={},
                          scope_ok=lambda p: True, fixed_files={path: b"assert True"})
 
     def test_a_new_feature_is_included_in_the_review_rules(self):
@@ -146,12 +147,12 @@ class Passes(unittest.TestCase):
             if role == "build": return {"files": {"app.py": source}}
             self.assertIn("UPLOAD-LIMITS", text)
             return {"findings": []}
-        Funnel().run(ask, Tree({}), "Task", values={}, scope_ok=lambda p: True)
+        CandidateWorkflow().run(ask, Tree({}), "Task", values={}, scope_ok=lambda p: True)
 
     def test_review_timeout_is_visible_and_cannot_return_a_candidate(self):
         import threading
         release = threading.Event()
-        flow = Funnel(timeout_s=1)
+        flow = CandidateWorkflow(timeout_s=1)
         def ask(text, role, **kw):
             if role == "build": return {"files": {"shop/a.py": "x = 1"}}
             release.wait(timeout=3)
@@ -162,6 +163,26 @@ class Passes(unittest.TestCase):
         finally:
             release.set()
         self.assertIn("TimeoutError", flow.last_stats["error"])
+
+    def test_all_roles_share_catalog_contracts_and_pinned_readable_context(self):
+        import json
+        from standard.catalog import definition, targets
+        target = next(t for t in targets() if t["id"] == "rules-authorization")
+        ctx = {"basis": {"head": "journal"}, "law_digest": "law", "requirement": target,
+               "definition": definition(target), "effective_law": {"conditions": {"client-only": {"all": []}}}}
+        seen = []
+        def ask(text, role, *, tree, read_only, context, deadline=None):
+            packet = json.loads(text.split("Mission context:\n", 1)[1])["packet"]
+            seen.append((role, packet))
+            self.assertIn("AUTHZ", packet["rule_ids"])
+            self.assertIn("access-matrix", packet["technical"])
+            self.assertIn("law/conditions/client-only", context)
+            self.assertEqual(packet["basis"]["catalog"], load()["digest"])
+            return {"files": {"shop/x.py": "x = 1"}} if role == "build" else {"findings": []}
+        CandidateWorkflow().run(ask, BASE, "Task", values=effective(load(), None), scope_ok=lambda p: True, context=ctx)
+        self.assertEqual([role for role, _ in seen], ["build", "correctness", "simplicity"])
+        self.assertEqual(seen[1][1]["basis"], seen[2][1]["basis"])
+
 
 
 class Patrol(unittest.TestCase):
@@ -303,10 +324,10 @@ class CandidateChanges(unittest.TestCase):
 
     def test_nextjs_sources_are_visible_and_writable_without_opening_reserved_paths(self):
         from instruments.scope import feature, repair
-        from standard.autonomy.agent import model_context
+        from standard.autonomy.context import assemble
         from standard.autonomy.repomap import RepoMap
         tree = Tree({"app/(shop)/orders/[id]/route.ts": "export const GET = access.route('orders.read', f);"})
-        self.assertIn("export const GET", model_context(tree))
+        self.assertIn("export const GET", assemble({}, tree, role="build", focus=list(tree.paths()))[0])
         self.assertIn("endpoint GET /orders/:id", RepoMap(tree).render())
         for path in tree.paths():
             self.assertTrue(feature("r1", path))

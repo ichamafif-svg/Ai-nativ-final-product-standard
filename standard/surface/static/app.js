@@ -604,6 +604,7 @@ async function loadCoverage() {
         ${c.status ? fact(c.status === "none" ? "tenue" : c.status, c.status === "none" ? "ok" : "bad") : fact("pas encore mesurée", "wait")}${c.due ? fact(`échéance ${due(c.due)}`, "wait") : ""}</summary>
       <div class="rows">${c.rules.map((r) => `<div class="rowi"><div class="main"><b>${esc(r.id)}</b> <span class="small">${esc(r.do)}</span>
         <div class="facts">${fact(...STATE[r.state] || [r.state, ""])}${fact(`vérifiée par ${r.who.map((w) => WHO[w] || w).join(" + ")}`, "")}${r.block ? fact(`bloc ${r.block}`, "") : ""}</div></div></div>`).join("")}</div>
+      <details><summary class="small">Exigences, blocs et vérification</summary><pre class="small">${esc(c.contract)}</pre></details>
       ${c.why.length ? `<details><summary class="small">Pourquoi</summary><pre class="small">${esc(c.why.join("\n"))}</pre></details>` : ""}</details>`).join("")}`;
   const btn = $("#signaccess");
   if (btn) btn.onclick = () => {

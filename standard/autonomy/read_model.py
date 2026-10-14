@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 
+from standard.catalog import definition
 from instruments.data import EMPTY
 from instruments.recipes import recipes_for
 from kernel.floor0 import FLOOR0, floor0_digest
@@ -180,7 +181,7 @@ class ReadModel:
             rows.append({"target": target, "finding": finding, "debt": debt.get(target["id"], []),
                          "proof": proof.get(target["id"]),
                          "facts": facts.get((target["resource"], target["property"]), []),
-                         "measurement": measure, "locations": locations(finding.get("details", [])),
+                         "definition": definition(target), "measurement": measure, "locations": locations(finding.get("details", [])),
                          "role": work_role(target, self.law), "state": status,
                          "diagnostic_conflict": conflict, "diagnostic_alignment": aligned})
         self._targets = rows

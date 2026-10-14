@@ -1,5 +1,5 @@
 """The Next.js stack (blocks/js/nextjs, D59): the blocks hold their contract (node tests); the scanner reads Next entry
-points from where files live; adoption is owed per stack, only for blocks that stack has; the funnel shows the use
+points from where files live; adoption is owed per stack, only for blocks that stack has; the candidate workflow shows the use
 for the product's stack; Standard's probes judge a running Next app over HTTP."""
 import json
 import shutil
@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from instruments import coverage, surfaces  # noqa: E402
 from instruments.bans import violations  # noqa: E402
-from standard.autonomy.funnel import brief, explain  # noqa: E402
+from standard.autonomy.candidate import brief, explain  # noqa: E402
 from standard.catalog import effective, implementation, load  # noqa: E402
 
 NODE = shutil.which("node") is not None
@@ -144,15 +144,17 @@ class Adoption(unittest.TestCase):
         failing = {r for r, s in bad.items() if s["checks"].get("blocks", [""])[0] == "fail"}
         self.assertTrue(failing, "a banned API around a rule fails it")
 
-    def test_the_funnel_shows_the_use_for_the_product_stack(self):
+    def test_the_candidate_workflow_shows_the_use_for_the_product_stack(self):
         rules = [r for r in self.cat["rules"] if r["block"] in ("web", "session")][:3]
         text = brief(rules, self.values, Tree(GOOD), self.cat)
-        self.assertIn("(nextjs) ", text)
-        self.assertNotIn("(fastapi) ", text)
-        self.assertIn("middleware.js", text)                                   # the house example, from JS files
+        self.assertIn("nextjs: ", text)
+        self.assertNotIn("fastapi: ", text)
+        self.assertIn("@standard/blocks/web", text)
+        self.assertIn("guard(values, NextResponse)", text)
+        self.assertIn("probes headers", text)
         why = explain(["app/orders/route.js:2:js-import:jsonwebtoken"], self.values, self.cat)
         self.assertIn("block session", why)
-        self.assertIn("(nextjs) ", why)
+        self.assertIn("nextjs: ", why)
 
 
 SERVER = r'''

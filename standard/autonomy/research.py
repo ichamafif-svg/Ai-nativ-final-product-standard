@@ -14,12 +14,29 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from types import MappingProxyType
 
 from .sandbox import Result, Sandbox
 
 
 class ResearchError(ValueError):
     pass
+
+
+class ReadScope:
+    """One exploration's file boundary, shared by read, search and repository context."""
+    def __init__(self, base, paths):
+        allowed = set(paths)
+        self.base, self.commit = base, base.commit
+        self.entries = MappingProxyType({p: entry for p, entry in base.entries.items() if p in allowed})
+
+    def paths(self):
+        return set(self.entries)
+
+    def read(self, path):
+        if path not in self.entries:
+            raise ResearchError("file outside exploration scope")
+        return self.base.read(path)
 
 
 def relative_path(path) -> bool:
@@ -64,7 +81,9 @@ class Research:
     def read(self, tree, path, limit=1000000):
         if not relative_path(path) or path not in tree.paths() or tree.entries[path][0] == "120000":
             raise ResearchError("read must name a regular tracked file of this snapshot")
-        from .funnel import Overlay
+        if isinstance(tree, ReadScope):
+            return self.read(tree.base, path, limit)
+        from .candidate import Overlay
         if isinstance(tree, Overlay):
             if path not in tree.files:
                 return self.read(tree.base, path, limit)
@@ -111,14 +130,32 @@ class Research:
                 dest.write_text(content)
             return box.run(["/usr/bin/python3", "-I", script], root, writable=(root,))
 
-    def act(self, tree, reply):
+    def act(self, tree, reply, context=None):
         action = reply.get("action")
         if action == "read":
-            return self.read(tree, reply.get("path")).decode(errors="replace")[:20000]
+            ref = reply.get("ref")
+            if ref is not None:
+                if not isinstance(ref, str) or ref not in (context or {}):
+                    raise ResearchError("unknown pinned context reference")
+                text = context[ref]
+            else:
+                text = self.read(tree, reply.get("path")).decode(errors="replace")
+            offset = reply.get("offset", 0)
+            if type(offset) is not int or offset < 0:
+                raise ResearchError("read offset must be a nonnegative integer")
+            return {"source": ref or reply.get("path"), "text": text[offset:offset + 20000], "characters": len(text),
+                    "next_offset": offset + 20000 if offset + 20000 < len(text) else None}
         if action == "search":
             query = reply.get("query")
             if not isinstance(query, str) or not 1 <= len(query) <= 200:
                 raise ResearchError("search requires a bounded literal query")
+            if reply.get("in") == "context":
+                offset = reply.get("offset", 0)
+                if type(offset) is not int or offset < 0:
+                    raise ResearchError("search offset must be a nonnegative integer")
+                refs = sorted(ref for ref in (context or {}) if query in ref)
+                return {"refs": refs[offset:offset + 50], "total": len(refs),
+                        "next_offset": offset + 50 if offset + 50 < len(refs) else None}
             found, omitted = [], []
             for path in sorted(tree.paths()):
                 if tree.entries[path][0] == "120000":
@@ -144,12 +181,16 @@ class Research:
             return {"exit_code": result.code, "output": result.out, "authority": "agent experiment only"}
         raise ResearchError("unknown research action; no shell, URL or host-file access is provided")
 
-    def dialogue(self, prompt, tree, *, tier="frontier", key="work", allowed_actions=None, deadline=None):
+    def dialogue(self, prompt, tree, *, tier="frontier", key="work", allowed_actions=None, deadline=None, context=None):
         if self.gate is None:
             return {"summary": "No model configured. Available tools and missing routes need operator review.",
                     "available": self.available(allowed_actions)}
         history = []
-        menu = json.dumps(self.available(allowed_actions))
+        available = self.available(allowed_actions)
+        if context is not None:
+            available["read"] = "path: tracked file; ref: pinned declaration/document; offset: next page"
+            available["search"] = "query: literal text in files; in=context: find declaration references; offset: next page"
+        menu = json.dumps(available)
         for step in range(self.steps):
             if deadline is not None and time.monotonic() >= deadline:
                 raise ResearchError("review deadline exhausted")
@@ -169,18 +210,18 @@ class Research:
             try:
                 if allowed_actions is not None and action not in allowed_actions:
                     raise ResearchError("this pass permits only " + ", ".join(allowed_actions))
-                answer = self.act(tree, reply)
+                answer = self.act(tree, reply, context)
             except (ResearchError, OSError, ValueError) as exc:
                 answer = {"refused": f"{type(exc).__name__}: {exc}"}
             history.append({"action": action, "answer": answer})
         self.save(key, tree.commit, history)
         raise ResearchError("research step budget exhausted; no proposal or fact was established")
 
-    def worker(self, prompt, role, *, tree, read_only, key, tier="frontier", deadline=None):
+    def worker(self, prompt, role, *, tree, read_only, key, tier="frontier", deadline=None, context=None):
         """Separate local dialogue per role; reviewers have read/search only and an optional provider tier."""
         selected = role if read_only and role in getattr(self.gate, "tiers", {}) else "frontier" if read_only else tier
         return self.dialogue(prompt, tree, tier=selected, key=f"{key}:{role}",
-                             allowed_actions=("read", "search") if read_only else None, deadline=deadline)
+                             allowed_actions=("read", "search") if read_only else None, deadline=deadline, context=context)
 
     def save(self, key, commit, history):
         from .llm import redact

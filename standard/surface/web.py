@@ -27,7 +27,7 @@ from pathlib import Path
 import tomllib
 from bt.gateway import GatewayClient
 from standard.autonomy.context import task_context
-from standard.autonomy.drift_map import gap_dossiers
+from standard.autonomy.context import gap_dossiers
 from standard.autonomy.moves import moves
 from standard.autonomy.projection import installed_routes
 from standard.autonomy.read_model import ReadModel
@@ -337,12 +337,13 @@ class Installation:
         import re as _re
         from instruments.surfaces import scan
         from instruments.tree import GitTree
-        from standard.catalog import categories, load
+        from standard.catalog import categories, contracts, load, render_contracts
         cat, findings, view = load(), _json(self.findings), self.client.view()
         signed = {(f["resource"], f["property"]): f for f in view.get("facts", [])}
         debts = {o.get("target"): o for o in view["health"].get("open", []) if str(o.get("target", "")).startswith("rules-")}
         rules = self.settle(view)
         values = rules.values()
+        stacks = ()
         out = []
         for c in categories():
             resource = f"repo:rules:{c}"
@@ -358,11 +359,15 @@ class Installation:
         routes = {}
         try:
             main = scan(GitTree(self.repo, "main"))
+            stacks = main["stacks"]
             for path, d in sorted(main["files"].items()):
                 for endpoint, ident in d.get("access", {}).items():
                     routes[endpoint] = {"id": ident, "file": path}
         except Exception as exc:
             routes = {"error": {"id": None, "file": str(exc)[:200]}}
+        for category in out:
+            category["contract"] = render_contracts(contracts(cat, cat["vocabulary"]["features"], values,
+                                                             category=category["id"], stacks=stacks))
         return {"categories": out, "routes": routes, "access": values.get("access", {}), "app": values.get("app"),
                 "public": values.get("public", [])}
 
@@ -380,6 +385,7 @@ class Installation:
         """The rules of the game as the human edits them: every move and its routes (on or off), every setting with
         the socle's bound, the components to tune, who changed the rules and when (D51)."""
         from standard.autonomy.rules import SCHEMA, socle
+        from standard.catalog import load as catalog
         findings, view = _json(self.findings), self.client.view()
         rules = self.settle(view)
         report = self.telemetry.report(window=3600)
@@ -389,7 +395,7 @@ class Installation:
         floor = socle()
         return {"main": git(self.repo, "rev-parse", "main").strip(),
                 "rules": {"settings": rules.settings, "routes": rules.routes(), "socle": floor["routes"],
-                          "bounds": floor["bounds"],
+                          "bounds": floor["bounds"], "policy": catalog()["policy"],
                           "schema": {k: v[1] for k, v in SCHEMA.items() if v[1] is not None},
                           "history": view.get("rules_history", []),
                           "values": self.named_values(rules),

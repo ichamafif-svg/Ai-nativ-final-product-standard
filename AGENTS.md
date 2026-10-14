@@ -33,11 +33,18 @@ and the second judge decides again. If Standard is unreachable or unqualified, n
 
 ## The rules you code to
 
-The rule catalog is `standard/catalog` (156 rules from OWASP ASVS 5.0, CWE Top 25 and run rules). You do not read it
-whole: deterministic selection shows the rules a change triggers, including new features discovered in its draft.
-The catalog labels wide/medium/fine classify context; they do not impose three generation passes. A refusal comes
-back with the broken rule's text. `python -m standard.surface rule RULE-ID` prints one rule with the values in
-force; `python -m standard.surface coverage` shows each category's state and debt.
+`standard/catalog` is the release's common definition of product requirements. `maintenance.toml` declares the
+maintenance targets and repair instructions; `policy.toml` defines signed policy parameters, their editor types,
+floors and recommended values; `rules/*.toml` details the technical requirements; `values.toml` and `blocks.toml`
+define their parameters and minimum implementation contracts. `standard/floors.py` compiles these declarations into
+the existing law language and defines governed moves. The human's signed choices instantiate the effective law.
+Model providers, budgets and schedules in `standard.toml` are execution configuration, never product policy.
+
+Selection uses product features and touched surfaces/constructs, including the draft's new features and declared
+features. `contracts()` supplies the same rule/block/parameter/check reading to construction, review, exploration
+and the interface. `python -m standard.surface rule RULE-ID` prints that contract; `coverage` shows measured state.
+`absorb` describes the intended division of work: it never proves correct block adoption or complete path coverage.
+A rule without a check, a missing parameter or an unknown client mapping stays visible; no opinion becomes proof.
 
 Most rules hold by using a building block (`blocks/python/standard_blocks`, `blocks/js/nextjs`, `blocks/js/front.mjs`).
 FastAPI: `secure_app` for the web layer, `Oidc(...).bind(app)` for sign-in and sessions, `Access(...).bind(app)` and
@@ -62,7 +69,7 @@ and simplicity) inspect the same immutable draft in parallel, each with its own 
 write tools, a privileged credential or authority to attest. A reviewer may report no findings. Every concrete finding
 names its path, issue, effect and proposed correction; the constructor fixes it or records a reasoned disagreement.
 Any edit invalidates the reviews. A revised draft must complete review before publication. Review failure is visible,
-not an empty success. A known dependency/design change receives a read-only design review before construction.
+not an empty success. Dependencies and design are examined by the same correctness/simplicity readers, without a keyword-triggered pre-pass.
 
 Prefer the smallest sufficient design for the current need. Reuse existing mechanisms; justify a new layer,
 dependency or state; remove dead code and obsolete intermediaries. Preserve behaviour and guarantees. Fewer lines or
@@ -71,17 +78,27 @@ under the same write scope and reserved-path checks as an edit. Tests and accept
 
 The workflow defaults to two review rounds, a 180-second review deadline and eight research steps per dialogue.
 `[agent.review] rounds = 1..3, timeout_s = 1..600`; `[agent] research_steps = 1..32` bounds every dialogue. There are
-at most one design dialogue, one initial build, and three dialogues per review round (two readers, one correction).
-Optional `[llm.correctness]`, `[llm.simplicity]`, `[llm.design]` choose role providers; otherwise readers use frontier.
+at most one initial build and three dialogues per review round (two readers, one correction).
+Optional `[llm.correctness]`, `[llm.simplicity]` choose reader providers; otherwise readers use frontier.
 Provider calls time out after 120 seconds. An already running HTTP call may finish after the review deadline; its late
 answer cannot publish the candidate or start another research step. No recursive delegation or reviewer-of-reviewer.
 
-Patrol alternates a simplicity round and the catalog's AI-read categories after normal moves, by default at most once
-per hour. `[agent] patrol_interval_ms` is 60000..86400000; schedule state survives restarts and failures. Manual use:
-`python -m standard.autonomy patrol standard.toml simplicity`; inspect recorded proposals with
-`python -m standard.autonomy patrol-results standard.toml`. Results retain main and law digest, become stale when
-either changes, and remain proposals. Serve a matching existing debt within its scope, or propose a human-contracted
-build request for a transversal refactor. A design opinion creates no safety obligation or permission.
+All model missions use `context.assemble`: pinned journal/law/code/catalog basis, task, exact scope, selected
+contracts, diagnostics and a bounded repository map. The initial packet is bounded to 28,000 characters. Large entries
+are deferred whole, with their references; selection never exempts omitted requirements. `read(ref=..., offset=...)`
+reads complete pinned declarations/documents in pages; `search(in=context, query=...)` discovers their references.
+BUILD specifications and immutable acceptance contracts are available in full, including beyond the initial preview.
+Ordinary file reads are paged too. These are the existing research tools, with the same role restrictions and budget.
+
+One patrol mechanism explores a question and a read scope. `simplicity[:path]` examines design;
+`rules:CATEGORY[:path]` examines the AI-readable part of that category. The snapshot wrapper enforces the same file
+boundary for reads, searches and the repository map. Applicability is still determined on the whole product.
+Automatic rounds rotate questions and repository/subsystem scopes, each category keeping its own scope cursor.
+They run after ordinary moves, by default at most once per hour; `[agent] patrol_interval_ms` is
+60000..86400000. Schedule state survives failures and restarts. Manual use:
+`python -m standard.autonomy patrol standard.toml simplicity:app`; inspect proposals with `patrol-results`.
+Results retain main, law digest and scope, become stale when main or law changes, and remain proposals. Serve an
+existing debt within its scope, or propose a human-contracted BUILD request for a transversal refactor.
 
 ## Measurement limits
 

@@ -34,7 +34,7 @@ from typing import Optional
 
 from standard.autonomy.projection import installed_routes
 from standard.autonomy.context import render_context, task_context
-from standard.autonomy.drift_map import gap_dossiers
+from standard.autonomy.context import gap_dossiers
 from standard.autonomy.moves import moves
 from standard.autonomy.patrol import patrol_context
 from standard.autonomy.read_model import ReadModel
@@ -212,10 +212,11 @@ def main(argv=None) -> int:
     elif args.command == "coverage":
         print(coverage_text(view, findings))
     elif args.command == "rule":
-        from standard.catalog import effective, load, render
+        from standard.catalog import contracts, effective, load, render_contracts
         cat = load()
         rule = next((r for r in cat["rules"] if r["id"] == (ref or "").upper()), None)
-        print(render(rule, effective(cat, view["law"]["effective"].get("settings", {}).get("values")))
+        print(render_contracts(contracts(cat, cat["vocabulary"]["features"],
+                         effective(cat, view["law"]["effective"].get("settings", {}).get("values")), ids={rule["id"]}))
               if rule else f"no rule {ref}")
     elif args.command == "moves":
         print(board(view, moves(view), "no move"))
