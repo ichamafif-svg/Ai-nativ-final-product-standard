@@ -1,13 +1,12 @@
 """The rules of the game as the human edits them: one document, signed once, in force at once (D51).
 
 The client's rules live in the journal (a `law` entry the human signs), never in a file of the product's repository.
-They hold three kinds of choice, all inside the socle (standard/floors.py):
+They hold two kinds of choice, all inside the socle (standard/floors.py):
 
     routes     for each op, the autonomous routes kept on; turning one off leaves the move to the human
     settings   numbers the routes compare with (never looser than the socle's: the kernel refuses), and what the
                scanner measures and the console shows: objective, latency, deployment window, components, SLOs,
                probes, silences, the write scopes of the client's own targets
-    team       the options for more people: threshold (in the root), delays, witness quorum
 
 Here: the schema of each setting for the editor (a malformed value is refused before anyone signs it), the changed
 document a signature puts in force, and the effective values as the console shows them. Nothing here is a

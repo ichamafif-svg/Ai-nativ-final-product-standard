@@ -2,7 +2,7 @@
 
 Document unique de référence. Il réunit tout ce qui a été trouvé et décidé dans les versions V0 → V7, M2, le laboratoire TCB (campagnes I à V) et le prototype hybride, réécrit au propre. Il remplace tous les documents antérieurs.
 
-**Statut :** architecture cible et décisions arrêtées. **Depuis D51, la cible est une personne et un agent** : l'humain garde le dernier mot là où il compte (§4.8), les options d'équipe (seuil, délais, témoins) restent dans la loi pour plus tard. Les sections antérieures qui parlent de quorum k ≥ 2, de sentinelle, de revue, de `configure` ou de conformité organisationnelle décrivent l'histoire ; §4.2, §4.8, §11, §12 et §18 (D51–D53) décrivent l'état courant. Une exigence de ce document n'est **pas** une garantie démontrée. §18 conserve l'historique des décisions, y compris les anciens noms de modules ; §20 décrit le code actuel et §21.4 distingue réalisation et qualification. En cas d'écart entre une ancienne décision et l'inventaire courant, l'inventaire courant prévaut.
+**Statut :** architecture cible et décisions arrêtées. **Depuis D51, la cible est une personne et un agent** : l'humain garde le dernier mot là où il compte (§4.8) ; depuis D61, les options d'équipe (seuil, délais, veto, quorum de témoins, livraison T09) sont retirées. Les sections antérieures qui parlent de quorum k ≥ 2, de sentinelle, de revue, de `configure` ou de conformité organisationnelle décrivent l'histoire ; §4.2, §4.8, §11, §12 et §18 (D51–D53) décrivent l'état courant. Une exigence de ce document n'est **pas** une garantie démontrée. §18 conserve l'historique des décisions, y compris les anciens noms de modules ; §20 décrit le code actuel et §21.4 distingue réalisation et qualification. En cas d'écart entre une ancienne décision et l'inventaire courant, l'inventaire courant prévaut.
 
 ---
 
@@ -123,7 +123,7 @@ Le noyau ne connaît **aucun** objet métier : ni PR, Git, CI, scanner, SBOM, mo
 |---|---|---|---|
 | **FLOOR-0** | Protège la confiance elle-même : autorité, causalité, polarité, temps, preuve, effets, historique, redevabilité | Équipe Standard | Nouvelle release + nouvelle genèse. Jamais par le système |
 | **Floors** | Ce que Standard impose à tous : autonomie, sécurité, conformité. C'est le **niveau intermédiaire** qui porte l'autonomie | Équipe Standard, dans la release | Nouvelle release adoptée explicitement. Ni retirables ni affaiblissables par le client |
-| **Loi client** | Identités, liaisons des rôles, opérations, exigences supplémentaires, resserrements | Humains du client | Dans le journal : proposition signée, quorum, délai attesté, activation. Sans nouvelle genèse |
+| **Loi client** | Identités, liaisons des rôles, opérations, exigences supplémentaires, resserrements | Humains du client | Dans le journal : une entrée `law` signée par l'humain, en vigueur aussitôt. Sans nouvelle genèse |
 
 - Il n'y a pas de « lois d'exploitation Standard » séparées : tout ce que Standard impose est dans les floors.
 - Seule FLOOR-0 (avec le code et les floors de la release) est figée à la genèse. La loi client évolue dans le journal.
@@ -136,17 +136,17 @@ Texte normatif. Le digest de FLOOR-0 couvre ce texte, la table de polarité, les
 
 | Règle | Contenu |
 |---|---|
-| **F0-1** | L'agent ne détient aucune autorité propre. Tout élargissement est énoncé par un humain de la racine et signé par son seuil k ≥ `MIN_HUMANS` d'humains ; le temps est énoncé par le quorum de témoins de la loi. Une personne et un agent est le minimum ; une équipe relève k, le quorum de témoins et les délais dans sa loi. |
+| **F0-1** | Une personne et un agent. L'agent ne détient aucune autorité propre. Tout élargissement est énoncé et signé par l'unique humain de la racine ; le temps est énoncé par un témoin de la racine. |
 | **F0-2** | Pour chaque propriété critique : ses contrôles, ses dépendances communes et les fautes couvertes sont nommés. Un désaccord de sûreté bloque l'effet ; une incohérence d'intégrité bloque la frontière touchée. Un arrêt local n'est pas une mutation non signée du journal. |
 | **F0-3** | Code et floors sont liés à la genèse. La loi client ne change que par élargissement, sans jamais affaiblir les floors de la release ; les chaînes de capacités ne font que se restreindre. Une loi ne contraint que les genres qui agissent, attestent ou atténuent : **jamais** une restriction, un témoin ou le protocole d'élargissement. |
 | **F0-4** | Toute transition d'état canonique est causée par exactement une entrée signée. L'admission ne dépend que du préfixe admis, de la loi et du code épinglés. |
-| **F0-5** | Chaque genre d'entrée a une seule polarité. La genèse établit la racine initiale, épinglée de l'extérieur. Un élargissement prend effet avec sa propre entrée, sauf si la loi déclare un délai pour son genre : il attend alors ce délai attesté et une activation explicite, et peut être mis en veto entre-temps. Les autres polarités ne font que restreindre, atténuer, agir sous capacité, attester ou témoigner. |
-| **F0-6** | Le temps ne fait qu'expirer ou faire tomber une autorité ; il n'en accorde jamais. Seul le quorum de témoins fait avancer l'ancre attestée. Les horodatages ordinaires sont monotones et bornés au-dessus de l'ancre. Une restriction peut partager le dernier instant : aucun horodatage ne peut l'affamer. |
-| **F0-7** | Lever une restriction unilatérale est un élargissement. Là où l'élargissement attend, k+1 humains peuvent dépasser un veto après deux fois son délai. |
+| **F0-5** | Chaque genre d'entrée a une seule polarité. La genèse établit la racine initiale, épinglée de l'extérieur. Un élargissement prend effet avec sa propre entrée. Les autres polarités ne font que restreindre, atténuer, agir sous capacité, attester ou témoigner. |
+| **F0-6** | Le temps ne fait qu'expirer ou faire tomber une autorité ; il n'en accorde jamais. Seul un témoin fait avancer l'ancre attestée. Les horodatages ordinaires sont monotones et bornés au-dessus de l'ancre. Une restriction peut partager le dernier instant : aucun horodatage ne peut l'affamer. |
+| **F0-7** | Lever une restriction est un élargissement : seul l'humain lève un gel. |
 | **F0-8** | Un fait ne permet une action que s'il est fraîchement attesté par une chaîne ne partageant **aucun détenteur** avec l'acteur. Tout fait permissif porte son étiquette de provenance : observations, clôtures, instances ouvertes et portes. L'absence d'un fait ne permet jamais rien. |
 | **F0-9** | Tout effet est typé ; sa ressource dérive de ses arguments ; sa réservation est durable et à usage unique. Re-jugement et départ fournisseur sont ordonnés contre l'admission. Seule la requête canonique jugée passe à l'adaptateur de confiance, avec une clé de réservation liée à la genèse. La ligne d'effet suit une table unique ; une réservation part dans `DISPATCH_MS` ou jamais, et seulement ensuite peut être réconciliée. |
 | **F0-10** | L'historique est append-only et lié à la genèse. Une épingle monotone indépendante est retenue pour chaque écriture **avant** acquittement. Un historique en dessous ou divergent est bloqué ; la réparation restaure sa queue exacte. |
-| **F0-11** | Hors admission, chaque cible déclarée sans preuve indépendante fraîche a une obligation et une échéance stables ; un écart en retard enregistre une escalade vers les humains de la racine. La redevabilité n'autorise jamais rien. Enregistrer une escalade ne prouve ni sa livraison ni la réparation. |
+| **F0-11** | Hors admission, chaque cible déclarée sans preuve indépendante fraîche a une obligation et une échéance stables ; un écart en retard enregistre une escalade vers l'humain. La redevabilité n'autorise jamais rien. Enregistrer une escalade ne prouve ni que l'humain l'a vue, ni la réparation. |
 | **F0-12** | Chaque opération déclare ses routes : les routes autonomes ne lisent que des faits mesurés, la route humaine exige la décision d'un humain sur la ressource exacte (`decision = approve`, auteur de genre `human`). Un effet ne passe que tant qu'une route en vigueur tient, de l'intention au départ. Une loi peut couper des routes autonomes, jamais la route humaine. |
 
 **Constantes de FLOOR-0** (valeurs par défaut de la release ; une loi client peut seulement les durcir) :
@@ -154,8 +154,7 @@ Texte normatif. Le digest de FLOOR-0 couvre ce texte, la table de polarité, les
 | Constante | Valeur | Rôle |
 |---|---|---|
 | `MIN_HUMANS` | 1 | k minimal ; une équipe le relève dans sa racine |
-| `MIN_WITNESSES` | 1 | Quorum de témoins pour avancer l'ancre (l'horloge de l'opérateur, `clock`) |
-| `MIN_DELAY_MS` | 0 | Un élargissement prend effet tout de suite, sauf si la loi déclare un délai pour son genre |
+| `HUMANS` | 1 | Exactement un humain dans la racine (jusqu'à huit clés : ses appareils) ; au moins un témoin (l'horloge de l'opérateur, `clock`) |
 | `MAX_AHEAD_MS` | 5 min | Avance maximale d'un horodatage sur l'ancre |
 | `DISPATCH_MS` | 5 min | Fenêtre de départ d'une réservation |
 | `DECISION` | `observed(decision, approve, real, human)` | Le seul atome qu'une route humaine doit porter (F0-12) |
@@ -165,14 +164,14 @@ Texte normatif. Le digest de FLOOR-0 couvre ce texte, la table de polarité, les
 
 | Polarité | Genres |
 |---|---|
-| `widen` | `genesis`, `rotate`, `grant`, `unfreeze`, `law`, `activate` |
+| `widen` | `genesis`, `rotate`, `grant`, `unfreeze`, `law` |
 | `attenuate` | `delegate` |
-| `restrict` | `veto`, `revoke`, `freeze`, `invalidate` |
+| `restrict` | `revoke`, `freeze`, `invalidate` |
 | `witness` | `checkpoint` |
 | `act` | `intent`, `token`, `reservation`, `execution`, `resource`, `transition` |
 | `attest` | `reconciliation`, `observation`, `measurement`, et tout genre de preuve déclaré par la loi |
 
-**Qui peut restreindre seul :** `veto`, `revoke` et `freeze` : humain (et tout détenteur sur la chaîne révoquée pour `revoke`) ; `invalidate` : humain ou oracle source. Il n'y a plus de sentinelle ni de `flag`/`heartbeat` (D51) : un refus humain est un gel, une révocation ou l'absence de `decision`.
+**Qui peut restreindre seul :** `revoke` et `freeze` : humain (et tout détenteur sur la chaîne révoquée pour `revoke`) ; `invalidate` : humain ou oracle source. Il n'y a plus de sentinelle ni de `flag`/`heartbeat` (D51) : un refus humain est un gel, une révocation ou l'absence de `decision`.
 
 ### 4.3 Les six mécanismes
 
@@ -180,7 +179,7 @@ Toute loi de la TCB s'exprime avec six primitives. Les floors et la loi client u
 
 | Mécanisme | Ce qu'il porte | Exemples de refus |
 |---|---|---|
-| **CAP** — capacités | Autorité : rôles, chaînes de délégation atténuantes, budgets, restrictions, veto, gel, quorum, garde | `CAP.CHAIN`, `CAP.WIDENS`, `CAP.ATTENUATE`, `CAP.SCOPE`, `CAP.VETO`, `CAP.RESTRICT`, `CAP.HOLDER`, `CAP.GUARD`, `CAP.WITHDRAWN` |
+| **CAP** — capacités | Autorité : rôles, chaînes de délégation atténuantes, budgets, restrictions, gel, garde | `CAP.CHAIN`, `CAP.WIDENS`, `CAP.ATTENUATE`, `CAP.SCOPE`, `CAP.RESTRICT`, `CAP.HOLDER`, `CAP.GUARD`, `CAP.WITHDRAWN` |
 | **OBL** — obligations | Dettes, portes, ligne d'effet, réservations, budgets d'usage, reprises | `OBL.NOT_OPEN`, `OBL.ALREADY_OPEN`, `OBL.LINE`, `OBL.RESERVATION`, `OBL.LAPSED`, `OBL.GATE`, `OBL.CONTRACT`, `OBL.BUDGET`, `OBL.RETRY` |
 | **NIV** — niveaux de preuve | Ordre total des niveaux de qualification (`unknown` < `real`) ; `min_level` exigé par une cible ou une condition | `NIV.TOO_LOW`, `NIV.UNKNOWN`, `NIV.CERTIFY` |
 | **PROV** — provenance | Indépendance des chaînes de détenteurs, source habilitée, instrument, sujet, couverture, fraîcheur | `PROV.NOT_INDEPENDENT`, `PROV.INSTRUMENT`, `PROV.SUBJECT`, `PROV.COVERAGE`, `PROV.STALE`, `PROV.UNKNOWN` |
@@ -219,11 +218,11 @@ Le langage est **fini, borné, positif** :
 
 - La composition est **additive** : le client ajoute ou durcit. Il ne retire ni n'affaiblit un floor.
 - Un client peut ajouter des façons de prouver, **jamais** à un niveau inférieur à celui du floor [V6-7].
-- Une obligation bloquante ne peut viser que des genres qui agissent, attestent ou atténuent ; jamais une restriction, `checkpoint` ou `activate` [V6-2].
+- Une obligation bloquante ne peut viser que des genres qui agissent, attestent ou atténuent ; jamais une restriction ou `checkpoint` [V6-2].
 - Opérations : `ops.<op>.trusted` est une liste **additive** de contrats T requis ; T07/T08 sont des minima non retirables.
-- Une loi présente dans le dépôt est une **proposition**. Seule la genèse ou une activation gouvernée lui donne autorité.
+- Une loi présente dans le dépôt est une **proposition**. Seule la genèse ou une entrée `law` signée par l'humain lui donne autorité.
 - Changer la loi client passe par le protocole gouverné même quand le changement resserre seulement.
-- Une activation est traitée sous la loi qui l'a admise ; les nouvelles cibles s'appliquent ensuite [V6-§3.8].
+- Une entrée `law` est traitée sous la loi qui l'a admise ; les nouvelles cibles s'appliquent ensuite [V6-§3.8].
 - La relecture historique utilise la loi en vigueur à la position de chaque entrée.
 - Retirer une cible client est une décision de loi visible ; ce n'est **jamais** une réparation (`REQUIREMENT_RETIRED_WITHOUT_REPAIR_PROOF`). Sa réintroduction retrouve la dette.
 - Changer de release (code ou floors) exige une nouvelle genèse sélectionnée de l'extérieur. Aucune migration silencieuse, aucun reset automatique, aucune exception de bootstrap. Un historique importé reste une provenance, jamais une preuve.
@@ -295,7 +294,7 @@ Plus une couche est proche du noyau, **moins elle reçoit de signaux**. Les conn
 │  │  ┌──────────────────────────────────────────────────┐  │  │
 │  │  │ T  CONFIANCE   identités, temps, journal, pins,  │  │  │
 │  │  │                second juge, instruments, garde,  │  │  │
-│  │  │                readback, livraison               │  │  │
+│  │  │                readback                          │  │  │
 │  │  │  ┌────────────────────────────────────────────┐  │  │  │
 │  │  │  │ K  NOYAU   jugement déterministe unique    │  │  │  │
 │  │  │  └────────────────────────────────────────────┘  │  │  │
@@ -368,7 +367,7 @@ Responsabilités, pas modules imposés. Elles peuvent être regroupées en un co
 |---|---|---|
 | **K01** Modèle canonique | Formes fermées, identités stables, encodage unique et versionné, aucune donnée métier privilégiée | Forme ambiguë, champ caché, flottant, deux sens pour un même digest |
 | **K02** Identité | Signature liée au domaine, à la déclaration, à la ressource, au type, à la version et au préfixe exacts. Une clé n'a qu'un encodage canonique [V6-9]. Enveloppe fermée, une signature par clé, triée [V6-env] | Réutilisation cross-domaine, cross-époque, cross-ressource ; même clé enrôlée deux fois |
-| **K03** Autorité | Atténuation monotone, aucun privilège par défaut, révocation et gel immédiats au préfixe, élargissement par quorum distinct + témoins + délais + veto | Un acteur se donne une capacité ; deux clés d'un même humain dans un quorum |
+| **K03** Autorité | Atténuation monotone, aucun privilège par défaut, révocation et gel immédiats au préfixe, élargissement signé par l'unique humain de la racine | Un acteur se donne une capacité ; un second humain enrôlé |
 | **K04** Constitution | Composition non affaiblissante ; changements de racine, dégel et droits par procédure ; genèse et récupération sans exception souveraine | Clause client qui affaiblit un floor |
 | **K05** État et transition | Fonction pure unique ; préconditions, delta requis **et** interdit, conflits sérialisés, aucune mutation non déclarée | Deux writers divergents ; delta « permis » mais incomplet |
 | **K06** Recevabilité des preuves | Sujet exact, méthode, couverture, fraîcheur, source, indépendance, invalidation. Signature ≠ vérité. Le silence n'est jamais `healthy` | Mesure signée mensongère ; périmètre non couvert ; auto-attestation |
@@ -442,7 +441,7 @@ Les déclarations OBL de la loi ajoutent leur propre delta, vérifié exhaustive
 | Temps | Origine | Usage autorisé |
 |---|---|---|
 | `statement_at` | Entrée signée admise | Ordre historique, relecture déterministe |
-| `anchor_at` | Quorum de témoins sur un préfixe exact | Délais gouvernés, borne d'admission |
+| `anchor_at` | Un témoin sur un préfixe exact | Borne d'admission |
 | `evaluated_at` | Horloge de la frontière d'exécution | Expiration actuelle des droits et des preuves |
 
 - L'horloge d'exécution est une dépendance de confiance explicite (T03) : source, précision, protection contre le recul, domaine de panne. Une valeur fournie par un agent ne suffit jamais.
@@ -627,7 +626,7 @@ Un effet réussi ne satisfait **jamais** automatiquement l'exigence qui l'a moti
 ### 9.3 Escalade et progrès (G16)
 
 - K juge devoirs, permissions, échéances et **exigibilité** de l'escalade. Une tentative échouée n'est jamais une clôture.
-- U réalise ordonnancement, retries, backoff, notification. T09 fait la livraison observable.
+- U réalise ordonnancement, retries, backoff. Les escalades sont visibles dans la console (D61 : plus de T09).
 - **Propriété de progrès conditionnel** : si les sources externes requises restent disponibles, si une action permise existe et si l'ordonnancement est équitable, le système réalise une transition observable **ou** produit une escalade explicite dans une borne définie.
 - Observé en campagne IV : périodes sans action, reprise après 25 h, 21 lignes ouvertes sans escalade pendant la fenêtre. Ces cas sont des défauts d'implémentation U/T, pas des raisons de mettre un scheduler dans K.
 
@@ -644,7 +643,7 @@ Un effet réussi ne satisfait **jamais** automatiquement l'exigence qui l'a moti
 
 ## 10. La frontière de confiance (T)
 
-Neuf **responsabilités**, regroupables. Ce ne sont ni neuf services ni une attestation globale obligatoire. Une opération ne requiert que les T dont elle dépend :
+Huit **responsabilités**, regroupables. Ce ne sont ni huit services ni une attestation globale obligatoire. Une opération ne requiert que les T dont elle dépend :
 
 | Opération | T requis |
 |---|---|
@@ -653,21 +652,19 @@ Neuf **responsabilités**, regroupables. Ce ne sont ni neuf services ni une atte
 | Observation, mesure, preuve | + T06 |
 | Réconciliation | + T08 |
 | Effet et garde | + T07, T08 |
-| Livraison d'escalade | T09 seulement |
 
-Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche pas un gel ou une révocation signés. Aucune opération dépendante ne progresse sans son contrat. Les contrôles sont répétés sous le verrou juste avant le départ physique.
+Une panne T03 n'empêche pas un gel ou une révocation signés. Aucune opération dépendante ne progresse sans son contrat. Les contrôles sont répétés sous le verrou juste avant le départ physique.
 
 | | Port | Règle | Test de falsification | Condition physique |
 |---|---|---|---|---|
 | **T01** Release / runtime | `verify_release(runtime, genesis, law)` | Installer et ancrer hors de l'agent ; aucun downgrade, aucune genèse discrète | Binaire substitué ; genèse réinitialisée | Installation authentique |
-| **T02** Clés / identité physique | `authenticate(statement, roles)` | Custody exclusive ; liaison physique documentée | Même opérateur avec plusieurs clés de quorum | Humains réellement distincts |
-| **T03** Temps | `attest_time(event, uncertainty)` | Défi frais, ≥ 2 témoins à clés distinctes, signatures sur domaine et genèse, refus du recul | Faux futur accordant un droit | Horloge et témoins indépendants |
+| **T02** Clés / identité physique | `authenticate(statement, roles)` | Custody exclusive ; liaison physique documentée | Une clé humaine copiée sur l'hôte de l'opérateur | La clé de l'humain sur ses seuls appareils |
+| **T03** Temps | `attest_time(event, uncertainty)` | Horloge de l'opérateur signée par `clock`, refus du recul | Faux futur accordant un droit | Horloge de l'opérateur juste |
 | **T04** Préfixe durable | `commit(expected_head, delta)` | Append-only, CAS atomique, ancre hors du domaine de restauration | Rollback journal + pin ; crash entre pin et commit | Domaines de restauration indépendants |
 | **T05** Vérification indépendante | `check(inputs, decision, delta)` | Implémentation et domaine de panne distincts ; désaccord bloquant | Deux copies identiques acceptent le même bug | Domaine de panne réellement distinct |
 | **T06** Instruments | `attest_measurement(subject, method, coverage)` | Source et périmètre instrumentés, indépendants du bénéficiaire | Monde réel faux avec payload signé identique | Vérité et couverture réellement mesurées |
 | **T07** Garde des effets | `reserve_and_dispatch(effect, authority)` | Credentials et egress exclusifs, départ sérialisé, comparaison d'octets | Secret CI secondaire qui déploie sans garde | Aucun chemin privilégié parallèle |
 | **T08** Readback | `reconcile(reservation, provider_state)` | `applied / not_applied / unknown` sans déduction abusive ; idempotence prouvée avant retry | ACK perdu après application ; double action | Idempotence fournisseur, readback indépendant |
-| **T09** Livraison | `deliver_due(escalation, endpoint)` | Outbox durable par clé stable, marque *tentée* avant envoi, readback + reçu signé liant clé, payload et destinataires | Scheduler arrêté ; silence lu comme résolution | Disponibilité, accusé humain observé |
 
 **Déclaration de déploiement.** Pour chaque T : fournisseur, trust domain, possession des clés, droits de restauration, chemins réseau, dépendances communes, protocole de panne, test réel. Des services distincts sous un même administrateur ne sont pas indépendants. La qualification est liée à une release, une genèse, une installation et une route.
 
@@ -678,11 +675,10 @@ Une panne T09 n'empêche pas une admission ordinaire. Une panne T03 n'empêche p
 | T04, T05 | `bt/journal.py`, `bt/checker.py` | Journal SQLite append-only, pins sur un autre volume ; second juge qui reformule chaque admission |
 | T06 | `bt/isolation.py`, `bt/host.py` | Les programmes épinglés tournent sous `standard-runner` (sudo limité à `/usr/bin/env`), environnement vide, `unshare -rn` (aucun réseau), `prlimit` mémoire. **Échec fermé (D46) :** sans `runner_user`, aucun code candidat ne tourne ; seule une démo peut l'accepter explicitement (`[tests] unconfined = true`, refusé hors `demo`), et `qualify.py` le signale. **Frontière incomplète :** les suites et l'installation des dépendances candidates ne sont pas confinées côté système de fichiers ; l'hôte refuse donc les jobs candidats avant leur exécution et la sonde T06 échoue. Le précontrôle U possède un jail distinct, qui ne répare pas T06. |
 | T06, T07, T08 | `bt/transactions.py`, `host.py`, `register.py`, `adapters.py`,  `guard.py` ; `instruments/` et `tools/replay.py` hors T | Toute entrée et toute sortie sont des **transactions de frontière** (§10.1) |
-| T09 | `bt/delivery.py` | Outbox et livraison ; **non branchée** sur e-mail ni messagerie (les alertes ne sont que dans l'interface) |
 
 ### 10.1 Transactions de frontière (D38)
 
-**K juge. T garantit la frontière. U accomplit le travail.** Toute affirmation qui entre et tout effet qui sort passent par une **transaction de frontière** (BT), sous un contrat que les floors déclarent (`standard.floors.CONTRACTS`). Une BT ne remplace aucun contrat T01–T09 : elle unifie leur représentation. Elle n'est pas une transaction ACID et n'ajoute aucune sémantique constitutionnelle : CAP, OBL, NIV, PROV, TYPE et HIST restent au noyau.
+**K juge. T garantit la frontière. U accomplit le travail.** Toute affirmation qui entre et tout effet qui sort passent par une **transaction de frontière** (BT), sous un contrat que les floors déclarent (`standard.floors.CONTRACTS`). Une BT ne remplace aucun contrat T01–T08 : elle unifie leur représentation. Elle n'est pas une transaction ACID et n'ajoute aucune sémantique constitutionnelle : CAP, OBL, NIV, PROV, TYPE et HIST restent au noyau.
 
 Une BT est un enregistrement, gardé par empreinte dans le magasin de preuves et listé dans `transactions.jsonl` :
 
@@ -913,12 +909,12 @@ proposer (U)
  → résultat confirmé ou UNKNOWN (T08)
  → réconcilier
  → nouvelle mesure qualifiée (T06)
- → clôture, maintien ou escalade de l'obligation (K, livraison T09)
+ → clôture, maintien ou escalade de l'obligation (K ; visible dans la console)
 ```
 
 ### 13.2 Parcours
 
-1. **Constituer.** Épingler release, genèse, FLOOR-0 et floors ; composer la loi client ; établir identités, quorum, témoins. Le provisionnement des T a une provenance indépendante de l'agent.
+1. **Constituer.** Épingler release, genèse, FLOOR-0 et floors ; composer la loi client ; établir identités (un humain, l'agent, les machines, l'horloge). Le provisionnement des T a une provenance indépendante de l'agent.
 2. **Découvrir et qualifier.** Inventorier, choisir une route par responsabilité, tester réellement les T nécessaires.
 3. **Projeter.** Mesure absente, couverture inconnue, instrument indisponible, risque constaté et effet incertain sont cinq états distincts.
 4. **Travailler.** Les agents reprennent les obligations, en BUILD ou RUN.
@@ -935,7 +931,7 @@ Découpage **figé conditionnellement 16/16**. Aucune garantie n'est démontrée
 
 | G | Garantie | K (non délégable) | T (dépendance) | U (délégué) | Falsificateur |
 |---|---|---|---|---|---|
-| G01 | Aucun élargissement par un acteur seul | Signatures habilitées, quorum, délais, veto | Humains distincts, custody, témoins indépendants | Solliciter | Racine de clés tenues par une personne |
+| G01 | Aucun élargissement par un acteur seul | Signature de l'unique humain | Custody de sa clé | Solliciter | Racine de clés tenues par une personne |
 | G02 | Restriction immédiate | Restriction et re-jugement dans l'ordre | Ordre atomique de départ, fencing | Stopper les travaux | Révocation pendant réservation, avant les octets |
 | G03 | Floors inaffaiblissables | Composition additive | Release / runtime authentiques | Proposer plus strict | Autre code, floor plus faible |
 | G04 | Transition canonique déterministe | Delta exhaustif | Journal durable, ordre | Proposer | Deux têtes divergentes acceptées |
@@ -964,7 +960,7 @@ G04 n'implique pas que chaque effet physique correspond à une transition : G09/
 |---|---|---|---|
 | **L-01** | Une attestation signée n'implique pas la vérité physique : le payload est identique que la vérité soit vraie ou fausse | Logique, établie | K garde provenance, sujet, méthode, fraîcheur, couverture, indépendance, clôture. T fournit la mesure qualifiée. U ne qualifie jamais sa propre affirmation |
 | **L-02** | Un jugement logiciel pur ne peut pas empêcher physiquement un egress | Logique, sous la prémisse « K sans credentials » | K spécifie et re-juge ; T impose l'exclusivité |
-| **L-03** | Un hash ne prouve pas qu'un acteur physique est un humain distinct | Logique | K impose le quorum logique ; T établit liaisons et custody |
+| **L-03** | Un hash ne prouve pas qu'un acteur physique est un humain distinct | Logique | K impose un seul humain logique ; T établit liaison et custody |
 | **L-04** | Résister au rollback exige une ancre durable indépendante | Contrat externe requis | K rejette les historiques invalides quand il a l'ancre ; T protège l'ancre |
 | **L-05** | Une autorisation n'implique aucun progrès équitable | Logique | K garde obligations et exigibilité d'escalade ; T/U fournissent l'exécution observable |
 
@@ -978,10 +974,10 @@ Le noyau raisonne sur des signatures et des faits. Plusieurs garanties reposent 
 
 | Garantie | Prémisse physique | Essai qui la démontre |
 |---|---|---|
-| Quorum (G01) | Deux clés = deux personnes | Enrôlement des humains et custody des clés vérifiés par un tiers |
+| Humain (G01) | La clé est celle de l'humain | Enrôlement et custody de sa clé vérifiés par un tiers |
 | Un seul chemin vers `main` (G09, G15) | Seule la garde peut écrire | Git local : deux utilisateurs Unix (`ceremony.py separate`), dépôt possédé par la garde sans écriture de groupe ni d'autres, umask 027 de la garde, store de l'agent cloné sans hardlinks. **Démontré** (D22). GitHub : tenter d'écrire avec chaque autre token, App ou règle de bypass existante |
 | Anti-rollback (G11) | Pins hors du domaine de restauration du journal | Restaurer le disque du journal seul, puis les deux ensemble |
-| Temps (G06) | Témoins réellement indépendants | Arrêter, décaler, compromettre un témoin |
+| Temps (G06) | Horloge de l'opérateur juste | Décaler ou compromettre l'horloge de l'opérateur |
 | Second juge (G12) | Domaine de panne distinct | Faute injectée dans un juge, l'autre bloque |
 
 Le code fournit des **sondes de qualification** (`tools/qualify.py`) qui vérifient ce qui est vérifiable localement et listent explicitement ce qu'elles ne prouvent pas. Une évaluation T signée par l'opérateur lui-même est marquée **auto-évaluée** : elle fait tourner le système, elle ne qualifie rien.
@@ -1229,8 +1225,8 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | D47 | **Second juge plus indépendant, une seule enveloppe par énoncé.** Le second juge reçoit les floors de la release et vérifie la contenance de chaque loi effective ; il restate `HIST.AHEAD`, `retry_of`, `when`. Base64 canonique, DER strict et s bas pour ECDSA. Une mesure plus ancienne ne remplace jamais une plus récente. Une violation `escalate` se ferme par un humain. Différentiel aléatoire en CI | Falsificateurs : loi effective affaiblie acceptée par le second juge ; même énoncé, deux têtes ; lecture ancienne gagnante. Limite : le différentiel est une campagne bornée, pas une équivalence prouvée |
 | D48 | **Instruments que le sujet ne pilote pas, effets durables.** Exports par objets (pas `git archive`), non-régression par comparaison de mesures, `regressions` exigé en revue, liens symboliques déclarés, verrou exempt de dépendance mesuré, registres fsync, rejeu comparé au journal | Falsificateurs : `export-ignore` cachait un fichier ; un constat échangé contre un autre passait ; un crash entre historique et registre laissait un `ok` sans mouvement |
 | D49 | **Clôture de release et coût constant.** Les dépendances sont épinglées par hash (`requirements.hashes`) et entrent dans l'empreinte d'installation ; installations et CI installent avec `--require-hashes`. Les lectures et écritures du journal ne copient plus profondément les énoncés : 6 à 8 ms par écriture de 0 à 20 000 entrées mesurés, au lieu de 10 → 55 ms à 4 000 | Limite : la clôture est calculée pour Linux x86_64 et Python 3.11+ ; une autre plateforme régénère le verrou (`make lock`) et le relit |
-| D50 | **Témoins configurables.** `[clock] kind = "witnesses"` assemble `WitnessClock` (HTTPS, quorum, `tolerance_ms` borné à 5 s, état persisté). La lecture retourne la cotation la plus tardive : prudente pour toutes ses utilisations (fenêtre de départ, expirations, horizon), les délais d'élargissement restant sur les checkpoints témoignés | Limite : l'indépendance réelle des témoins reste une propriété à qualifier |
-| D51 | **Une personne, un agent, les règles du jeu.** FLOOR-0 descend à `MIN_HUMANS = 1`, `MIN_WITNESSES = 1`, `MIN_DELAY_MS = 0` ; un élargissement prend effet avec sa propre entrée sauf délai déclaré par la loi (les options d'équipe restent : seuil, délais, veto, quorum de témoins). F0-12 : chaque opération déclare ses routes ; la route humaine porte `decision = approve` par un humain ; une loi coupe des routes autonomes, jamais l'humaine. Réglages, règles et loi ne font qu'un document client signé (`routes`, `settings` liés par `@nom`, bornés par le socle) ; `standard/rules.json`, `configure`, la sentinelle, `flag`, `heartbeat`, les profils, `compliance_officer`, les cibles organisationnelles et la projection de conformité sont retirés. L'humain a trois gestes : oui, non (gel), règles | Arrêtée |
+| D50 | **Témoins configurables** (remplacée par D61). `[clock] kind = "witnesses"` assemble `WitnessClock` (HTTPS, quorum, `tolerance_ms` borné à 5 s, état persisté). La lecture retourne la cotation la plus tardive : prudente pour toutes ses utilisations (fenêtre de départ, expirations, horizon), les délais d'élargissement restant sur les checkpoints témoignés | Limite : l'indépendance réelle des témoins reste une propriété à qualifier |
+| D51 | **Une personne, un agent, les règles du jeu.** FLOOR-0 descend à un humain, un témoin, aucun délai ; un élargissement prend effet avec sa propre entrée (les options d'équipe sont retirées par D61). F0-12 : chaque opération déclare ses routes ; la route humaine porte `decision = approve` par un humain ; une loi coupe des routes autonomes, jamais l'humaine. Réglages, règles et loi ne font qu'un document client signé (`routes`, `settings` liés par `@nom`, bornés par le socle) ; `standard/rules.json`, `configure`, la sentinelle, `flag`, `heartbeat`, les profils, `compliance_officer`, les cibles organisationnelles et la projection de conformité sont retirés. L'humain a trois gestes : oui, non (gel), règles | Arrêtée |
 | D52 | **L'agent est une boucle sur les coups.** `moves.py` est la lecture commune (agent et humain) : statut, route, file. `loop.py` joue ce qui est prêt ou décidé sous une seule capacité ; ses producteurs (réparation, construction) n'écrivent que des candidats. Les tactiques ne font que retenir. Deux nouveaux faits du scanner : `scoped` (une seule définition du périmètre d'écriture, `instruments/scope.py`) et `window` (fenêtre de mise en production lue dans les règles en vigueur) | Arrêtée |
 | D53 | **Une cérémonie, l'horloge de l'opérateur.** Identités `human`, `agent`, `guard`, `scanner`, `oracle`, `clock` ; capacités `scanner`, `oracle`, `agent`, `human` ; genèse signée par l'humain, ancre par `clock` tant que la loi ne demande pas plus de témoins ; `[clock] kind = "witnesses"` reste l'option d'équipe (au moins deux). `qualify.py` : T02 « l'humain détient sa propre clé », T03 « temps » selon le quorum rejoué | Arrêtée |
 | D54 | **Le catalogue de règles comme données.** 156 règles tirées d'OWASP ASVS 5.0 (345 exigences toutes rendues ou écartées avec raison), CWE Top 25 2025 et la liste de lancement SRE ; format unique pour tous les langages ; mots vagues remplacés par des valeurs nommées à défaut strict ; partie de l'empreinte de la release. Identité par un fournisseur OpenID Connect : les règles de mot de passe, MFA, réinitialisation et énumération vivent dans sa configuration ; les règles de serveur d'autorisation deviennent une seule règle, NO-OWN-AS | Arrêtée |
@@ -1239,6 +1235,7 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | D57 | **L'entonnoir en trois passes et la patrouille tournante.** Large, moyenne, fine ; sélection déterministe ; un refus porte le texte de la règle ; ce que chaque passe a montré est consigné pour mesurer l'effet ; la patrouille lit une catégorie par tour | Arrêtée |
 | D58 | **La console des règles.** Couverture par catégorie et par règle ; matrice d'accès signée d'un seul geste ; valeurs nommées éditées et signées dans les règles du jeu ; CLI `coverage` et `rule` | Arrêtée |
 | D60 | **Au-delà des référentiels.** Les blocs rendent les erreurs impossibles à écrire, bornent tout, ferment les contournements connus, échouent fermés, ne s'étendent que vers plus strict et versionnent ce qu'ils stockent ; même durcissement sur FastAPI et Next.js ; sessions et limites dans un magasin partagé ; `blocks/HARDENING.md` | Arrêtée |
+| D61 | **Plus d'options d'équipe.** La racine tient exactement un humain (jusqu'à huit clés) et au moins un témoin ; plus de seuil, de propositions, de délais, d'activation ni de veto (genres `activate` et `veto` retirés) ; la loi n'a plus de sections `delays` ni `witnesses` ; le temps vient de l'horloge de l'opérateur seule (`bt/clock.py` retiré) ; T09 et son outbox (`bt/delivery.py`) sont retirés, les escalades restent visibles dans la console. Le second juge restate les mêmes règles | Arrêtée |
 | D59 | **Deux piles, un contrat.** Un contrat par bloc, une implémentation FastAPI et une Next.js (web, session, access, input d'abord) ; adoption due par pile et seulement pour les blocs que la pile possède ; détection des points d'entrée Next par emplacement ; sondes HTTP quand `@app` est une URL ; les blocs JS sont épinglés dans la release | Arrêtée |
 
 **Restent ouverts** (empiriques, à trancher par mesure, pas par discussion) : fournisseur de chaque T en production ; preuve d'indépendance des domaines de restauration ; primitive d'idempotence par fournisseur au-delà de GitHub ; langage final de la TCB.
@@ -1275,7 +1272,7 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | `[run]` | `metrics` (URLs Prometheus), `slo`, `base_url`, `interval`, `store` | Sources de la production ; objectif par défaut ; stockage de télémétrie de l'interface |
 | `[deploy]` | `root`, `runner_metrics`, `restart` | Répertoire des releases que seule la garde bascule ; métriques du lanceur pour l'analyse canary ; commande de redémarrage. Sans `[deploy]`, Standard n'agit pas en production |
 | `[tests]` | `install`, `runner_user`, `unconfined` | Installer les dépendances de test (wheels seulement) ; utilisateur isolé qui exécute le code des contributions ; sans `runner_user`, aucun code candidat ne tourne, sauf `unconfined = true` en démo (D46) |
-| `[clock]` | `kind`, `quorum`, `tolerance_ms`, `state`, `[clock.witnesses.<nom>] public, url` | `local` en démo seulement ; `witnesses` en production : cotations signées sur HTTPS, écart borné, état persisté (D50) |
+| `[clock]` | `kind` | `local` : l'horloge de l'opérateur, signée par `clock` (D61) |
 | `[build]` | `store` | Magasin des demandes et contrats, par digest (défaut `requests/`) |
 | `[hosting]` | `config`, `gate_user` | Hébergement des dépôts clients, vérifié par `qualify.py` |
 | `[llm.small]`, `[llm.frontier]` | `kind`, `model`, `key_file` | Porte LLM de l'agent |
@@ -1350,7 +1347,7 @@ Tout le code hors démonstration appartient à Standard. Aucun produit métier c
 - Agents et interface ne joignent BT que par `bt.signing` et `bt.gateway`, avec leurs propres identités ; aucune clé de garde ni journal mutable n'est fourni.
 - Un nouveau module de Standard reçoit un rôle déclaré ; il ne devient pas une zone non contrôlée par simple déplacement.
 
-`bt/assessment.py` qualifie les responsabilités T01–T09 ; `bt/transactions.py` enregistre les échanges. Ces deux contrats sont distincts. `bt/adapters.py` regroupe les ports Git local et GitHub, tout en conservant leurs garanties différentes de relecture. `bt/register.py` reste un adaptateur de confiance de production : un registre déplacé n'est pas une preuve du but atteint.
+`bt/assessment.py` qualifie les responsabilités T01–T08 ; `bt/transactions.py` enregistre les échanges. Ces deux contrats sont distincts. `bt/adapters.py` regroupe les ports Git local et GitHub, tout en conservant leurs garanties différentes de relecture. `bt/register.py` reste un adaptateur de confiance de production : un registre déplacé n'est pas une preuve du but atteint.
 
 ### 20.1 Constats de lecture et périmètre de cette consolidation
 
@@ -1361,8 +1358,6 @@ Tout le code hors démonstration appartient à Standard. Aucun produit métier c
 | Plafonds exactement atteints imposant un relèvement pour une modification ordinaire | Plafonds retirés ; contrôles de couches et de provenance conservés |
 | Deux jugements avec code similaire | Conservés séparément : leur duplication est un contrôle indépendant, pas un fichier inutile |
 | Redevabilité située dans K mais hors admission | Conservée, pure et rejouable ; elle n'autorise aucune action et n'est pas déplacée dans l'agent |
-| Démarrage réel non configuré pour les témoins (`standard/runtime/daemon.py`, `_clock`) | Fait (D50) : `[clock] kind = "witnesses"` ; l'horloge locale reste réservée aux démos. Indépendance des témoins à qualifier |
-| Livraison T09 disponible mais non assemblée dans le runtime | Ouvert : aucun transport e-mail/messagerie ; la livraison n'est pas encore une BT |
 | Index JSONL des BT, écrit après les échanges, sans transaction commune avec le journal | Limite existante : enregistrement d'audit distinct, pas une atomicité durable de bout en bout ; liens `answers` non alimentés dans ces parcours |
 | Rejeu de mesure pouvant reproduire une erreur du programme ou des données de la source | Limite conservée : reproductibilité ≠ vérité ; une affirmation attestée/composite garde sa dépendance explicite |
 | `RegisterEffect.satisfied` tolère une version servie inconnue | Standard à compléter : preuve de service à rendre stricte. L'interface lit désormais le registre `canary` comme un fichier |
@@ -1411,7 +1406,7 @@ Les 8 cibles techniques ont désormais 8 probes, dont la suite de main pour `ci`
 | `tools/install_server.sh` | Laboratoire Ubuntu remplaçable, dépôt initial vide, comptes Unix, systemd, exécutant ; n'altère ni SSH ni pare-feu | Installation production indépendante, sauvegarde/restauration, contrôles de dérive ; ne pas l'utiliser avec des données client |
 | `tools/host.py` | Dépôts canoniques/inbox, accès SSH forcé par identité | Gestion complète du cycle des accès, offboarding, sauvegarde/restauration et hébergement multi-tenant qualifié |
 | `tools/refresh_data.py` | Instantané OSV/PyPI et résolution de références GitHub, pin par digest | Acquisition planifiée, données multi-écosystèmes, provenance/approbation, fraîcheur et redistribution à grande échelle |
-| `tools/qualify.py` | Diagnostic local : empreinte comparée à une genèse signée et son pin (lecture seule), fichiers de clés non vides/valides/privés, identités humaines/témoins de genèse reconnues par clé même si renommées, assessment authentifié et lié, séparation et replay | Évaluateurs distincts, campagnes continues T01–T09, cloud IAM, vrais domaines de panne ; PASS n’est pas une qualification indépendante |
+| `tools/qualify.py` | Diagnostic local : empreinte comparée à une genèse signée et son pin (lecture seule), fichiers de clés non vides/valides/privés, identités humaines/témoins de genèse reconnues par clé même si renommées, assessment authentifié et lié, séparation et replay | Évaluateurs distincts, campagnes continues T01–T08, cloud IAM, vrais domaines de panne ; PASS n’est pas une qualification indépendante |
 | `tools/replay.py` | Comparaison des faits enregistrés aux programmes épinglés | Véracité des sources, justesse des programmes, audit complet du journal/effets, export de dossiers pour évaluateur |
 | `tools/run_release.py` | Export du commit, processus Python, santé, routage canary et mesures par release | Packaging/release multi-runtime, orchestrateurs, migrations qualifiées, secrets/config et récupération durable ; ce lanceur appartient à Standard, pas à un produit métier |
 | `tools/check_layers.py`, `tools/coverage.py` | Frontières statiques, indépendance du second juge, inventaire du socle de cibles/routes ; diagnostic auxiliaire, pas une seconde loi | Isolation dynamique/physique ; cartographie des capacités absentes décrite ici, non déduite d’un nombre de fichiers |
@@ -1421,7 +1416,7 @@ Les 8 cibles techniques ont désormais 8 probes, dont la suite de main pour `ci`
 
 Ces fonctions appartiennent au périmètre commun de Standard. Les documenter n’en reporte pas la responsabilité à un futur produit métier.
 
-1. **Rendre la chaîne existante cohérente** : CI main raccordée, rapports de tests durcis et contexte commun transmis au modèle (§20.5). Restent : configuration des témoins hors opérateur, livraison/escalade T09 sous contrat BT, preuve stricte de version servie, une seule provenance des relevés et exposition de leurs inconnues. Valider chaque chaîne jusqu’à la fermeture indépendante, et les chemins de refus/réconciliation.
+1. **Rendre la chaîne existante cohérente** : CI main raccordée, rapports de tests durcis et contexte commun transmis au modèle (§20.5). Restent : preuve stricte de version servie, une seule provenance des relevés et exposition de leurs inconnues. Valider chaque chaîne jusqu’à la fermeture indépendante, et les chemins de refus/réconciliation.
 2. **Étendre ce que Standard peut mesurer** : graphes de dépendances multi-écosystèmes, secrets dans l’historique et rotation, analyse de configurations/IaC/conteneurs, capacités/performance, logs/traces et dérive d’infrastructure. Chaque mesure nomme son univers, ses sources, sa fraîcheur, ses angles morts et son contrat ; une nouvelle recette n’est autonome qu’avec recomputation indépendante.
 3. **Couvrir les opérations durables** : sauvegarde puis restauration réellement éprouvée, migrations de données et compatibilité, configuration/secrets, rotation/révocation opérationnelles, upgrades de Standard et reprise après panne. La présence d’une attestation `backup` ne couvre pas ces opérations.
 4. **Relier sécurité, conformité et exploitation** : incidents/adversaires vers obligations, containment et remédiation vérifiés, contrôle effectif des accès/fournisseurs, continuité, conformité et RSE mesurables. Les comptes rendus humains restent possibles mais doivent être distingués des mesures ; coût et empreinte environnementale ne disposent actuellement d’aucun instrument dédié.
@@ -1493,7 +1488,7 @@ Les mesures invariantes ne sont pas remplacées par ces outils. Le socle `suite`
 
 Chacun rapporte le domaine observé, la propriété affirmée, l'instrument et les hypothèses non vérifiées. Un scénario qui passe en simulation ne prouve pas la protection réelle.
 
-1. **Élargissement adversarial** : une clé, plusieurs clés d'un humain, témoin non indépendant, mauvais délai, veto, dégel → aucun élargissement hors procédure.
+1. **Élargissement adversarial** : une clé autre que celle de l'humain, un second humain, un témoin absent, un dégel → aucun élargissement hors procédure.
 2. **Loi** : loi client plus faible refusée ; loi plus stricte qui ne bloque pas les restrictions immédiates.
 3. **Déterminisme** : entrée identique → delta identique ; delta incomplet ou additionnel refusé ; écritures concurrentes → un seul préfixe linéarisé.
 4. **Preuve** : même payload signé pour deux réalités → aucune preuve de vérité sans source qualifiée ; mauvais sujet ou couverture → refus.
@@ -1532,7 +1527,7 @@ Les états ci-dessous consignent les jalons ciblés et démonstrations du labora
 | Porte | État |
 |---|---|
 | Sémantique et noyau (K) | Fait : jugement unique, six mécanismes, loi, redevabilité |
-| Frontière durable (T) | Fait pour journal, pins, second juge, garde et passerelle. Port de livraison et horloge témoin présents dans le code ; livraison T09 et témoins indépendants non assemblés dans l'installation courante (§20.1). |
+| Frontière durable (T) | Fait pour journal, pins, second juge, garde et passerelle. Le temps vient de l'horloge de l'opérateur ; T09 retiré (D61). |
 | Preuves qualifiables | Fait pour les cibles retenues (§15.3) ; données tierces épinglées (D17) |
 | Travail unifié (U) | Fait : projection, Work Engine, agent, cycle, surface, revue et attestation humaines |
 | Installation | Fait : processus opérateur et agent sous deux utilisateurs Unix, cérémonie en deux phases, séparation, qualification, adaptateur GitHub |

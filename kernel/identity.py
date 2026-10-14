@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from .canon import CanonError, canon, parse
-from .floor0 import KINDS, MIN_HUMANS
+from .floor0 import HUMANS, KINDS
 from .types import ID
 
 PAYLOAD_TYPE = "application/vnd.in-toto+json"
@@ -166,10 +166,10 @@ def _webauthn(key: dict, message: bytes, signature: dict) -> bool:
 
 # ---- the root -------------------------------------------------------------------------------------------------------
 def check_root(root) -> None:
-    """A root is {threshold, identities}: known kinds, canonical keys never repeated, and F0-1 (k >= MIN_HUMANS
-    humans can sign). Raises IdentityError."""
-    if not isinstance(root, dict) or set(root) != {"threshold", "identities"}:
-        raise IdentityError("a root is {threshold, identities}")
+    """A root is {identities}: known kinds, canonical keys never repeated, exactly one human (F0-1: one human, up to
+    eight keys for their devices) and at least one witness. Raises IdentityError."""
+    if not isinstance(root, dict) or set(root) != {"identities"}:
+        raise IdentityError("a root is {identities}")
     ids = root["identities"]
     if not isinstance(ids, dict) or not 0 < len(ids) <= 256:
         raise IdentityError("a root lists one to 256 identities")
@@ -194,9 +194,10 @@ def check_root(root) -> None:
             if key["keyid"] != kid or kid in seen:
                 raise IdentityError(f"{ident}: bad or repeated key")
             seen.add(kid)
-    k = root["threshold"]
-    if type(k) is not int or k < MIN_HUMANS or len(humans(root)) < k:
-        raise IdentityError(f"F0-1: a threshold of at least {MIN_HUMANS} human, and that many humans enrolled")
+    if len(humans(root)) != HUMANS:
+        raise IdentityError("F0-1: a root holds exactly one human")
+    if not any(d["kind"] == "witness" for d in ids.values()):
+        raise IdentityError("a root holds a witness to state time")
 
 
 def humans(root) -> set:

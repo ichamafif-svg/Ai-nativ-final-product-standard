@@ -102,10 +102,7 @@ export function createRules({ $, esc, fact, ago, getSigner, envelope }) {
       ${sections("components", ["objective", "p99_ms", "counted"], "Composants")}
       ${sections("probes", ["spec"], "Sondes")}
       ${sections("silences", ["target_of", "until", "reason"], "Silences")}
-      <section class="cols"><div class="panel"><h2>Pour une équipe</h2>
-          <p class="small quiet">Seuil de signatures humaines : dans la racine. Délais avant qu'un élargissement prenne effet : ${esc(JSON.stringify(R.team.delays))}.
-            Quorum de témoins du temps : ${esc(R.team.witnesses.quorum)}. Tout à zéro ou un : une personne, un agent. À plusieurs, on les relève ici, par une règle signée.</p></div>
-        <div class="panel"><h2>Historique</h2><div class="rows">${R.history.map((h) => `<div class="rowi"><div class="main">${h.kind === "genesis" ? "Règles initiales" : "Règles changées"}
+      <section class="cols"><div class="panel"><h2>Historique</h2><div class="rows">${R.history.map((h) => `<div class="rowi"><div class="main">${h.kind === "genesis" ? "Règles initiales" : "Règles changées"}
           <div class="facts">${fact(`par ${h.author}`, "")}${fact(ago(h.at), "")}</div></div></div>`).join("")}</div></div></section>`;
     const msg = $("#rulesmsg");
     document.querySelectorAll("[data-route]").forEach((box) => box.onchange = () => {

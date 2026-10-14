@@ -138,8 +138,6 @@ FLOORS = {
     "floor0": floor0_digest(),
     "levels": ["unknown", "real"],
     "ttl": {"pending": DAY, "unredeemed": DAY, "reconcile": DAY, "proof": DAY, "observation": DAY},
-    "delays": {"rotate": 0, "grant": 0, "unfreeze": 0, "law": 0},       # a team asks widenings to wait
-    "witnesses": {"quorum": 1},                                           # a team asks for more witnesses
     # The floor value of every setting a route compares with: the loosest the rules may set (F0-12, D36).
     "settings": {"burn_fast": "14.4", "failing": 5, "rollback_horizon_min": 240, "rollback_migrations": 1000,
                  "restarts_per_hour": 11, "freeze_below": 0, "canary_max_error_delta": "2",

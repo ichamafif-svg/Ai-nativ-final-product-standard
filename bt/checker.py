@@ -29,20 +29,18 @@ from kernel.canon import canon, digest, parse
 from kernel.floor0 import DISPATCH_MS, LINE, MAX_AHEAD_MS
 
 PREFIX = "urn:standard:kernel:1:"
-RESTRICT = {"veto": ("human",), "revoke": None, "freeze": ("human",), "invalidate": ("human", "oracle")}
+RESTRICT = {"revoke": None, "freeze": ("human",), "invalidate": ("human", "oracle")}
 DECISION = {"observed": ["decision", "approve", "real", "human"]}       # F0-12, restated
 BOOK = {("put", "statements"), ("set", "size"), ("set", "head"), ("set", "last_at")}
 TOUCH = {
     "genesis": {("set", "domain"), ("set", "root"), ("set", "root_digest"), ("set", "anchor_at"), ("set", "code"),
                 ("set", "law")},
-    # A widening is either a proposal (the law asks it to wait) or its own enactment (F0-5).
-    "rotate": {("put", "proposals"), ("set", "root"), ("set", "root_digest")},
-    "grant": {("put", "proposals"), ("put", "grants")},
-    "unfreeze": {("put", "proposals"), ("drop", "frozen")},
-    "law": {("put", "proposals"), ("set", "law")},
-    "activate": {("set", "root"), ("set", "root_digest"), ("set", "law"), ("put", "grants"), ("drop", "frozen"),
-                 ("drop", "proposals")},
-    "delegate": {("put", "grants")}, "veto": {("drop", "proposals")}, "revoke": {("put", "revoked")},
+    # A widening is its own enactment (F0-5).
+    "rotate": {("set", "root"), ("set", "root_digest")},
+    "grant": {("put", "grants")},
+    "unfreeze": {("drop", "frozen")},
+    "law": {("set", "law")},
+    "delegate": {("put", "grants")}, "revoke": {("put", "revoked")},
     "freeze": {("put", "frozen")}, "invalidate": {("put", "invalidated")}, "checkpoint": {("set", "anchor_at"), ("set", "witnessed")},
     "intent": {("put", "intents"), ("put", "obligations"), ("put", "line")},
     "token": {("drop", "obligations"), ("put", "tokens"), ("put", "token_of"), ("push", "uses"),
@@ -180,12 +178,6 @@ def _floors_kept(effective: dict, floors: dict, client: dict) -> None:
     t, f = effective.get("ttl", {}), floors["ttl"]
     if set(t) != set(f) or any(type(t[k]) is not int or not 0 < t[k] <= f[k] for k in f):
         _no("the effective law lengthens a floor ttl")
-    d, f = effective.get("delays", {}), floors["delays"]
-    if set(d) != set(f) or any(type(d[k]) is not int or d[k] < f[k] for k in f):
-        _no("the effective law shortens a floor delay")
-    if type(effective.get("witnesses", {}).get("quorum")) is not int or \
-            effective["witnesses"]["quorum"] < floors["witnesses"]["quorum"]:
-        _no("the effective law lowers the witness quorum")
     targets = {x.get("id"): x for x in effective.get("targets", []) if isinstance(x, dict)}
     for ft in floors["targets"]:
         e = targets.get(ft["id"])
@@ -366,21 +358,20 @@ class Checker:
             der, auth + hashlib.sha256(client_raw).digest(), ec.ECDSA(hashes.SHA256()))
 
     # ---- widening ---------------------------------------------------------------------------------------------------
-    def _root_ok(self, root) -> None:
-        k = root.get("threshold")
-        if type(k) is not int or k < 1 or len(_humans(root)) < k:
-            _no("a root has a threshold of at least one human, and that many humans")
-        if sum(d["kind"] == "witness" for d in root["identities"].values()) < self.raw["witnesses"]["quorum"]:
-            _no("a root keeps enough witnesses for the time quorum")
+    @staticmethod
+    def _root_ok(root) -> None:
+        if set(root) != {"identities"} or len(_humans(root)) != 1 \
+                or not any(d["kind"] == "witness" for d in root["identities"].values()):
+            _no("a root holds exactly one human and at least one witness (F0-1)")
 
     @staticmethod
-    def _quorum(record, root, signers, extra=0) -> None:
-        if _kind(root, record["author"]) != "human" or len(signers & _humans(root)) < root["threshold"] + extra:
-            _no("a widening is stated by a human and signed by the quorum of the root in force")
+    def _human(record, root, signers) -> None:
+        if _kind(root, record["author"]) != "human" or not signers & _humans(root):
+            _no("a widening is stated and signed by the root's human")
 
     def _genesis(self, pre, record, delta, root, signers):
         self._root_ok(root)
-        self._quorum(record, root, signers)
+        self._human(record, root, signers)
         b = record["body"]
         expected = {("set", "domain", digest(b)), ("set", "root_digest", digest(root)), ("set", "anchor_at", b["at"]),
                     ("set", "code", b["code"])}
@@ -390,42 +381,15 @@ class Checker:
         if [op[2] for op in delta if op[:2] == ("set", "law")] != [{"digest": record["law"], "client": b["law"]}]:
             _no("the genesis puts exactly its own client law in force")
 
-    def _proposal(self, pre, record, delta, root, signers):
+    def _widening(self, pre, record, delta, root, signers):
+        """F0-5: a widening is stated by the human and enacts itself with its own entry."""
         b, kind = record["body"], record["kind"]
-        self._quorum(record, root, signers, 1 if b.get("override") else 0)
+        self._human(record, root, signers)
         if kind == "unfreeze" and b["scope"] not in pre["frozen"]:
             _no("only a frozen scope can be unfrozen")
-        if not self.raw["delays"][kind]:                                # F0-5: no delay, the entry enacts itself
-            if b.get("override"):
-                _no("nothing waits to be overridden")
-            self._enacts(pre, record, delta, kind, b)
-            return
-        expected = {"id": b["id"], "kind": kind, "body": b, "signers": sorted(signers & _humans(pre["root"])),
-                    "not_before": b["at"] + (2 if b.get("override") else 1) * self.raw["delays"][kind],
-                    "override": bool(b.get("override")), "root_digest": pre["root_digest"],
-                    "law_digest": pre["law"]["digest"]}
-        if kind == "unfreeze":
-            expected["freeze"] = pre["frozen"][b["scope"]]
-        if delta.count(("put", "proposals", b["id"], expected)) != 1 or len([o for o in delta if o[1] == "proposals"]) != 1:
-            _no("the proposal equals the signed request with its delay")
+        self._enacts(pre, record, delta, kind, b)
 
-    def _rotate(self, pre, record, delta, root, signers):
-        self._root_ok(record["body"]["root"])
-        self._proposal(pre, record, delta, root, signers)
-
-    _grant = _unfreeze = _law = _proposal
-
-    def _activate(self, pre, record, delta, root, signers):
-        self._quorum(record, root, signers)
-        p = pre["proposals"].get(record["body"]["proposal"])
-        if (p is None or p["root_digest"] != pre["root_digest"] or p["law_digest"] != pre["law"]["digest"]
-                or pre["anchor_at"] < p["not_before"]):
-            _no("an activation needs a live proposal of this root and law whose witnessed delay has passed")
-        if p["kind"] == "unfreeze" and pre["frozen"].get(p["body"]["scope"]) != p["freeze"]:
-            _no("the scope was frozen again since the proposal")
-        self._enacts(pre, record, [op for op in delta if op[:2] != ("drop", "proposals")], p["kind"], p["body"])
-        if [op for op in delta if op[:2] == ("drop", "proposals")] != [("drop", "proposals", p["id"])]:
-            _no("the activation consumes exactly its proposal")
+    _rotate = _grant = _unfreeze = _law = _widening
 
     def _enacts(self, pre, record, delta, kind, pb) -> None:
         """What a widening changes, restated: exactly its signed body, nothing else."""
@@ -478,12 +442,6 @@ class Checker:
         if allowed is not None and _kind(root, author) not in allowed:
             _no(f"{kind} comes from a {' or '.join(allowed)} of the root")
 
-    def _veto(self, pre, record, delta, root, signers):
-        p = pre["proposals"].get(record["body"]["proposal"])
-        if p is None or p["override"] or record["author"] in p["signers"] or _kind(root, record["author"]) != "human":
-            _no("only a non-signing human vetoes a pending ordinary proposal")
-        self._exactly(delta, [("drop", "proposals", p["id"])])
-
     def _revoke(self, pre, record, delta, root, signers):
         gid = record["body"]["grant"]
         if gid not in pre["grants"]:
@@ -507,9 +465,8 @@ class Checker:
         self._exactly(delta, [("put", "invalidated", record["body"]["evidence"], record["body"]["id"])])
 
     def _checkpoint(self, pre, record, delta, root, signers):
-        if _kind(root, record["author"]) != "witness" or \
-                sum(_kind(root, s) == "witness" for s in signers) < self.raw["witnesses"]["quorum"]:
-            _no("time moves only with the witness quorum")
+        if _kind(root, record["author"]) != "witness":
+            _no("time moves only with a witness of the root")
         b = record["body"]
         if b["size"] != pre["size"] or b["head"] != pre["head"]:
             _no("a checkpoint names the current head")

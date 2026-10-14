@@ -391,8 +391,6 @@ class Installation:
                 "rules": {"settings": rules.settings, "routes": rules.routes(), "socle": floor["routes"],
                           "bounds": floor["bounds"],
                           "schema": {k: v[1] for k, v in SCHEMA.items() if v[1] is not None},
-                          "team": {"delays": view["law"]["effective"]["delays"],
-                                   "witnesses": view["law"]["effective"]["witnesses"]},
                           "history": view.get("rules_history", []),
                           "values": self.named_values(rules),
                           "silences": rules.silences(int(time.time() * 1000))},

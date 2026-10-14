@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from . import language, obligations as obl
 from .canon import CanonError, canon, detach, digest, parse
 from .floor0 import LAPSE, LINE, MAX_AHEAD_MS, POLARITY, RESTRICT_BY, line_state
-from .identity import IdentityError, check_root, humans, kind_of, open_envelope, signers as verify_signers, subject_name
+from .identity import IdentityError, check_root, kind_of, open_envelope, signers as verify_signers, subject_name
 from .law import MAX_ENTITIES, Law, LawError, Release, compose
 from .types import PATTERN, RESOURCE, ShapeError, build, covers, within
 
@@ -30,17 +30,14 @@ MECHANISMS = ("CAP", "OBL", "NIV", "PROV", "TYPE", "HIST")
 MAX_CHAIN = 16
 MAX_ENTRY_BYTES = 1 << 20
 
-_PROPOSAL = {"override": "bool?"}
 _SCOPE = {"holder": "id", "actions": "list", "resources": "list", "conditions": "list", "budget": "map?",
           "not_after": "int"}
 SHAPES = {
     "genesis": {"root": "map", "law": "map", "code": "digest"},
-    "law": {"client": "map", **_PROPOSAL},
-    "rotate": {"root": "map", **_PROPOSAL},
-    "grant": {**_SCOPE, **_PROPOSAL},
-    "unfreeze": {"scope": "pattern", **_PROPOSAL},
-    "activate": {"proposal": "id"},
-    "veto": {"proposal": "id"},
+    "law": {"client": "map"},
+    "rotate": {"root": "map"},
+    "grant": {**_SCOPE},
+    "unfreeze": {"scope": "pattern"},
     "delegate": {"parent": "id", **_SCOPE},
     "revoke": {"grant": "id"},
     "freeze": {"scope": "pattern"},
@@ -74,7 +71,7 @@ def no(code: str, detail: str = ""):
 def empty() -> dict:
     return {"size": 0, "head": None, "domain": None, "last_at": 0, "anchor_at": 0, "witnessed": False,
             "root": None, "root_digest": None, "code": None, "law": None,
-            "statements": {}, "proposals": {}, "grants": {}, "revoked": {}, "frozen": {},
+            "statements": {}, "grants": {}, "revoked": {}, "frozen": {},
             "obligations": {}, "closed": {}, "intents": {}, "tokens": {}, "token_of": {},
             "reserved": {}, "executed": {}, "uses": {}, "line": {}, "observations": {}, "entities": {},
             "invalidated": {}}
@@ -269,93 +266,53 @@ class Kernel:
         author_kind = kind_of(c.root, c.body["author"])
         if polarity == "widen":
             if author_kind != "human":
-                no("CAP.HUMAN", "a widening is stated by a human of the root")
-            need = c.root["threshold"] + (1 if c.body.get("override") else 0)
-            got = c.signers & humans(c.root)
-            if len(got) < need:
-                no("CAP.QUORUM", f"{need} distinct humans of the root must sign, {len(got)} did")
+                no("CAP.HUMAN", "a widening is stated and signed by the root's human")
         elif polarity == "restrict":
             if author_kind not in RESTRICT_BY[c.kind] and c.kind != "revoke":
                 no("CAP.RESTRICT", f"{c.kind} comes from a {' or '.join(RESTRICT_BY[c.kind])} of the root")
         elif polarity == "witness":
             if author_kind != "witness":
-                no("CAP.WITNESS", "time is stated by witnesses")
-            got = {i for i in c.signers if kind_of(c.root, i) == "witness"}
-            if len(got) < c.law.witness_quorum:
-                no("CAP.WITNESS", f"{c.law.witness_quorum} witnesses must sign, {len(got)} did")
+                no("CAP.WITNESS", "time is stated by a witness of the root")
         # attenuate, act, attest: the capability chain is checked by the handler
 
     # ---- widen ------------------------------------------------------------------------------------------------------
     def _genesis(self, c: _Ctx, d: list) -> None:
         if c.body["code"] != self.code:
             no("HIST.CODE", "the genesis binds another code release")
-        self._enough_witnesses(c.body["root"], c.law)
         d += [("set", "domain", digest(c.body)), ("set", "root", c.body["root"]),
               ("set", "root_digest", digest(c.body["root"])), ("set", "anchor_at", c.at),
               ("set", "code", c.body["code"]), ("set", "law", {"digest": c.law.digest, "client": c.body["law"]})]
 
-    @staticmethod
-    def _enough_witnesses(root, law: Law) -> None:
-        if sum(d["kind"] == "witness" for d in root["identities"].values()) < law.witness_quorum:
-            no("CAP.WITNESS", "the root lacks enough witnesses for the law's time quorum")
-
-    def _propose(self, c: _Ctx, d: list, kind: str, extra=None) -> None:
-        """A widening takes effect with its own entry, unless the law declares a delay for its kind (F0-5)."""
-        if not c.law.delay[kind]:
-            if c.body.get("override"):
-                no("TYPE.SHAPE", "an override overrides a veto, and nothing waits to be vetoed")
-            self._enact(c, d, kind, c.body)
-            return
-        factor = 2 if c.body.get("override") else 1
-        d.append(("put", "proposals", c.body["id"], {
-            "id": c.body["id"], "kind": kind, "body": c.body, "signers": sorted(c.signers & humans(c.s["root"])),
-            "not_before": c.at + factor * c.law.delay[kind], "override": bool(c.body.get("override")),
-            "root_digest": c.s["root_digest"], "law_digest": c.s["law"]["digest"], **(extra or {})}))
 
     def _rotate(self, c: _Ctx, d: list) -> None:
         try:
             check_root(c.body["root"])
         except IdentityError as exc:
             no("TYPE.ROOT", str(exc))
-        self._enough_witnesses(c.body["root"], c.law)
-        self._propose(c, d, "rotate")
+        self._enact(c, d, "rotate", c.body)
 
     def _grant(self, c: _Ctx, d: list) -> None:
         self._scope(c)
         if c.body["not_after"] <= c.at:
             no("TYPE.SHAPE", "a grant ends after it is proposed")
-        self._propose(c, d, "grant")
+        self._enact(c, d, "grant", c.body)
 
     def _law(self, c: _Ctx, d: list) -> None:
-        """A new client law: composed and validated now, in force on activation."""
+        """A new client law: composed, validated and in force with this entry."""
         try:
-            new = self.load(c.body["client"])
+            self.load(c.body["client"])
         except LawError as exc:
             no("TYPE.LAW", str(exc))
-        self._enough_witnesses(c.s["root"], new)
-        self._propose(c, d, "law")
+        self._enact(c, d, "law", c.body)
 
     def _unfreeze(self, c: _Ctx, d: list) -> None:
         freeze = c.s["frozen"].get(c.body["scope"])
         if freeze is None:
             no("CAP.NOT_FROZEN", "that scope is not frozen")
-        self._propose(c, d, "unfreeze", {"freeze": freeze})
-
-    def _activate(self, c: _Ctx, d: list) -> None:
-        p = c.s["proposals"].get(c.body["proposal"])
-        if p is None:
-            no("CAP.PROPOSAL", "no such pending proposal")
-        if p["root_digest"] != c.s["root_digest"] or p["law_digest"] != c.s["law"]["digest"]:
-            no("CAP.STALE", "the proposal was approved under another root or law: propose again")
-        if c.s["anchor_at"] < p["not_before"]:
-            no("CAP.DELAY", f"the proposal activates at {p['not_before']} of witnessed time")
-        if p["kind"] == "unfreeze" and c.s["frozen"].get(p["body"]["scope"]) != p["freeze"]:
-            no("CAP.STALE", "the scope was frozen again since: propose again")
-        self._enact(c, d, p["kind"], p["body"])
-        d.append(("drop", "proposals", p["id"]))
+        self._enact(c, d, "unfreeze", c.body)
 
     def _enact(self, c: _Ctx, d: list, kind: str, pb: dict) -> None:
-        """What a widening changes, at once or on activation."""
+        """What a widening changes, with its own entry (F0-5)."""
         if kind == "law":
             d.append(("set", "law", {"digest": self.load(pb["client"]).digest, "client": pb["client"]}))
         elif kind == "rotate":
@@ -408,16 +365,6 @@ class Kernel:
         d.append(("put", "grants", b["id"], record))
 
     # ---- restrict ---------------------------------------------------------------------------------------------------
-    def _veto(self, c: _Ctx, d: list) -> None:
-        p = c.s["proposals"].get(c.body["proposal"])
-        if p is None:
-            no("CAP.VETO", "nothing pending to veto")
-        if p["override"]:
-            no("CAP.VETO", "an override by a higher quorum cannot be vetoed")
-        if c.body["author"] in p["signers"]:
-            no("CAP.VETO", "a signer of the proposal cannot veto it")
-        d.append(("drop", "proposals", p["id"]))
-
     def _revoke(self, c: _Ctx, d: list) -> None:
         gid = c.body["grant"]
         if gid not in c.s["grants"]:

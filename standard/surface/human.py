@@ -2,7 +2,7 @@
 
     yes      decide(resource)      `decision = approve` on the exact resource of one move: its human route may hold
     no       refuse(scope)         freeze the move's resource, or a whole scope: nothing acts on it any more
-    rules    rules(client)         put new rules in force (a widening: the human's threshold signs it)
+    rules    rules(client)         put new rules in force (a widening: the human signs it)
 
 Lifting a no (`release`) is a widening too. The kernel decides whether a statement is admitted and what it permits.
 In production the human signs with a passkey in the console; a key file is the stand-in for the command line.

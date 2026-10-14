@@ -172,7 +172,6 @@ class SecondJudgeComposition(unittest.TestCase):
                        lambda w: w["settings"].__setitem__("rollback_horizon_min", 999),
                        lambda w: w["targets"][3].__setitem__("due_ms", w["targets"][3]["due_ms"] + 1),
                        lambda w: w["ttl"].__setitem__("proof", w["ttl"]["proof"] * 2),
-                       lambda w: w["witnesses"].__setitem__("quorum", 0),
                        lambda w: w["ops"]["remediate"].__setitem__("resource", "repo:{area}:{item}"),
                        lambda w: w["targets"].pop(5)):
             weak = copy.deepcopy(law.raw)
@@ -352,25 +351,16 @@ class WriteCost(unittest.TestCase):
         self.assertNotEqual(view["size"], L.state["size"])                         # later admissions do not leak
 
 
-class WitnessConfiguration(unittest.TestCase):
-    """§20.1: the operator only accepted the local demo clock; production now configures witnesses."""
+class ClockConfiguration(unittest.TestCase):
+    """F0-1: one human, one agent, the operator's clock; nothing else is accepted."""
 
-    def test_witnesses_are_reached_over_https_and_the_operator_clock_is_the_default(self):
-        import base64
+    def test_only_the_operator_clock(self):
         import types
-        from bt.clock import WitnessClock
         from standard.runtime.daemon import Installation
         fake = types.SimpleNamespace(demo=False, config={"ledger": {"genesis": "g"}}, path=Path("/tmp/standard.toml"))
-        key = base64.b64encode(b"k" * 32).decode()
-        self.assertTrue(callable(Installation._clock(fake, {"kind": "local"})))   # one human, one agent: F0-1
+        self.assertTrue(callable(Installation._clock(fake, {"kind": "local"})))
         with self.assertRaises(ValueError):
-            Installation._clock(fake, {"kind": "witnesses", "witnesses": {"w1": {"public": key, "url": "http://a"},
-                                                                          "w2": {"public": key, "url": "http://b"}}})
-        clock = Installation._clock(fake, {"kind": "witnesses", "tolerance_ms": 20,
-                                           "witnesses": {"w1": {"public": key, "url": "https://a"},
-                                                         "w2": {"public": key, "url": "https://b"}}})
-        self.assertIsInstance(clock, WitnessClock)
-        self.assertEqual(clock.tolerance, 20)
+            Installation._clock(fake, {"kind": "witnesses"})
 
 
 if __name__ == "__main__":

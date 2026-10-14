@@ -5,9 +5,8 @@
 One process, one host, one writer (D06). Every tick: the clock's checkpoint, instruments, departures, readback, proof
 of application. Each pass fails alone and is logged; none can admit anything except through the journal.
 
-Time (F0-1, F0-6): with one human and one agent, the operator's own `clock` identity signs the checkpoints, from the
-local clock or from external witness quotes (`[clock] kind = "witnesses"`). A team that raises the witness quorum in
-its rules runs its witnesses elsewhere and the operator stops signing. In a demo installation (`demo = true`) the
+Time (F0-1, F0-6): with one human and one agent, the operator's own `clock` identity signs the checkpoints from the
+local clock. In a demo installation (`demo = true`) the
 operator also assessed its own installation: every view says SELF_ASSESSED (D19).
 """
 from __future__ import annotations
@@ -122,41 +121,15 @@ class Installation:
         self.socket = resolve(c["socket"]["path"])
 
     def _clock(self, spec: dict):
-        """[clock] kind = "local" (the operator's clock, the default) or "witnesses" (a team option: at least two):
-            quorum = 2, tolerance_ms = 0, state = "clock.json",
-            [clock.witnesses.<name>] public = "<base64 Ed25519>", url = "https://..."   (one per witness)
-        Each reading asks every witness for a signed quote of a fresh nonce (bt.clock.WitnessClock)."""
-        kind = spec.get("kind", "local")
-        if kind == "local":
-            return now_ms
-        if kind != "witnesses":
-            raise ValueError("[clock] kind is local (demo) or witnesses")
-        from bt.clock import WitnessClock
-        witnesses = spec.get("witnesses", {})
-        urls = {name: w["url"] for name, w in witnesses.items()}
-        if any(not str(u).startswith("https://") for u in urls.values()):
-            raise ValueError("witnesses are reached over https")
-
-        def fetch(nonce: str) -> list:
-            import urllib.parse
-            import urllib.request
-            quotes = []
-            for url in urls.values():
-                query = urllib.parse.urlencode({"nonce": nonce})
-                with urllib.request.urlopen(f"{url}?{query}", timeout=5) as r:
-                    quotes.append(json.loads(r.read(65_536)))
-            return quotes
-        state = spec.get("state")
-        return WitnessClock(genesis=self.config["ledger"]["genesis"],
-                            public_keys={n: base64.b64decode(w["public"]) for n, w in witnesses.items()},
-                            quorum=int(spec.get("quorum", 2)), fetch=fetch,
-                            tolerance_ms=int(spec.get("tolerance_ms", 0)),
-                            state=(self.path.parent / state) if state else None)
+        """[clock] kind = "local": the operator's clock (F0-1: one human, one agent, one witness)."""
+        if spec.get("kind", "local") != "local":
+            raise ValueError("[clock] kind is local")
+        return now_ms
 
     def witness(self) -> None:
-        """The operator's clock anchors the current head, unless the rules ask for more witnesses than it."""
+        """The operator's clock anchors the current head."""
         state = self.journal.snapshot()
-        if not (self.keys / "clock.key").exists() or self.kernel.law_of(state).witness_quorum > 1:
+        if not (self.keys / "clock.key").exists():
             return
         at = max(self.clock(), state["last_at"] + 1)
         body = {"id": f"checkpoint-{uuid.uuid4().hex}", "at": at, "author": "clock", "size": state["size"],

@@ -22,7 +22,7 @@ from bt.checker import Checker  # noqa: E402
 CODE = digest({"code": "test-release"})
 HOUR = 3_600_000
 # One human and one agent, the machines, and a second human and witness for the team options.
-IDENTITIES = {"h1": "human", "h2": "human", "w1": "witness", "w2": "witness", "guard": "guard", "agent": "agent",
+IDENTITIES = {"h1": "human", "w1": "witness", "guard": "guard", "agent": "agent",
               "scanner": "service", "oracle": "oracle", "tester": "service", "reproducer": "service"}
 BINDINGS = {"owner": "h1", "inventory_source": "oracle", "scanner": "scanner"}
 
@@ -34,7 +34,7 @@ def client_law(bindings=None, **extra) -> dict:
 
 class Keys:
     def __init__(self):
-        self.private, self.root = {}, {"threshold": 1, "identities": {}}
+        self.private, self.root = {}, {"identities": {}}
         for ident, kind in IDENTITIES.items():
             self.add(ident, kind)
 
@@ -101,9 +101,7 @@ class Ledger:
         raise AssertionError(f"{kind} was admitted")
 
     def genesis(self, law, at):
-        founders = sorted(i for i, d in self.keys.root["identities"].items() if d["kind"] == "human")
-        self.submit("genesis", "h1", founders[:self.keys.root["threshold"]], at, root=self.keys.root, law=law,
-                    code=CODE)
+        self.submit("genesis", "h1", ["h1"], at, root=self.keys.root, law=law, code=CODE)
 
     def checkpoint(self, at=None, signers=("w1",)):
         at = self.state["last_at"] + 1 if at is None else at

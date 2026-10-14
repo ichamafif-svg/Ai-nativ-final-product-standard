@@ -6,7 +6,6 @@ import os
 import tempfile
 import threading
 import unittest
-from pathlib import Path
 
 from fixture import CODE, Ledger
 
@@ -15,12 +14,9 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from standard.floors import RELEASE
 from kernel import Kernel, Refused, canon, digest
-from bt import (AdmissionGateway, Checker, ClockError, Disagreement, EffectPort, EscalationOutbox,
-                     GatewayClient, Halted, Journal, PinStore, SignedAssessment, Signer, TrustUnavailable,
-                     TrustedService, WitnessClock, required_for)
+from bt import (AdmissionGateway, Checker, Disagreement, EffectPort, GatewayClient, Halted, Journal, PinStore,
+                SignedAssessment, Signer, TrustUnavailable, TrustedService, required_for)
 from bt.assessment import BASE, PREFIX as ASSESSMENT_PREFIX
-from bt.clock import PREFIX as CLOCK_PREFIX
-from bt.delivery import PREFIX as RECEIPT_PREFIX
 from bt.gateway import answer
 
 
@@ -238,76 +234,6 @@ class Boundary(unittest.TestCase):
                 b.check(BASE, **{"release": CODE, "genesis": "g", "ledger": "/ledger", **kwargs})
         with self.assertRaises(TrustUnavailable):
             b.check(BASE | {"T07"}, release=CODE, genesis="g", ledger="/ledger", now=500)
-
-
-class Clock(unittest.TestCase):
-    def setUp(self):
-        self.keys = {w: Ed25519PrivateKey.generate() for w in ("w1", "w2")}
-        self.at = {"w1": 100, "w2": 100}
-
-    def fetch(self, nonce):
-        quotes = []
-        for w, sk in self.keys.items():
-            claim = {"genesis": "g", "nonce": nonce, "witness": w, "at": self.at[w]}
-            quotes.append({"claim": claim, "signature": base64.b64encode(sk.sign(CLOCK_PREFIX + canon(claim))).decode()})
-        return quotes
-
-    def test_two_witnesses_agree_and_time_never_goes_back(self):
-        clock = WitnessClock(genesis="g", public_keys={w: raw_public(k) for w, k in self.keys.items()}, quorum=2,
-                             fetch=self.fetch)
-        self.assertEqual(clock(), 100)
-        self.at["w2"] = 101
-        with self.assertRaises(ClockError):
-            clock()
-        self.at = {"w1": 50, "w2": 50}
-        with self.assertRaises(ClockError):
-            clock()
-
-    def test_a_bounded_spread_gives_the_latest_quote_and_restarts_never_go_back(self):
-        """Review, medium 15: exact agreement of independent clocks, and monotonicity lost at every restart."""
-        state = Path(tempfile.mkdtemp()) / "clock.json"
-        keys = {w: raw_public(k) for w, k in self.keys.items()}
-        clock = WitnessClock(genesis="g", public_keys=keys, quorum=2, fetch=self.fetch, tolerance_ms=50, state=state)
-        self.at = {"w1": 100, "w2": 130}
-        self.assertEqual(clock(), 130)
-        self.at = {"w1": 100, "w2": 300}
-        with self.assertRaises(ClockError):
-            clock()                                                       # spread beyond the tolerance
-        again = WitnessClock(genesis="g", public_keys=keys, quorum=2, fetch=self.fetch, tolerance_ms=50, state=state)
-        self.at = {"w1": 120, "w2": 125}
-        with self.assertRaises(ClockError):
-            again()                                                       # below what was already returned
-        with self.assertRaises(ClockError):
-            WitnessClock(genesis="g", public_keys=keys, quorum=2, fetch=self.fetch, tolerance_ms=60_000)
-
-
-class Delivery(unittest.TestCase):
-    def test_an_unanswered_send_is_read_back_never_resent(self):
-        provider = Ed25519PrivateKey.generate()
-        sent, receipts = [], {}
-
-        class Transport:
-            def send(self, key, payload):
-                sent.append(key)
-                raise TimeoutError("lost answer after sending")
-
-            def readback(self, key):
-                return receipts.get(key)
-
-        box = EscalationOutbox(os.path.join(tempfile.mkdtemp(), "out.db"), transport=Transport(),
-                               provider_keys={"mail": raw_public(provider)}, genesis="g", create=True)
-        verdict = {"state": "ESCALATED", "head": "h", "escalated": [
-            {"obligation": "target:vulns", "opened": 1, "due": 2, "escalated_to": ["h1", "h2"]}]}
-        first = box.deliver_due(verdict)
-        self.assertEqual(list(first.values()), ["UNKNOWN"])
-        key = next(iter(first))
-        payload = {"key": key, "genesis": "g", "head": "h", "obligation": "target:vulns", "opened": 1, "due": 2,
-                   "recipients": ["h1", "h2"]}
-        claim = {"key": key, "payload_digest": digest(payload), "recipients_digest": digest(["h1", "h2"]),
-                 "provider": "mail", "delivered_at": 3}
-        receipts[key] = {"claim": claim, "signature": base64.b64encode(provider.sign(RECEIPT_PREFIX + canon(claim))).decode()}
-        self.assertEqual(box.deliver_due(verdict), {key: "delivered"})
-        self.assertEqual(sent, [key])
 
 
 class Service(unittest.TestCase):

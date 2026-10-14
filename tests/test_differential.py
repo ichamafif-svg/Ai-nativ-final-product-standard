@@ -19,7 +19,7 @@ from bt.checker import Disagreement  # noqa: E402
 RUNS = int(os.environ.get("STANDARD_DIFFERENTIAL", "12"))
 STEPS = 60
 SHA = ["a" * 40, "b" * 40]
-HUMANS = ("h1", "h2")
+HUMANS = ("h1",)
 
 
 def setup(L):
@@ -100,7 +100,7 @@ def proposal(rng, L, caps):
         return "evidence", "oracle", None, {"at": at, "under": caps["oracle"], "resource": it["resource"],
                                             "subject": it["id"], "level": "real"}
     if choice == 12 and s["grants"] and rng.random() < 0.2:
-        return "revoke", pick(("h2", "agent")), None, {"at": at, "grant": pick(sorted(s["grants"]))}
+        return "revoke", pick(("h1", "agent")), None, {"at": at, "grant": pick(sorted(s["grants"]))}
     return "checkpoint", "w1", None, {"at": at, "size": s["size"], "head": s["head"]}
 
 

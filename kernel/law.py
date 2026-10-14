@@ -18,21 +18,20 @@ import re
 
 from . import obligations as obl
 from .canon import CanonError, canon, digest
-from .floor0 import DECISION, MIN_DELAY_MS, MIN_WITNESSES, POLARITY, floor0_digest
+from .floor0 import DECISION, POLARITY, floor0_digest
 from .language import LanguageError, compile_program, number
 from .types import ID, RESOURCE, SCALARS, SEGMENT, ShapeError, check_spec
 
 FORMAT = "standard-law/1"
 CLIENT_FORMAT = "standard-client/1"
 TTL = ("pending", "unredeemed", "reconcile", "proof", "observation")
-DELAYS = ("rotate", "grant", "unfreeze", "law")
-TRUSTED = tuple(f"T{i:02}" for i in range(1, 10))
+TRUSTED = tuple(f"T{i:02}" for i in range(1, 9))
 EFFECT_MINIMUM = ("T07", "T08")
 SLOT = re.compile(r"\{([A-Za-z][A-Za-z0-9_]{0,63})\}")
-TOP = ("format", "floor0", "levels", "ops", "evidence", "discharges", "conditions", "ttl", "delays", "witnesses",
+TOP = ("format", "floor0", "levels", "ops", "evidence", "discharges", "conditions", "ttl",
        "settings", "targets", "obligations", "resources", "instruments")
 CLIENT_TOP = ("format", "floors", "bindings", "ops", "evidence", "discharges", "conditions", "targets", "obligations",
-              "tighten", "ttl", "delays", "witnesses", "routes", "settings", "resources", "instruments")
+              "tighten", "ttl", "routes", "settings", "resources", "instruments")
 MAX_SETTINGS_BYTES = 65_536
 OBLIGATION_RANK = {"measure": 0, "escalate": 1, "refuse": 2}
 YEAR_MS = 365 * 86_400_000
@@ -111,9 +110,7 @@ def stricter(way: str, floor, value) -> bool:
 def _tighter(section: str, base, value) -> bool:
     if type(value) is not int:
         return False
-    if section == "ttl":
-        return 0 < value <= base                      # sooner expiry, sooner deadlines
-    return value >= base                              # longer delays, larger witness quorum
+    return section == "ttl" and 0 < value <= base     # sooner expiry, sooner deadlines
 
 
 def _reaches(op: dict, resource: str) -> bool:
@@ -150,7 +147,7 @@ def compose(release: Release, client) -> dict:
         raise LawError(f"a client law declares only {list(CLIENT_TOP)}")
     if client.get("format") != CLIENT_FORMAT or client.get("floors") != release.digest:
         raise LawError("the client law is not written for the floors of this release")
-    for section in ("ops", "evidence", "discharges", "conditions", "ttl", "delays", "witnesses", "tighten",
+    for section in ("ops", "evidence", "discharges", "conditions", "ttl", "tighten",
                     "resources", "instruments", "routes", "settings"):
         if not isinstance(client.get(section, {}), dict):
             raise LawError(f"{section} is a map")
@@ -177,7 +174,7 @@ def compose(release: Release, client) -> dict:
         if any(not isinstance(i, dict) or i.get("id") in floor_ids for i in extra):
             raise LawError(f"{section}: a client adds entries, it never redefines a floor")
         law[section] = law[section] + copy.deepcopy(extra)
-    for section in ("ttl", "delays", "witnesses"):
+    for section in ("ttl",):
         for field, value in client.get(section, {}).items():
             if field not in law[section] or not _tighter(section, law[section][field], value):
                 raise LawError(f"{section}.{field}: a client may only tighten the floors")
@@ -466,15 +463,6 @@ class Law:
         if (not isinstance(self.ttl, dict) or set(self.ttl) != set(TTL)
                 or not all(type(v) is int and v > 0 for v in self.ttl.values())):
             raise LawError(f"ttl declares exactly {list(TTL)}")
-        self.delay = effective.get("delays")
-        if (not isinstance(self.delay, dict) or set(self.delay) != set(DELAYS)
-                or any(type(v) is not int or v < MIN_DELAY_MS for v in self.delay.values())):
-            raise LawError(f"delays declares exactly {list(DELAYS)}, each at least FLOOR-0's minimum (0: at once)")
-        witnesses = effective.get("witnesses")
-        if (not isinstance(witnesses, dict) or set(witnesses) != {"quorum"} or type(witnesses["quorum"]) is not int
-                or witnesses["quorum"] < MIN_WITNESSES):
-            raise LawError(f"witnesses declares a quorum of at least {MIN_WITNESSES}")
-        self.witness_quorum = witnesses["quorum"]
         kinds = {**POLARITY, **dict.fromkeys(self.evidence, "attest")}
         try:
             self.obligations = obl.validate(effective.get("obligations"), kinds,

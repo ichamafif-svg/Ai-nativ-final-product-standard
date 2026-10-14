@@ -7,7 +7,7 @@
 `init` writes the keys, the recommended rules (standard/floors.py RECOMMENDED), the genesis, the clock's first
 checkpoint, the four capabilities (the human's decisions and requests, the agent's moves, the scanner's measures, the
 oracle's proofs), a self-assessment and DIR/standard.toml. Widening takes effect at once: the installation runs as
-soon as `init` returns. A team raises the threshold, the delays and the witnesses later, in the rules.
+soon as `init` returns.
 
 DEMO: one operator generates every key on one host, the human's included. The human's key belongs on the human's own
 device (a passkey in the console); the assessment is self-signed (D19). Use this for a demonstration, never as a
@@ -77,7 +77,7 @@ def init(args) -> None:
     (d / "agent").mkdir()                                  # U's own directory: its key, its store, its notes
     signers = {i: new_key(d / ("agent" if i == "agent" else "keys") / f"{i}.key") for i in IDENTITIES}
     assessor = new_key(d / "keys" / "assessor.key")
-    root = {"threshold": 1, "identities": {i: {"kind": k, "keys": [signers[i].root_key()]} for i, k in IDENTITIES.items()}}
+    root = {"identities": {i: {"kind": k, "keys": [signers[i].root_key()]} for i, k in IDENTITIES.items()}}
     law = rules({"owner": "human", "inventory_source": "scanner", "scanner": "scanner"})
     code = code_digest()
     kernel = Kernel(RELEASE, code)

@@ -1,7 +1,7 @@
 """The operator-side service: K and T assembled behind one admission path (ARCHITECTURE.md §10, §13.1).
 
 It runs in its own process, under its own OS account. U reaches it only through the gateway (`view`, `status`,
-`qualify`, `admit`); the operator loop calls `dispatch_due`, `reconcile_due` and `deliver_due`. Every operation first
+`qualify`, `admit`); the operator loop calls `dispatch_due` and `reconcile_due`. Every operation first
 qualifies exactly the T contracts it depends on; a missing contract stops that operation only.
 """
 from __future__ import annotations
@@ -23,12 +23,12 @@ EFFECT = TIMED | {"T07", "T08"}
 
 class TrustedService:
     def __init__(self, journal: Journal, *, boundary, clock, effect_port: EffectPort | None = None,
-                 guard_signer: Signer | None = None, reconciliation=None, delivery=None):
+                 guard_signer: Signer | None = None, reconciliation=None):
         if not callable(getattr(boundary, "check", None)) or not callable(clock):
             raise TrustUnavailable("TRUST.BOUNDARY_REQUIRED")
         self.journal, self.boundary, self.clock = journal, boundary, clock
         self.effect_port, self.guard_signer = effect_port, guard_signer
-        self.reconciliation, self.delivery = reconciliation, delivery
+        self.reconciliation = reconciliation
         self._last_now = -1
         self.accountability = Accountability(journal.kernel)
         self._fold_lock = threading.Lock()                # the gateway thread and the operator loop both read health
@@ -51,8 +51,6 @@ class TrustedService:
             raise TrustUnavailable("TRUST.EFFECT_PORT")
         if "T08" in need and not callable(getattr(self.reconciliation, "readback", None)):
             raise TrustUnavailable("TRUST.RECONCILIATION_PORT")
-        if "T09" in need and not callable(getattr(self.delivery, "deliver_due", None)):
-            raise TrustUnavailable("TRUST.DELIVERY_PORT")
         return now
 
     # ---- the gateway surface ----------------------------------------------------------------------------------------
@@ -197,7 +195,3 @@ class TrustedService:
             except Exception as exc:
                 results[intent] = {"blocked": getattr(exc, "code", type(exc).__name__)}
         return results
-
-    def deliver_due(self) -> dict:
-        now = self._require(TIMED | {"T09"})
-        return self.delivery.deliver_due(self.health(required_at=now))

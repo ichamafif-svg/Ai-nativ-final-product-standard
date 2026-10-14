@@ -16,7 +16,6 @@ from kernel.identity import canonical_public
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 GRANT = {"holder": "agent", "actions": ["x"], "resources": ["*"], "conditions": [], "not_after": 10 ** 12}
-TEAM_DELAYS = {"rotate": HOUR, "grant": HOUR, "unfreeze": HOUR, "law": HOUR}
 
 
 def health(ledger, required_at=None):
@@ -28,30 +27,24 @@ def health(ledger, required_at=None):
     return acc.health(a, ks, required_at=required_at)
 
 
-def team(threshold=2, **law):
-    """Three humans, a threshold of two, and widenings that wait: the options a team turns on."""
-    keys = Keys()
-    keys.add("h3", "human")
-    keys.root["threshold"] = threshold
-    return Ledger(keys=keys, law=client_law(delays=TEAM_DELAYS, **law))
-
-
 class Genesis(unittest.TestCase):
     def test_genesis_pins_root_law_and_code(self):
         L = Ledger()
         self.assertEqual(L.state["code"], CODE)
         self.assertEqual(L.state["law"]["digest"], L.kernel.law_of(L.state).digest)
 
-    def test_f0_1_one_human_is_enough_and_needed(self):
-        for change in ({"threshold": 0}, {"threshold": 3}):
+    def test_f0_1_exactly_one_human_and_a_witness(self):
+        for change in ("second human", "no human", "no witness"):
             keys = Keys()
-            keys.root.update(change)
+            if change == "second human":
+                keys.add("h2", "human")
+            elif change == "no human":
+                keys.root["identities"]["h1"]["kind"] = "agent"
+            else:
+                keys.root["identities"]["w1"]["kind"] = "service"
             with self.assertRaises(Refused) as r:
                 Ledger(keys=keys)
-            self.assertEqual(r.exception.code, "TYPE.ROOT")
-        keys = Keys()
-        keys.root["identities"]["h2"]["kind"] = "agent"
-        self.assertEqual(Ledger(keys=keys).state["root"]["threshold"], 1)
+            self.assertIn(r.exception.code, ("TYPE.ROOT", "PROV.AUTHOR", "CAP.HUMAN"), change)
 
     def test_genesis_binds_the_code_release(self):
         with self.assertRaises(Refused) as r:
@@ -72,53 +65,11 @@ class Widening(unittest.TestCase):
         self.assertEqual(L.refused("grant", "agent", **GRANT), "CAP.HUMAN")
         gid = L.submit("grant", "h1", **GRANT)
         self.assertIn(gid, L.state["grants"])
-        self.assertEqual(L.state["proposals"], {})
 
     def test_time_never_grants(self):
         """A far future timestamp is refused: only witnesses advance the anchor (F0-6)."""
         L = Ledger()
         self.assertEqual(L.refused("grant", "h1", at=L.state["anchor_at"] + MAX_AHEAD_MS + 1, **GRANT), "HIST.AHEAD")
-
-    def test_nothing_to_override_without_a_delay(self):
-        L = Ledger()
-        self.assertEqual(L.refused("grant", "h1", ["h1", "h2"], override=True, **GRANT), "TYPE.SHAPE")
-
-    def test_team_option_quorum_delay_and_activation(self):
-        L = team()
-        self.assertEqual(L.refused("grant", "h1", **GRANT), "CAP.QUORUM")
-        pid = L.submit("grant", "h1", ["h1", "h2"], **GRANT)
-        self.assertNotIn(pid, L.state["grants"])
-        self.assertEqual(L.refused("activate", "h1", ["h1", "h2"], proposal=pid), "CAP.DELAY")
-        L.advance(HOUR + 1)
-        L.submit("activate", "h1", ["h1", "h2"], proposal=pid)
-        self.assertIn(pid, L.state["grants"])
-
-    def test_team_option_veto_and_override(self):
-        L = team()
-        pid = L.submit("grant", "h1", ["h1", "h2"], **GRANT)
-        self.assertEqual(L.refused("veto", "h2", proposal=pid), "CAP.VETO")     # a signer cannot veto
-        L.submit("veto", "h3", proposal=pid)
-        self.assertNotIn(pid, L.state["proposals"])
-        over = L.submit("grant", "h1", ["h1", "h2", "h3"], override=True, **GRANT)
-        self.assertEqual(L.refused("veto", "h3", proposal=over), "CAP.VETO")
-        L.advance(HOUR + 1)
-        self.assertEqual(L.refused("activate", "h1", ["h1", "h2"], proposal=over), "CAP.DELAY")   # double delay
-        L.advance(HOUR + 1)
-        L.submit("activate", "h1", ["h1", "h2"], proposal=over)
-
-    def test_team_option_a_proposal_goes_stale_when_the_rules_change(self):
-        L = team()
-        pid = L.submit("grant", "h1", ["h1", "h2"], **GRANT)
-        law = L.submit("law", "h1", ["h1", "h2"], client=client_law(delays={**TEAM_DELAYS, "grant": 2 * HOUR}))
-        L.advance(HOUR + 1)
-        L.submit("activate", "h1", ["h1", "h2"], proposal=law)
-        L.advance(2 * HOUR + 1)
-        self.assertEqual(L.refused("activate", "h1", ["h1", "h2"], proposal=pid), "CAP.STALE")
-
-    def test_team_option_a_witness_quorum(self):
-        L = Ledger(law=client_law(witnesses={"quorum": 2}))
-        self.assertEqual(L.refused("checkpoint", "w1", size=L.state["size"], head=L.state["head"]), "CAP.WITNESS")
-        L.checkpoint(signers=("w1", "w2"))
 
 
 class Restrictions(unittest.TestCase):
@@ -152,7 +103,7 @@ class Rules(unittest.TestCase):
         L = Ledger()
         human_less = {"args": {"x": "segment"}, "resource": "a:{x}",
                       "routes": {"auto": {"all": [{"prefix": ["resource", "a:"]}]}}}
-        for weaker in (client_law(ttl={"proof": 2 * 86_400_000}), client_law(witnesses={"quorum": 0}),
+        for weaker in (client_law(ttl={"proof": 2 * 86_400_000}), client_law(witnesses={"quorum": 2}),
                        client_law(tighten={"targets": {"vulns": {"due_ms": 10 ** 10}}}),
                        client_law(ops={"remediate": {"args": {"x": "segment"}, "resource": "a:{x}",
                                                      "routes": {"human": {"all": [{"prefix": ["x", "a"]}]}}}}),
@@ -160,7 +111,7 @@ class Rules(unittest.TestCase):
                        client_law(settings={"burn_fast": "10"}), client_law(settings={"rollback_horizon_min": 300}),
                        client_law(routes={"deploy": ["human"]}), client_law(routes={"deploy": ["nowhere"]})):
             self.assertEqual(L.refused("law", "h1", client=weaker), "TYPE.LAW")
-        L.submit("law", "h1", client=client_law(ttl={"proof": 3_600_000}, delays=TEAM_DELAYS,
+        L.submit("law", "h1", client=client_law(ttl={"proof": 3_600_000},
                                                  settings={"burn_fast": "20"}, routes={"deploy": []}))
         law = L.kernel.law_of(L.state)
         self.assertEqual(sorted(law.ops["deploy"]["routes"]), ["human"])

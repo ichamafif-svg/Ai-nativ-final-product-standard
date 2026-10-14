@@ -1,7 +1,7 @@
 """Which Trusted External contracts an operation needs, and the installation's evidence that they hold (§10).
 
-Nine responsibilities, grouped as the installation chooses. An operation only needs the contracts it depends on: a T09
-outage never blocks an ordinary admission, a T03 outage never blocks a signed freeze or revocation. Nothing here
+Eight responsibilities, grouped as the installation chooses. An operation only needs the contracts it depends on: a T03
+outage never blocks a signed freeze or revocation. Nothing here
 proves a physical property: a signed assessment authenticates an assessor's statement, bound to this release,
 genesis and ledger, and nothing more. Assessor keys are pinned by the installation, out of the agent's reach.
 """
@@ -16,7 +16,7 @@ from kernel import SHAPES
 from kernel.canon import canon, digest
 from kernel.floor0 import POLARITY
 
-CONTRACTS = tuple(f"T{i:02}" for i in range(1, 10))
+CONTRACTS = tuple(f"T{i:02}" for i in range(1, 9))
 BASE = frozenset({"T01", "T02", "T04", "T05"})
 TIMED = BASE | {"T03"}
 PREFIX = b"standard:trusted-external-assessment:v1\x00"
