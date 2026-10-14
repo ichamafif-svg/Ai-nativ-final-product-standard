@@ -329,7 +329,7 @@ class ContextAndRoutes(unittest.TestCase):
         self.assertEqual(context['kind'], 'law-patrol')
         self.assertEqual(context['mode'], 'wide')
         self.assertEqual(context['effective_law'], view['law']['effective'])
-        self.assertNotIn('rules', context)
+        self.assertEqual(context['rules'], [])                      # a targeted patrol: no rotation round
         self.assertTrue(context['weak_spots'])
         self.assertIn('Exploratory patrol only', context['authority'])
 
@@ -557,7 +557,7 @@ class ResearchTools(unittest.TestCase):
         store, base = store_with(FILES)
         gate = Gate({'frontier': Provider('fake', 'anthropic', 'm', 'k')}, store.parent / 'egress.log',
                     transport=lambda p, prompt: json.dumps({'files': {'tools/check.py': 'print(1)'}}))
-        agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']})
+        agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']}, funnel=False)
         check = {'ok': True, 'fixed': None, 'tests': 'green'}
         target = {'id': 'custom', 'resource': 'repo:client:custom', 'property': 'result', 'expect': 'verified'}
         with patch('standard.autonomy.precheck.precheck', return_value=check):

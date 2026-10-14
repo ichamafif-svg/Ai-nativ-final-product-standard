@@ -17,6 +17,7 @@ from instruments.scope import REPAIR
 from standard.floors import FLOORS
 
 from .agent import Agent, AgentError
+from .funnel import explain, record as funnel_record
 from .memory import Memory
 from .moves import judge
 from .projection import Route
@@ -121,10 +122,13 @@ class Repairer:
                                                        law_text=model_packet(task_context(view, {**task,
                                                            "need": task.get("need", "repair"),
                                                            "resource": target["resource"]}, findings,
-                                                           model=model)))
+                                                           model=model)),
+                                                       values=self._values(view))
                         proposals[key] = {"target": tid, "area": area, "item": item, "base": base,
                                           "head": head, "way": route}
-                        self.memory.record(tid, at=now, base=base, head=head, route=route, outcome="crafted")
+                        stats = getattr(self.agent, "last_funnel", None)
+                        self.memory.record(tid, at=now, base=base, head=head, route=route, outcome="crafted",
+                                           **({"why": funnel_record(stats)} if stats else {}))
                         report["crafted"][tid] = proposals[key]
                     p = proposals[key]
                     report["candidates"][tid] = p["head"]
@@ -139,6 +143,11 @@ class Repairer:
         self._remember(proposals)
         return report
 
+    @staticmethod
+    def _values(view) -> dict:
+        from standard.catalog import effective, load
+        return effective(load(), view["law"]["effective"].get("settings", {}).get("values"))
+
     def _judged(self, view, proposals, key, findings, now) -> None:
         """A candidate the scanner refuted is a lesson: forget it, so this pass crafts again with what failed."""
         p = proposals.get(key)
@@ -149,9 +158,11 @@ class Repairer:
                                                    "head": p["head"]})
         if move["status"] != "refuted":
             return
-        details = [d for prop in ("tests", "regressions", "scoped")
+        details = [d for prop in ("tests", "regressions", "scoped", "blocks")
                    for d in findings.get(f"{resource}|{prop}", {}).get("details", [])[:3]]
-        why = "the scanner refuted it: " + ", ".join(move["refuted"]) + (" | " + " | ".join(details) if details else "")
+        rules = explain(details, self._values(view))           # the broken rules, in the text seen before coding
+        why = "the scanner refuted it: " + ", ".join(move["refuted"]) + (" | " + " | ".join(details) if details else "") \
+            + (f"\nThe rules behind it:\n{rules}" if rules else "")
         self.memory.record(p["target"], at=now, base=p["base"], head=p["head"], route=p["way"], outcome="judge",
                            why=why[:2000])
         del proposals[key]

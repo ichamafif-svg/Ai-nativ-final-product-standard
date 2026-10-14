@@ -1,7 +1,10 @@
-"""Exploratory law patrol context.
+"""Exploratory law patrol context, and the rotation over the rules only a reader can check.
 
 Patrol is advisory. It starts before a deterministic gap exists and packages law, settings, findings, routes and weak
-spots so a read-only model or a human can look for blind spots.
+spots so a read-only model or a human can look for blind spots. Without a focus, each round takes the next category of
+the rule catalog in a fixed order and carries the rules of that category the AI checks (alone, or for the part a
+deterministic check cannot see), in the text the agent codes to: one category per round, never all of them. What it
+finds is a proposal or a debt for people to weigh, never a fact and never a refusal of a move.
 """
 from __future__ import annotations
 
@@ -9,6 +12,8 @@ import json
 import os
 
 from instruments.tree import Snapshot
+
+from standard.catalog import categories, effective, load, render
 
 from .concepts import AUTHORITY
 from .drift_map import gap_dossiers
@@ -18,9 +23,35 @@ SUSPICION_KEYS = ("law_ref", "surface", "why", "evidence_seen", "determinism_gap
                   "suggested_action", "confidence", "authority")
 
 
+def rotation(state_path, cat=None) -> str:
+    """The next category to patrol, in the catalog's fixed order; the position is kept in U's own file."""
+    order = categories()
+    try:
+        last = json.loads(state_path.read_text()).get("category")
+    except (OSError, ValueError):
+        last = None
+    nxt = order[(order.index(last) + 1) % len(order)] if last in order else order[0]
+    state_path.write_text(json.dumps({"category": nxt}))
+    return nxt
+
+
+def patrol_rules(category: str, values: dict, features=None) -> list:
+    """The rules of a category an AI reads to check (`ai` in who), rendered as the agent codes to them."""
+    import re as _re
+    out = []
+    for r in load()["rules"]:
+        slug = _re.sub(r"[^a-z0-9]+", "-", r["category"].lower()).strip("-")
+        if slug != category or "ai" not in r["who"]:
+            continue
+        if features is not None and not set(r["applies"]) <= set(features):
+            continue
+        out.append(render(r, values))
+    return out
+
+
 def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=None,
-                   mode: str = "RUN", model: ReadModel | None = None) -> dict:
-    """Context for a repo-wide or targeted law patrol."""
+                   mode: str = "RUN", model: ReadModel | None = None, rules: list | None = None) -> dict:
+    """Context for a repo-wide or targeted law patrol (`rules`: the catalog rules this round reads for)."""
     model = model or ReadModel(view, findings, routes, qualify)
     model.assert_view(view)
     law, findings, settings = model.law, model.findings, model.settings
@@ -42,6 +73,7 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=
             "instruments": law.get("instruments", {}),
             "operations": law.get("ops", {}),
             "routes": {op: spec.get("routes", {}) for op, spec in law.get("ops", {}).items()},
+            "rules": rules or [],
             "authority": AUTHORITY["patrol"],
             "expected_output": {"suspicions": [{k: "..." for k in SUSPICION_KEYS}]}}
 
@@ -58,8 +90,15 @@ def run_patrol(cycle, *, main, focus=None) -> dict:
         raise ValueError("patrol focus is at most 200 characters")
     view, base = cycle.service.view(), main()
     model = ReadModel(view, cycle._findings(), cycle.routes, cycle.service.qualify, main=base)
-    context = patrol_context(view, focus=focus, model=model)
     tree = Snapshot(cycle.agent.store, base)
+    rules = []
+    if focus is None:                                  # a round of the rotation: one category of AI-read rules
+        from instruments.surfaces import scan
+        category = rotation(cycle.agent.store.parent / "patrol-rotation.json")
+        values = effective(load(), view["law"]["effective"].get("settings", {}).get("values"))
+        rules = patrol_rules(category, values, scan(tree)["features"] if hasattr(tree, "paths") else None)
+        focus = f"rules:{category}"
+    context = patrol_context(view, focus=focus, model=model, rules=rules)
 
     class ReadOnlyResearch:
         def dialogue(self, prompt, snapshot, *, key):

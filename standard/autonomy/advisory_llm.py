@@ -32,8 +32,11 @@ def propose_patrol(context: dict, tree, research, *, key=None) -> dict:
               "may miss. You receive the complete rules in force, known findings and weak spots. "
               "You may read/search the snapshot and propose suspicions only. Do not claim facts, close gaps, authorize "
               "work, change law, or treat your output as evidence. Return JSON {\"suspicions\": [objects with only "
-              f"these keys: {', '.join(SUSPICION_KEYS)}]}}.\n\nPatrol context:\n"
-              + json.dumps(context, sort_keys=True))
+              f"these keys: {', '.join(SUSPICION_KEYS)}]}}.\n\n"
+              + ("This round reads the repository for these rules only (law_ref = the rule id). A deterministic "
+                 "check already covers part of some of them: look for what it cannot see.\n\n"
+                 + "\n\n".join(context["rules"]) + "\n\n" if context.get("rules") else "")
+              + "Patrol context:\n" + json.dumps({k: v for k, v in context.items() if k != "rules"}, sort_keys=True))
     reply = research.dialogue(prompt, tree, key=key or f"patrol:{context.get('focus') or 'wide'}")
     suspicions = reply.get("suspicions", []) if isinstance(reply, dict) else []
     out = []

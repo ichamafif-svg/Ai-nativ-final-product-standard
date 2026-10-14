@@ -159,7 +159,8 @@ class Model(unittest.TestCase):
             return json.dumps(replies.pop(0))
         log = store.parent / "egress.log"
         agent = Agent(store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")}, log,
-                                                       transport=transport), sandbox=LocalSandbox())
+                                                       transport=transport), sandbox=LocalSandbox(),
+                      funnel=False)                              # one call per attempt: the funnel has its own test
         finding = {"status": "found:1", "details": ["app.py:1:secret-rule-0"]}
         head, route = agent.craft("secrets", base, targets=TARGETS, finding=finding)
         self.assertEqual(route, "model")

@@ -39,7 +39,8 @@ class Builder:
     name = "build"
 
     def __init__(self, service, signer: Signer, grant: str, store, requests, *, clock, notes, llm=None,
-                 sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None):
+                 sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None,
+                 funnel: bool = True):
         """grant: the agent's capability. store: the agent's proposals store. requests: the request store (contracts
         and specs by digest)."""
         from instruments.data import EMPTY
@@ -51,6 +52,8 @@ class Builder:
             cache_roots=(self.store.parent / "venvs",)), data or EMPTY
         self.iterations, self.backoff_ms = iterations, backoff_ms
         self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources)
+        from .funnel import Funnel
+        self.funnel, self.last_funnel = (Funnel() if funnel else None), None
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
     def check(self, base: str, head: str, rid: str, targets: dict) -> list:
@@ -85,7 +88,8 @@ class Builder:
         return problems
 
     # ---- crafting -------------------------------------------------------------------------------------------------
-    def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None) -> str:
+    def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None,
+              values: dict | None = None) -> str:
         if self.llm is None:
             raise AgentError("no model is configured: a contributor may implement it (trailer Standard-Request)")
         from .repomap import RepoMap
@@ -102,9 +106,22 @@ class Builder:
                       f"Return JSON {{\"title\": str, \"files\": {{path: full new content}}, \"risks\": str}}: "
                       f"source files only, never under tests/, as few as possible.\n\n{model_context(tree)}")
             try:
-                reply = self.research.dialogue(prompt, tree, key=f"request:{rid}")
+                if self.funnel is None:
+                    reply = self.research.dialogue(prompt, tree, key=f"request:{rid}")
+                else:                                       # three passes, each with the rules it can act on
+                    from standard.catalog import effective, load
+                    reply, stats = self.funnel.run(
+                        lambda text, name: self.research.dialogue(text, tree, key=f"request:{rid}:{name}"),
+                        tree, prompt, values=values if values is not None else effective(load(), None),
+                        scope_ok=lambda path: in_scope(rid, path), wide_touched=("surface:endpoint",))
+                    self.last_funnel = stats
+                    if stats["remaining"]:
+                        feedback = "Banned APIs left after the three passes:\n" + "\n".join(stats["remaining"])
+                        continue
             except ResearchError as exc:
                 raise AgentError(str(exc)) from exc
+            except ValueError as exc:
+                raise AgentError(f"the implementation: {exc}") from exc
             files = reply.get("files")
             if not isinstance(files, dict) or not files or not all(in_scope(rid, p) and isinstance(c, str)
                                                                     for p, c in files.items()):
@@ -123,6 +140,11 @@ class Builder:
                 return head
             feedback = "\n".join(problems)[:5000]
         raise AgentError(f"no implementation of {rid} passed the agent's checks: {feedback[:1500]}")
+
+    @staticmethod
+    def _values(view) -> dict:
+        from standard.catalog import effective, load
+        return effective(load(), view["law"]["effective"].get("settings", {}).get("values"))
 
     # ---- the pass ---------------------------------------------------------------------------------------------------
     def _admit(self, view, kind: str, body: dict) -> str:
@@ -165,7 +187,8 @@ class Builder:
                     note.update(base=base, head=self.craft(rid, e["fields"]["title"], spec or b"", contract, base,
                                 targets, context=task_context(view, {"id": f"request:{rid}", "need": "repair",
                                       "op": "implement", "resource": resource, "target": None,
-                                      "opened": e.get("created"), "due": None}, model=model)), state="proposed")
+                                      "opened": e.get("created"), "due": None}, model=model),
+                                values=self._values(view)), state="proposed")
                 except AgentError as exc:
                     note.update(base=base, head=None, state=f"waiting: {exc}", next_at=now + 10 * self.backoff_ms)
             report[rid] = note.get("state")

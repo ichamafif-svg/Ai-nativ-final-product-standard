@@ -25,6 +25,7 @@ from instruments.tree import Snapshot
 from instruments.data import EMPTY
 from instruments.recipes import recipes_for
 from instruments.scope import relative, repair as in_scope
+from .funnel import Funnel
 from .research import Research, ResearchError
 
 MODEL = os.environ.get("STANDARD_AGENT_MODEL", "claude-sonnet-5-5")
@@ -127,7 +128,7 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
 
 class Agent:
     def __init__(self, store, *, data=EMPTY, api_key: str | None = None, ask=None, publish=None, llm=None,
-                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None):
+                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None, funnel: bool = True):
         """data: the same pinned snapshot the instruments use, so that recipes reproduce. scopes: the write scopes
         the rules give the client's own targets. llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and
         `ask(prompt, key) -> dict` build one for tests."""
@@ -146,6 +147,12 @@ class Agent:
                for patterns in self.scopes.values()):
             raise AgentError("custom repair scopes must be configured lists of relative path patterns")
         self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources)
+        self.funnel, self.last_funnel = (Funnel() if funnel else None), None
+
+    @staticmethod
+    def _values(values) -> dict:
+        from standard.catalog import effective, load
+        return values if values is not None else effective(load(), None)
 
     def investigate(self, view, task, base, findings=None, *, model=None):
         from .context import model_packet, task_context
@@ -163,7 +170,7 @@ class Agent:
         return commit_files(self.store, base, files, message)
 
     def craft(self, target_id: str, base: str, *, targets: dict | None = None, finding: dict | None = None,
-              lessons: str = "", law_text: str = "") -> tuple[str, str]:
+              lessons: str = "", law_text: str = "", values: dict | None = None) -> tuple[str, str]:
         """(head, way): "recipe" when the scanner can reproduce it, "model" when a model wrote it.
         Nothing is proposed that the agent's own precheck rejects: it fixes the target, regresses no other one,
         keeps main's tests green and adds no lint or type error."""
@@ -201,12 +208,23 @@ class Agent:
                       f"Return JSON {{\"title\": str, \"files\": {{path: full new content}}, \"risks\": str}}, "
                       f"changing as few files as possible.\n\n"
                       f"{model_context(tree, redact=target_id == 'secrets')}")
+            tier = "frontier" if target_id in FRONTIER or target_id.startswith("rules-") else "small"
             try:
-                reply = self.research.dialogue(prompt, tree, tier="frontier" if target_id in FRONTIER or
-                                               target_id.startswith("rules-") else "small",
-                                               key=f"repair:{target_id}")
+                if self.funnel is None:
+                    reply = self.research.dialogue(prompt, tree, tier=tier, key=f"repair:{target_id}")
+                else:                                       # three passes, each with the rules it can act on
+                    reply, stats = self.funnel.run(
+                        lambda text, name: self.research.dialogue(text, tree, tier=tier, key=f"repair:{target_id}:{name}"),
+                        tree, prompt, values=self._values(values), focus=[d.split(":")[0] for d in finding["details"]],
+                        scope_ok=lambda path: in_scope(target_id, path, self.scopes))
+                    self.last_funnel = stats
+                    if stats["remaining"]:
+                        feedback = "Banned APIs left after the three passes:\n" + "\n".join(stats["remaining"])
+                        continue
             except ResearchError as exc:
                 raise AgentError(str(exc)) from exc
+            except ValueError as exc:
+                raise AgentError(f"the repair of {target_id}: {exc}") from exc
             files = reply.get("files")
             if not isinstance(files, dict) or not files or not all(in_scope(target_id, p, self.scopes) and isinstance(c, str)
                                                                     for p, c in files.items()):
