@@ -202,7 +202,7 @@ def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=()
     for name in sorted(names & cat["policy"]["parameter"].keys()):
         add(f"policy/{name}", sources[f"policy/{name}"])
     add("technical", render_contracts(technical))
-    for name in ("mission", "findings", "facts", "known_gaps", "weak_spots"):
+    for name in ("review", "mission", "findings", "facts", "known_gaps", "weak_spots"):
         if context.get(name):
             add(name, context[name])
     if hasattr(tree, "paths"):

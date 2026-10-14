@@ -64,15 +64,6 @@ def bans_of(cat: dict) -> dict:
     return {name: b["bans"] for name, b in cat["blocks"].items() if b["bans"]}
 
 
-def brief(rules: list, values: dict, tree, cat: dict | None = None) -> str:
-    """Render the catalog's common contracts; U supplies only observed features and stacks."""
-    from standard.catalog import contracts, render_contracts
-    cat = cat or load()
-    product = surfaces.scan(tree)
-    return render_contracts(contracts(cat, product["features"], values, ids={r["id"] for r in rules},
-                                      stacks=product["stacks"]))
-
-
 def explain(details, values: dict | None = None, cat: dict | None = None) -> str:
     """The rules behind a refusal, in the text the agent saw before coding: `path:line:pattern` (blocks) names the
     block that bans the pattern; `RULE-ID:` (a rule category) names the rule."""
@@ -134,6 +125,7 @@ class CandidateWorkflow:
         """ask(prompt, role, tree=snapshot, read_only=bool) -> dict; only build/correct may return edits.
         The callback must give each role its own history and confine read-only roles to read/search."""
         stats = self.last_stats = {"rounds": [], "remaining": [], "authority": "proposal_only"}
+        context = context or {}
         fixed_files = dict(fixed_files or {})               # human-accepted contract, readable but never editable
         guess = set(touched)
         for path in focus:
@@ -152,23 +144,19 @@ class CandidateWorkflow:
 
         rules = selected_rules(base, guess)
 
-        def invoke(text, role, *, tree, read_only, deadline=None, selected=(), paths=(), triggers=()):
+        def invoke(text, role, *, tree, read_only, deadline=None, selected=(), paths=(), triggers=(), review=None):
+            from .context import assemble
             kw = {"tree": tree, "read_only": read_only}
             if deadline is not None:
                 kw["deadline"] = deadline
-            if context is not None:
-                from .context import assemble
-                product = surfaces.scan(tree, declared)
-                product["features"] = sorted(set(product["features"]) | set(surfaces.scan(base, declared)["features"]))
-                packet, sources = assemble({**context, "product": product}, tree, role=role, scope=scope, touched=triggers,
-                                           focus=paths, values=values, documents=documents,
-                                           rule_ids={r["id"] for r in selected})
-                text += "\nMission context:\n" + packet
-                kw["context"] = sources
+            product = surfaces.scan(tree, declared)
+            product["features"] = sorted(set(product["features"]) | set(surfaces.scan(base, declared)["features"]))
+            packet, sources = assemble({**context, "product": product, "review": review}, tree, role=role, scope=scope,
+                                       touched=triggers, focus=paths, values=values, documents=documents,
+                                       rule_ids={r["id"] for r in selected})
+            text += "\nMission context:\n" + packet
+            kw["context"] = sources
             return ask(text, role, **kw)
-
-        def rule_text(selected, tree):
-            return brief(selected, values, tree, self.cat) if context is None else "see mission context"
         files = {}
 
         def take(reply):
@@ -189,7 +177,7 @@ class CandidateWorkflow:
             return {k: v for k, v in reply.items() if k != "files"}
 
         result = take(invoke(f"ROLE build: implement the task. {SIMPLICITY}\n{JUDGED}\nTask:\n{head}\n"
-                          f"Relevant rules:\n{rule_text(rules, base)}\n{FORMAT}",
+                          f"Relevant rules: see mission context.\n{FORMAT}",
                           "build", tree=base, read_only=False, selected=rules, paths=focus, triggers=guess))
         for round_no in range(self.rounds):
             if not files:
@@ -200,18 +188,16 @@ class CandidateWorkflow:
             _, left = blocks_fact(base, draft, sorted(files), bans_of(self.cat))
             stats["remaining"] = left
             # Both reviewers receive the exact same snapshot and task, never the writer's rationale.
-            material = json.dumps({p: {"deleted": c is None, "characters": len(c) if c is not None else 0}
-                                   for p, c in files.items()}, sort_keys=True)
+            material = {p: {"deleted": c is None, "characters": len(c) if c is not None else 0} for p, c in files.items()}
+            review = {"changes": material, "diagnostics": left, "explanation": explain(left, values, self.cat)}
             review_context = (f"Task and original context:\n{head}\nBase: {getattr(base, 'commit', 'base')}\n"
-                       f"Candidate: {draft.commit}\nChanges (read full files from this snapshot):\n{material}\n"
-                       f"Rules:\n{rule_text(rules, draft)}\n"
-                       f"Deterministic findings (raw):\n{json.dumps(left)}\n"
-                       f"Explanation:\n{explain(left, values, self.cat)}\n{JUDGED}")
+                       f"Candidate: {draft.commit}\nRead mission/review for the complete change inventory and raw "
+                       f"diagnostics if deferred, then read full changed files from this snapshot.\n{JUDGED}")
             pool = ThreadPoolExecutor(max_workers=2)
             deadline = time.monotonic() + self.timeout_s
             futures = {role: pool.submit(invoke, f"ROLE {role}: {mission} {SIMPLICITY} {REVIEW_FORMAT}\n{review_context}",
                                          role, tree=draft, read_only=True, deadline=deadline, selected=rules,
-                                         paths=sorted(files), triggers=touched) for role, mission in REVIEWERS.items()}
+                                         paths=sorted(files), triggers=touched, review=review) for role, mission in REVIEWERS.items()}
             try:
                 findings = [f for role, future in futures.items() for f in review_findings(
                     future.result(timeout=max(0, deadline - time.monotonic())), role, set(base.paths()) | draft.paths())]
@@ -225,11 +211,12 @@ class CandidateWorkflow:
             if not findings and not left:
                 return {**result, "files": dict(files)}, stats
             reply = invoke(f"ROLE correct: you are the sole writer. {SIMPLICITY}\n{review_context}\n"
-                        f"Reviewer observations: {json.dumps(findings)}\n"
+                        "Reviewer observations are in mission/review. Read them completely before responding.\n"
                         "Address each observation or decline it with a concrete reason. Do not add unrelated work. "
                         'Include review_responses: [{"id": str, "decision": "fixed" or "declined", "reason": str}]. '
                         f"{FORMAT}Return only edits to this draft; an empty files object retains it.",
-                        "correct", tree=draft, read_only=False, selected=rules, paths=sorted(files), triggers=touched)
+                        "correct", tree=draft, read_only=False, selected=rules, paths=sorted(files), triggers=touched,
+                        review={**review, "observations": findings})
             responses = reply.get("review_responses") if isinstance(reply, dict) else None
             if (not isinstance(responses, list) or len(responses) != len(findings)
                     or any(not isinstance(r, dict) or not isinstance(r.get("id"), str) for r in responses)

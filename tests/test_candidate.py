@@ -30,7 +30,7 @@ class Passes(unittest.TestCase):
     def test_two_read_only_reviewers_share_one_draft_and_run_in_parallel(self):
         import threading
         barrier, seen = threading.Barrier(2), []
-        def ask(text, role, *, tree, read_only, deadline=None):
+        def ask(text, role, *, tree, read_only, deadline=None, context=None):
             seen.append((role, tree.commit if hasattr(tree, "commit") else "base", read_only))
             if role == "build":
                 return {"title": "export", "files": {"shop/export.py": "def export(): return 1\n"}}
@@ -51,7 +51,7 @@ class Passes(unittest.TestCase):
 
     def test_corrections_are_reviewed_again_and_new_surfaces_receive_rules(self):
         seen = []
-        def ask(text, role, *, tree, read_only, deadline=None):
+        def ask(text, role, *, tree, read_only, deadline=None, context=None):
             seen.append((role, getattr(tree, "commit", None), text))
             if role == "build":
                 return {"files": {"shop/export.py": "import os\nos.system(name)\n"}}
@@ -128,7 +128,7 @@ class Passes(unittest.TestCase):
 
     def test_accepted_contract_is_in_the_shared_draft_but_cannot_be_edited(self):
         path = "tests/acceptance/test_r.py"
-        def ask(text, role, *, tree, read_only, deadline=None):
+        def ask(text, role, *, tree, read_only, deadline=None, context=None):
             if role == "build":
                 return {"files": {"shop/a.py": "x = 1"}}
             self.assertEqual(tree.read(path), b"assert True")
@@ -182,6 +182,22 @@ class Passes(unittest.TestCase):
         CandidateWorkflow().run(ask, BASE, "Task", values=effective(load(), None), scope_ok=lambda p: True, context=ctx)
         self.assertEqual([role for role, _ in seen], ["build", "correctness", "simplicity"])
         self.assertEqual(seen[1][1]["basis"], seen[2][1]["basis"])
+
+
+    def test_large_change_inventories_are_deferred_without_losing_a_path(self):
+        import json
+        files = {"/".join(["a" * 80] * 4 + [str(i) + ".py"]): "x = 1" for i in range(100)}
+        def ask(text, role, *, context, **kw):
+            self.assertLess(len(text), 32000)
+            if role == "build":
+                return {"files": files}
+            packet = json.loads(text.split("Mission context:\n", 1)[1])["packet"]
+            self.assertIn("mission/review", packet["deferred"])
+            review = json.loads(context["mission/review"])
+            self.assertEqual(set(review["changes"]), set(files))
+            self.assertEqual(review["diagnostics"], [])
+            return {"findings": []}
+        CandidateWorkflow().run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
 
 
 
