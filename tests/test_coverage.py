@@ -78,6 +78,8 @@ class Secrets(Route):
     @staticmethod
     def ASK(prompt, key):
         Secrets.prompts.append(prompt)
+        if prompt.startswith(("ROLE correctness:", "ROLE simplicity:", "ROLE design:")):
+            return {"findings": []}
         return {"title": "read the key from the environment",
                 "files": {"app.py": 'import os\n\nAPI_KEY = os.environ.get("API_KEY", "")\n\n\n'
                                     'def add(a, b):\n    return a + b\n'}}

@@ -108,7 +108,9 @@ class Construction(unittest.TestCase):
             replies = iter([{"title": "Add mul", "files": {"tests/test_app.py": "def test_x():\n    pass\n"}},
                             {"title": "Add mul", "files": {"app.py": IMPLEMENTATION}, "risks": "none"}])
             gate = Gate({"frontier": Provider("fake", "anthropic", "m", "k")}, root / "egress.log",
-                        transport=lambda provider, prompt: json.dumps(next(replies)))
+                        transport=lambda provider, prompt: json.dumps(
+                            {"findings": []} if prompt.startswith(("ROLE correctness:", "ROLE simplicity:", "ROLE design:"))
+                            else next(replies)))
             builder = Builder(loop.service, loop.signer, grants["agent"], repairer.agent.store, store, clock=clock,
                               notes=root / "requests.json", llm=gate, backoff_ms=0, sandbox=LocalSandbox())
             loop.producers = (builder,)

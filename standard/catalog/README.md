@@ -15,7 +15,7 @@ same licence. Standard's code that reads this folder keeps its own licence.
 - `vocabulary.toml`: what a rule's `when` and `applies` may name: features, surfaces, constructs. Instruments detect
   each one deterministically.
 - `values.toml`: the named values (`@access`, `@upload_max_bytes`…) with their strict default. The human sets them in
-  the rules of the game; a missing one falls back to its default, never blocks.
+  the rules of the game; a missing one uses its strict default when one exists; values without a default remain visibly unmeasured.
 - `blocks.toml`: the building blocks, what each guarantees and the raw APIs it bans.
 - `rules/*.toml`: the rules, one file per category.
 
@@ -31,11 +31,11 @@ when = ["construct:sql-call"]   # what in a change triggers it in the funnel
 who = ["det"]                   # who verifies: det, ai, human (several = a mix)
 block = "data"                  # the building block that absorbs it, if any
 absorb = "full"                 # full | partial | none
-pass = "fine"                   # funnel pass: wide | medium | fine
+pass = "fine"                   # context level: wide | medium | fine (not generation passes)
 phase = "build"                 # build | run
 values = []                     # named values it reads
-wire = []                       # what pass 2 adds with the code (probe, telemetry, access row)
-check = ["ban:raw-sql", "bandit:B608"]
+wire = []                       # what the code must wire (probe, telemetry, access row)
+check = ["blocks", "bandit:B608"]
 asvs = ["1.2.4"]
 cwe = ["89"]
 py_ok = '''cur.execute("SELECT * FROM users WHERE id = %s", (uid,))'''
@@ -44,3 +44,8 @@ py_no = '''cur.execute(f"SELECT * FROM users WHERE id = {uid}")'''
 
 The same block is what the agent reads before coding and what a refusal returns. No rule uses a vague word
 (*sensitive*, *critical*, *trusted*…): each is a named value with a strict default.
+
+The candidate workflow selects the union of relevant context levels before construction and again on the draft's
+actual surfaces and features. One writer constructs; independent read-only dialogues review correctness/security and
+simplicity in parallel. Corrections are bounded and re-reviewed. These opinions are U proposals, never measurements.
+An import alone does not establish block wiring; resolved calls and runtime probes carry different, explicit limits.

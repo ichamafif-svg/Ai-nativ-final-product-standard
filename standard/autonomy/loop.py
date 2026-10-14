@@ -66,16 +66,22 @@ def tactic(view: dict, move: dict) -> str | None:
 
 
 class Loop:
-    def __init__(self, service, signer: Signer, grant: str, *, main, clock, notes, producers=(), backoff_ms=60_000):
+    def __init__(self, service, signer: Signer, grant: str, *, main, clock, notes, producers=(), advisors=(), backoff_ms=60_000):
         """grant: the agent's one capability. main(): the maintained repository's current main (read-only).
         producers: objects with `name` and `run(view, main) -> report` (repairs, builds). notes: U's own file."""
         self.service, self.signer, self.grant, self.main, self.clock = service, signer, grant, main, clock
         self.notes, self.producers, self.backoff_ms = Path(notes), tuple(producers), backoff_ms
+        self.advisors = tuple(advisors)
 
     def run(self, mode: str = "RUN") -> dict:
         main = self.main()
         report = {p.name: p.run(self.service.view(), main) for p in self.producers}
         report["played"], report["holding"], report["waiting"] = self.play(main)
+        for advisor in self.advisors:                         # play normal moves before advisory exploration
+            try:
+                report[advisor.name] = advisor.run(self.service.view(), main)
+            except Exception as exc:
+                report[advisor.name] = {"state": "unavailable", "reason": type(exc).__name__}
         return report
 
     def play(self, main: str) -> tuple[dict, dict, list]:

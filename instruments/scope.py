@@ -13,11 +13,11 @@ from fnmatch import fnmatchcase
 
 from .suite import contract_path
 
-SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}"
+SEGMENT = r"[A-Za-z0-9_(@\[][A-Za-z0-9_.@()\[\]-]{0,99}"
 RESERVED = re.compile(r"(tests|\.github|standard)(/.*)?|(.*/)?(conftest|sitecustomize|usercustomize)\.py")
-SOURCE = rf"({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md)"
+SOURCE = rf"({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md|js|mjs|cjs|jsx|ts|tsx|html|css)"
 DEPENDENCIES = r"requirements[A-Za-z0-9_.-]*\.txt|sbom\.json"
-FEATURE = rf"({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md|txt|json|toml|ya?ml|sql|html|css|js)"
+FEATURE = rf"({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md|txt|json|toml|ya?ml|sql|html|css|js|mjs|cjs|jsx|ts|tsx)"
 REPAIR = {
     "vulns": DEPENDENCIES, "licenses": DEPENDENCIES, "sbom": r"sbom\.json", "deps-age": rf"{DEPENDENCIES}|{SOURCE}",
     "sast": SOURCE, "ci": SOURCE, "secrets": SOURCE,

@@ -2,6 +2,7 @@
 
     python -m standard.autonomy run standard.toml [interval-seconds]
     python -m standard.autonomy patrol standard.toml [focus]
+    python -m standard.autonomy patrol-results standard.toml
 
 It reads the agent's own key, the gateway socket, the proposals store and, optionally, the Claude API key file. It
 never reads the journal, the pins, the guard's key or the provider token.
@@ -66,7 +67,8 @@ def build(config_path):
         scopes = None
     agent = Agent(store, data=TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY,
                   api_key=resolve(api).read_text().strip() if api and not llm else None, publish=publish, llm=llm,
-                  scopes=scopes, research_sources=agent_cfg.get("research_sources"))
+                  scopes=scopes, research_sources=agent_cfg.get("research_sources"),
+                  review=agent_cfg.get("review"), research_steps=agent_cfg.get("research_steps", 8))
     routes = installed_routes(agent.scopes, model=agent.llm is not None, scanner=True)
     repairer = Repairer(service, WorkEngine(store.parent / "work.db"), agent, routes, clock=clock,
                         state_path=store.parent / "proposals.json", findings=path.parent / "findings.json",
@@ -76,17 +78,24 @@ def build(config_path):
     if c.get("build"):                                    # D34: build what contracted requests ask for
         producers.append(Builder(service, signer, grant, store, resolve(c["build"].get("store", "requests")),
                                  clock=clock, notes=store.parent / "requests.json", llm=agent.llm, data=agent.data,
-                                 research_sources=agent_cfg.get("research_sources")))
+                                 research_sources=agent_cfg.get("research_sources"), review=agent_cfg.get("review"),
+                                 research_steps=agent_cfg.get("research_steps", 8)))
+    from .patrol import Patrol
     loop = Loop(service, signer, grant, main=main, clock=clock, notes=store.parent / "moves.json", producers=producers)
+    loop.advisors = (Patrol(repairer, main, clock=clock, interval_ms=agent_cfg.get("patrol_interval_ms", 3_600_000)),)
     return loop, repairer, main, refresh
 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) < 2 or argv[0] not in ("run", "patrol"):
-        print("usage: python -m standard.autonomy (run|patrol) standard.toml [interval-seconds|focus]")
+    if len(argv) < 2 or argv[0] not in ("run", "patrol", "patrol-results"):
+        print("usage: python -m standard.autonomy (run|patrol|patrol-results) standard.toml [interval-seconds|focus]")
         return 2
     loop, repairer, main_, refresh = build(argv[1])
+    if argv[0] == "patrol-results":
+        from .patrol import patrol_results
+        print(json.dumps(patrol_results(repairer, main=main_)))
+        return 0
     if argv[0] == "patrol":
         from .patrol import run_patrol
         try:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import threading
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +35,7 @@ def anthropic(endpoint: str, model: str, key: str, prompt: str) -> str:
     req = urllib.request.Request(endpoint or "https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(),
                                  method="POST", headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                                                          "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=600) as r:
+    with urllib.request.urlopen(req, timeout=120) as r:
         return "".join(b.get("text", "") for b in json.loads(r.read())["content"])
 
 
@@ -42,7 +43,7 @@ def openai_compatible(endpoint: str, model: str, key: str, prompt: str) -> str:
     body = {"model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]}
     req = urllib.request.Request(endpoint, data=json.dumps(body).encode(), method="POST",
                                  headers={"authorization": f"Bearer {key}", "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=600) as r:
+    with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())["choices"][0]["message"]["content"]
 
 
@@ -74,6 +75,7 @@ class Gate:
         if not tiers:
             raise ValueError("no model provider")
         self.tiers, self.log, self.clock = tiers, Path(log), clock
+        self._log_lock = threading.Lock()
         self.transport = transport or (lambda p, prompt: KINDS[p.kind](p.endpoint, p.model, p.key, prompt))
 
     @classmethod
@@ -90,8 +92,9 @@ class Gate:
         line = {"at": self.clock(), "provider": provider.name, "model": provider.model, "tier": tier,
                 "bytes": len(clean.encode()), "redactions": redactions,
                 "sha256": hashlib.sha256(clean.encode()).hexdigest()}
-        with open(self.log, "a") as f:                     # the log line is written before anything leaves
-            f.write(json.dumps(line) + "\n")
+        with self._log_lock:                             # parallel reviewers log before anything leaves
+            with open(self.log, "a") as f:
+                f.write(json.dumps(line) + "\n")
         text = self.transport(provider, clean)
         try:
             reply = json.loads(text[text.find("{"):text.rfind("}") + 1])

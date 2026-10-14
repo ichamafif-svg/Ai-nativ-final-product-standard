@@ -134,7 +134,9 @@ class Repairer:
                     report["candidates"][tid] = p["head"]
                     outcome, reason = "proposed", "candidate"
             except AgentError as exc:
-                self.memory.record(tid, at=now, base=base, outcome="agent", why=str(exc))
+                stats = getattr(self.agent, "last_funnel", None)
+                why = str(exc) + ("\n" + funnel_record(stats) if stats else "")
+                self.memory.record(tid, at=now, base=base, outcome="agent", why=why)
                 report["candidates"][tid] = f"agent: {exc}"
                 outcome, reason = "attempt_failed", "agent_error"
             self._record(model.basis, mode, task, base, outcome, reason, str(report["candidates"].get(tid, "")))

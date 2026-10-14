@@ -5,7 +5,7 @@ Data only, read from the TOML files beside this module, validated against itself
 
     load()                          the validated catalog (cached), with its digest
     applicable(cat, features)       rules that apply to a product with these features
-    select(cat, features, touched, pass_)   rules a funnel pass shows, for what a change touches
+    select(cat, features, touched, pass_)   rules at a context level for what a change touches
     effective(cat, chosen)          named values: the human's choices over the strict defaults
     render(rule, values)            the AI-native block of one rule, @values resolved: the same text before coding
                                     and in a refusal
@@ -183,8 +183,8 @@ def applicable(cat: dict, features) -> list:
 
 
 def select(cat: dict, features, touched, pass_: str) -> list:
-    """The rules one funnel pass shows for a change touching these surfaces and constructs (`surface:x`,
-    `construct:y`). Coding passes show build rules, and run rules only when they ask the code to bring something
+    """The rules one context level shows for a change touching these surfaces and constructs (`surface:x`,
+    `construct:y`). Coding context shows build rules, and run rules only when they ask the code to bring something
     (`wire`): the others are checked on the running product, the agent does nothing for them while coding. Wide: the
     applicable wide rules the change triggers, and those with no trigger. Medium and fine: the rules of that pass the
     change triggers. Deterministic: sorted by id."""

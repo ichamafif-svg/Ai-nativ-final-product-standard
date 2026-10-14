@@ -421,7 +421,9 @@ class ContextAndRoutes(unittest.TestCase):
         store, base = store_with(FILES)
         sent = []
         gate = Gate({'frontier': Provider('fake', 'anthropic', 'm', 'k')}, store.parent / 'egress.log',
-                    transport=lambda p, prompt: sent.append(prompt) or json.dumps({'files': {'app.py': 'x = 1'}}))
+                    transport=lambda p, prompt: sent.append(prompt) or json.dumps(
+                        {'findings': []} if prompt.startswith(('ROLE correctness:', 'ROLE simplicity:', 'ROLE design:'))
+                        else {'files': {'app.py': 'x = 1'}}))
         builder = Builder(None, Signer(), {}, store, store.parent / 'requests', clock=lambda: 0, notes=store.parent / 'build.json', llm=gate)
         context = task_context(self.view(self.target()), {'id': 'request:r', 'resource': 'build:request/r',
                                                         'need': 'repair', 'op': 'implement'})

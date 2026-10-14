@@ -54,7 +54,9 @@ def _git(repo, *args, input: bytes | None = None, env=None) -> str:
 
 
 def commit_files(store, base: str, files: dict, message: str) -> str:
-    """A direct child of base whose tree is base's plus exactly these regular files. No working tree is touched."""
+    """A direct child of base with regular-file edits and explicit null deletions; no working tree is touched."""
+    if any(not relative(p) or c is not None and not isinstance(c, bytes) for p, c in files.items()):
+        raise AgentError("invalid candidate path or content")
     scratch = Path(tempfile.mkdtemp())
     index = scratch / "index"
     env = {"GIT_INDEX_FILE": str(index), "GIT_AUTHOR_NAME": "standard-agent", "GIT_AUTHOR_EMAIL": "agent@standard",
@@ -63,6 +65,14 @@ def commit_files(store, base: str, files: dict, message: str) -> str:
     try:
         _git(store, "read-tree", base, env=env)
         for path, content in sorted(files.items()):
+            if content is None:
+                listed = _git(store, "ls-tree", base, "--", path).split()
+                if len(listed) < 3 or listed[1] != "blob":
+                    raise AgentError("cannot delete a missing file")
+                # index-info works in bare stores; NUL termination keeps every path one record.
+                _git(store, "update-index", "-z", "--index-info",
+                     input=f"0 {listed[2]}\t{path}\0".encode(), env=env)
+                continue
             blob = _git(store, "hash-object", "-w", "--stdin", input=content)
             listed = _git(store, "ls-tree", base, "--", path).split()
             mode = "100755" if listed[:1] == ["100755"] else "100644"   # an edited script stays executable
@@ -76,9 +86,10 @@ def commit_files(store, base: str, files: dict, message: str) -> str:
 
 
 def model_context(tree, limit: int = 120_000, *, redact: bool = False) -> str:
-    parts, size = [], 0
+    from instruments.surfaces import JS, PY, TEMPLATES
+    parts, size, omitted = [], 0, []
     for path in sorted(tree.paths()):
-        if not path.endswith((".py", ".md", ".txt", ".toml", ".yml", ".yaml", ".json")):
+        if not path.endswith(PY + JS + TEMPLATES + (".css", ".md", ".txt", ".toml", ".yml", ".yaml", ".json")):
             continue
         raw = tree.read(path)
         if b"\x00" in raw:
@@ -93,10 +104,11 @@ def model_context(tree, limit: int = 120_000, *, redact: bool = False) -> str:
         except UnicodeDecodeError:
             continue
         if size + len(text) > limit:
-            break
+            omitted.append(path)
+            continue
         parts.append(f"=== {path} ===\n{text}")
         size += len(text)
-    return "\n".join(parts)
+    return "\n".join(parts) + ("\nContext bound reached; read/search omitted files: " + ", ".join(omitted[:30]) if omitted else "")
 
 
 FRONTIER = ("sast", "ci", "deps-age")                  # judgment-heavy: the frontier tier; the rest: small
@@ -128,7 +140,8 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
 
 class Agent:
     def __init__(self, store, *, data=EMPTY, api_key: str | None = None, ask=None, publish=None, llm=None,
-                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None, funnel: bool = True):
+                 sandbox=None, iterations: int = 2, scopes=None, research_sources=None, funnel: bool = True,
+                 review=None, research_steps: int = 8):
         """data: the same pinned snapshot the instruments use, so that recipes reproduce. scopes: the write scopes
         the rules give the client's own targets. llm: the egress gate (standard.autonomy.llm.Gate); `api_key` and
         `ask(prompt, key) -> dict` build one for tests."""
@@ -146,8 +159,8 @@ class Agent:
         if any(not isinstance(patterns, list) or not patterns or any(not relative(p) for p in patterns)
                for patterns in self.scopes.values()):
             raise AgentError("custom repair scopes must be configured lists of relative path patterns")
-        self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources)
-        self.funnel, self.last_funnel = (Funnel() if funnel else None), None
+        self.research = Research(self.llm, self.store.parent / "research.jsonl", sources=research_sources, steps=research_steps)
+        self.funnel, self.last_funnel = (Funnel(**(review or {})) if funnel else None), None
 
     @staticmethod
     def _values(values) -> dict:
@@ -205,41 +218,43 @@ class Agent:
                       + (f"Your previous candidate was rejected by your own checks:\n{feedback}\n" if feedback else "")
                       + (f"Release data of the pinned dependencies:\n{upgrades}\n" if upgrades else "")
                       + f"Repository map:\n{RepoMap(tree).render(focus=[d.split(':')[0] for d in finding['details']])}\n"
-                      f"Return JSON {{\"title\": str, \"files\": {{path: full new content}}, \"risks\": str}}, "
+                      f"Return JSON {{\"title\": str, \"files\": {{path: full new content or null to delete}}, \"risks\": str}}, "
                       f"changing as few files as possible.\n\n"
                       f"{model_context(tree, redact=target_id == 'secrets')}")
             tier = "frontier" if target_id in FRONTIER or target_id.startswith("rules-") else "small"
             try:
                 if self.funnel is None:
                     reply = self.research.dialogue(prompt, tree, tier=tier, key=f"repair:{target_id}")
-                else:                                       # three passes, each with the rules it can act on
+                else:                                       # one writer, parallel read-only reviews of the same draft
                     reply, stats = self.funnel.run(
-                        lambda text, name: self.research.dialogue(text, tree, tier=tier, key=f"repair:{target_id}:{name}"),
+                        lambda text, role, **kw: self.research.worker(text, role, key=f"repair:{target_id}", tier=tier, **kw),
                         tree, prompt, values=self._values(values), focus=[d.split(":")[0] for d in finding["details"]],
                         scope_ok=lambda path: in_scope(target_id, path, self.scopes))
                     self.last_funnel = stats
                     if stats["remaining"]:
-                        feedback = "Banned APIs left after the three passes:\n" + "\n".join(stats["remaining"])
+                        feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
                         continue
             except ResearchError as exc:
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
+                self.last_funnel = self.funnel.last_stats if self.funnel else None
                 raise AgentError(f"the repair of {target_id}: {exc}") from exc
             files = reply.get("files")
-            if not isinstance(files, dict) or not files or not all(in_scope(target_id, p, self.scopes) and isinstance(c, str)
+            if not isinstance(files, dict) or not files or not all(in_scope(target_id, p, self.scopes) and (c is None or isinstance(c, str))
                                                                     for p, c in files.items()):
                 raise AgentError(f"the repair of {target_id} leaves its write scope")
-            if any(REDACTED.decode() in c for c in files.values()):
+            if any(c is not None and REDACTED.decode() in c for c in files.values()):
                 raise AgentError("the reply still carries a redaction mark")
             title = str(reply.get("title", ""))[:200] or f"remediate {target_id}"
-            head = self._commit(base, {p: c.encode() for p, c in files.items()},
+            encoded = {p: c.encode() if c is not None else None for p, c in files.items()}
+            head = self._commit(base, encoded,
                                 f"Standard: {title}\n\nStandard-Target: {target_id}\n")
             check = precheck(self.store, base, head, target_id, targets, self.data, self.sandbox, self.store.parent / "venvs") if targets else {
                 "ok": True, "isolation": self.sandbox.isolation, "tests": "?"}
             if check["ok"]:
                 message = dossier(target, finding["status"], finding["details"], sorted(files), check, title,
                                   str(reply.get("risks", "")))
-                head = self._commit(base, {p: c.encode() for p, c in files.items()}, message)
+                head = self._commit(base, encoded, message)
                 self.publish(head)
                 return head, "model"
             feedback = "\n".join(check["problems"])[:4000]

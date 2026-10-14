@@ -40,7 +40,7 @@ class Builder:
 
     def __init__(self, service, signer: Signer, grant: str, store, requests, *, clock, notes, llm=None,
                  sandbox=None, data=None, iterations: int = 3, backoff_ms: int = 60_000, research_sources=None,
-                 funnel: bool = True):
+                 funnel: bool = True, review=None, research_steps: int = 8):
         """grant: the agent's capability. store: the agent's proposals store. requests: the request store (contracts
         and specs by digest)."""
         from instruments.data import EMPTY
@@ -51,9 +51,9 @@ class Builder:
         self.llm, self.sandbox, self.data = llm, sandbox or Sandbox(
             cache_roots=(self.store.parent / "venvs",)), data or EMPTY
         self.iterations, self.backoff_ms = iterations, backoff_ms
-        self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources)
+        self.research = Research(llm, self.notes.with_name("build-research.jsonl"), sources=research_sources, steps=research_steps)
         from .funnel import Funnel
-        self.funnel, self.last_funnel = (Funnel() if funnel else None), None
+        self.funnel, self.last_funnel = (Funnel(**(review or {})) if funnel else None), None
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
     def check(self, base: str, head: str, rid: str, targets: dict) -> list:
@@ -103,30 +103,32 @@ class Builder:
                       + (model_packet(context) + "\n" if context is not None else "")
                       + (f"Your previous candidate did not pass:\n{feedback}\n\n" if feedback else "")
                       + f"Repository map:\n{RepoMap(tree).render()}\n\n"
-                      f"Return JSON {{\"title\": str, \"files\": {{path: full new content}}, \"risks\": str}}: "
+                      f"Return JSON {{\"title\": str, \"files\": {{path: full new content or null to delete}}, \"risks\": str}}: "
                       f"source files only, never under tests/, as few as possible.\n\n{model_context(tree)}")
             try:
                 if self.funnel is None:
                     reply = self.research.dialogue(prompt, tree, key=f"request:{rid}")
-                else:                                       # three passes, each with the rules it can act on
+                else:                                       # one writer, parallel reviews, bounded corrections
                     from standard.catalog import effective, load
                     reply, stats = self.funnel.run(
-                        lambda text, name: self.research.dialogue(text, tree, key=f"request:{rid}:{name}"),
+                        lambda text, role, **kw: self.research.worker(text, role, key=f"request:{rid}", **kw),
                         tree, prompt, values=values if values is not None else effective(load(), None),
-                        scope_ok=lambda path: in_scope(rid, path), wide_touched=("surface:endpoint",))
+                        scope_ok=lambda path: in_scope(rid, path), wide_touched=("surface:endpoint",),
+                        fixed_files={contract_path(rid): contract})
                     self.last_funnel = stats
                     if stats["remaining"]:
-                        feedback = "Banned APIs left after the three passes:\n" + "\n".join(stats["remaining"])
+                        feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
                         continue
             except ResearchError as exc:
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
+                self.last_funnel = self.funnel.last_stats if self.funnel else None
                 raise AgentError(f"the implementation: {exc}") from exc
             files = reply.get("files")
-            if not isinstance(files, dict) or not files or not all(in_scope(rid, p) and isinstance(c, str)
+            if not isinstance(files, dict) or not files or not all(in_scope(rid, p) and (c is None or isinstance(c, str))
                                                                     for p, c in files.items()):
                 raise AgentError("the implementation leaves its write scope (code only, never tests)")
-            blobs = {p: c.encode() for p, c in files.items()} | {contract_path(rid): contract}
+            blobs = {p: c.encode() if c is not None else None for p, c in files.items()} | {contract_path(rid): contract}
             what = str(reply.get("title", ""))[:200] or title
             message = (f"{what}\n\nImplements request {rid}: {title}\n"
                        f"Files: {', '.join(sorted(files))}\n"
@@ -134,6 +136,9 @@ class Builder:
                        f"floor target regressed. The independent instruments measure it again.\n"
                        + (f"\nRisks: {str(reply.get('risks', ''))[:1500]}\n" if reply.get("risks") else "")
                        + f"\nStandard-Request: {rid}\n")
+            if self.last_funnel:
+                from .funnel import record
+                message += "\nAdvisory workflow: " + record(self.last_funnel) + "\n"
             head = commit_files(self.store, base, blobs, message)
             problems = self.check(base, head, rid, targets)
             if not problems:
@@ -191,6 +196,9 @@ class Builder:
                                 values=self._values(view)), state="proposed")
                 except AgentError as exc:
                     note.update(base=base, head=None, state=f"waiting: {exc}", next_at=now + 10 * self.backoff_ms)
+                if self.last_funnel:
+                    from .funnel import record
+                    note["workflow"] = record(self.last_funnel)
             report[rid] = note.get("state")
         self.notes.write_text(json.dumps(notes, indent=2, sort_keys=True))
         return report

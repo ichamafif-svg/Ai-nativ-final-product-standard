@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 
 from instruments.tree import Snapshot
 
@@ -21,11 +22,15 @@ from .read_model import ReadModel
 
 SUSPICION_KEYS = ("law_ref", "surface", "why", "evidence_seen", "determinism_gap", "needs",
                   "suggested_action", "confidence", "authority")
+SIMPLICITY = ("Find needless layers, state, dependencies, dead code and duplicated mechanisms across the repository. "
+              "Propose a smaller design for a current need, with concrete paths, the behaviour and guarantees to "
+              "preserve, and verification needed. Do not optimise line counts, weaken checks or invent work. "
+              "law_ref is design:simplicity; a design proposal is not a law violation or a safety debt.")
 
 
 def rotation(state_path, cat=None) -> str:
     """The next category to patrol, in the catalog's fixed order; the position is kept in U's own file."""
-    order = categories()
+    order = ["simplicity", *categories()]
     try:
         last = json.loads(state_path.read_text()).get("category")
     except (OSError, ValueError):
@@ -63,7 +68,10 @@ def patrol_context(view: dict, findings=None, routes=(), qualify=None, *, focus=
     weak = [d for d in selected if d["state"] in ("unknown", "unmeasured", "open")
             or d["route"]["state"] in (None, "NO_ROUTE", "TRUST_BLOCKED")
             or d["action"]["method"] in ("missing_task", "llm_or_configured_scope")]
-    return {"kind": "law-patrol", "mode": "targeted" if focus else "wide", "focus": focus,
+    simplicity = focus == "simplicity"
+    return {"kind": "simplicity-patrol" if simplicity else "law-patrol",
+            "mission": SIMPLICITY if simplicity else "Find possible law violations missed by instruments.",
+            "mode": "targeted" if focus else "wide", "focus": focus,
             "basis": view["prefix"], "law_digest": view["law"].get("digest"),
             "read_model": {"basis": model.basis, "authority": model.graph()["authority"]},
             "effective_law": law, "settings": settings,
@@ -97,7 +105,7 @@ def run_patrol(cycle, *, main, focus=None) -> dict:
         category = rotation(cycle.agent.store.parent / "patrol-rotation.json")
         values = effective(load(), view["law"]["effective"].get("settings", {}).get("values"))
         rules = patrol_rules(category, values, scan(tree)["features"] if hasattr(tree, "paths") else None)
-        focus = f"rules:{category}"
+        focus = "simplicity" if category == "simplicity" else f"rules:{category}"
     context = patrol_context(view, focus=focus, model=model, rules=rules)
 
     class ReadOnlyResearch:
@@ -107,7 +115,12 @@ def run_patrol(cycle, *, main, focus=None) -> dict:
 
     result = propose_patrol(context, tree, ReadOnlyResearch())
     record = {"basis": context["basis"], "law_digest": context["law_digest"], "main": base,
-              "focus": focus, "mode": context["mode"], **result}
+              "focus": focus, "mode": context["mode"],
+              "next": "Serve an existing debt within its scope, or create a human-contracted build request for a refactor.",
+              **result}
+    current = cycle.service.view()
+    record["state"] = ("proposed" if main() == base and current["law"].get("digest") == record["law_digest"] else "stale")
+    record["id"] = "patrol:" + hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()[:24]
     clean, _ = redact(json.dumps(record, sort_keys=True))
     notes = cycle.agent.store.parent / "patrol-results.jsonl"
     fd = os.open(notes, os.O_APPEND | os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
@@ -115,3 +128,47 @@ def run_patrol(cycle, *, main, focus=None) -> dict:
         os.fchmod(output.fileno(), 0o600)
         output.write(clean + "\n")
     return json.loads(clean)
+
+
+def patrol_results(cycle, *, main) -> list:
+    """U's proposal history, labelled against the current main/law. It is never a queue of constitutional debts."""
+    path = cycle.agent.store.parent / "patrol-results.jsonl"
+    if not path.exists():
+        return []
+    view, base = cycle.service.view(), main()
+    out = []
+    with path.open() as source:
+        for line in source:
+            item = json.loads(line)
+            item["state"] = ("proposed" if item["main"] == base and item["law_digest"] == view["law"].get("digest") else "stale")
+            out.append(item)
+    return out
+
+
+class Patrol:
+    """One bounded advisory round after normal moves, on a persisted cadence; failures do not block the loop."""
+    name = "patrol"
+
+    def __init__(self, cycle, main, *, clock, interval_ms=3_600_000):
+        if type(interval_ms) is not int or not 60_000 <= interval_ms <= 86_400_000:
+            raise ValueError("patrol interval_ms must be 60000..86400000")
+        self.cycle, self.main, self.clock, self.interval_ms = cycle, main, clock, interval_ms
+        self.notes = cycle.agent.store.parent / "patrol-schedule.json"
+
+    def run(self, view, main):
+        if self.cycle.agent.llm is None:
+            return {"state": "unavailable", "reason": "no model configured"}
+        now = self.clock()
+        note = json.loads(self.notes.read_text()) if self.notes.exists() else {}
+        if now < note.get("next_at", 0):
+            return {**note, "state": "waiting"}
+        # Reserve the next round before model calls; errors and process restarts cannot create a retry storm.
+        self.notes.write_text(json.dumps({"next_at": now + self.interval_ms}))
+        try:
+            result = run_patrol(self.cycle, main=self.main)
+            report = {"state": result["state"], "id": result["id"], "focus": result["focus"],
+                      "suspicions": len(result["suspicions"])}
+        except Exception as exc:
+            report = {"state": "unavailable", "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        self.notes.write_text(json.dumps({"next_at": now + self.interval_ms, **report}))
+        return report

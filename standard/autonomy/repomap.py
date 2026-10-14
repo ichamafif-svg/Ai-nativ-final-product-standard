@@ -1,13 +1,15 @@
 """U — a map of the repository for the agent: modules, their definitions, and who calls what.
 
-Built from the abstract syntax tree of every Python file of one commit, never by running it. It tells the agent what a
+Built from Python syntax trees and lexical JavaScript/TypeScript descriptions of one commit, never by running it. It tells the agent what a
 change may break before it writes it: the callers of a function, the modules that import another. The map is rebuilt
 for every base of main and costs nothing to the judge.
 """
 from __future__ import annotations
 
 import ast
+import re
 from collections import defaultdict
+from instruments.surfaces import JS, describe, _strip_js
 
 
 def _signature(fn) -> str:
@@ -24,7 +26,18 @@ class RepoMap:
     def __init__(self, tree):
         """tree: anything with paths() and read(path) -> bytes (a Snapshot)."""
         self.modules, self.calls, self.imports = {}, defaultdict(set), defaultdict(set)
-        for path in sorted(p for p in tree.paths() if p.endswith(".py")):
+        for path in sorted(p for p in tree.paths() if p.endswith((".py", *JS))):
+            if path.endswith(JS):
+                source = tree.read(path)
+                d = describe(path, source)
+                self.imports[path].update(d["imports"])
+                code = _strip_js(source.decode("utf-8", "replace"))
+                self.modules[path] = [f"export {n}" for n in re.findall(
+                    r"\bexport\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let)\s+([\w$]+)", code)]
+                self.modules[path] += [f"endpoint {e}" for e in d["endpoints"]]
+                for name in re.findall(r"\b([A-Za-z_$][\w$]*)\s*\(", code):
+                    self.calls[name].add(path)
+                continue
             try:
                 module = ast.parse(tree.read(path))
             except (SyntaxError, ValueError, FileNotFoundError, UnicodeDecodeError):

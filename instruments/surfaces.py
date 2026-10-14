@@ -94,11 +94,18 @@ JS_EXPORT_ACCESS = re.compile(r"""export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*[\w$
 EXPRESS = re.compile(r"""\b(app|router|server)\.(get|post|put|patch|delete)\s*\(\s*(['"`])(/[^'"`]*)\3""")
 
 
-def _strip_js(text: str) -> str:
-    """Remove comments and string bodies (keep quotes), so words inside them are not code."""
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    text = re.sub(r"(?m)//.*$", " ", text)
-    return re.sub(r"(['\"`])(?:\\.|(?!\1).)*\1", lambda m: m[1] * 2, text, flags=re.S)
+def _strip_js(text: str, *, keep_strings: bool = False) -> str:
+    """Mask comments and strings in one scan, preserving offsets and lines (including URLs in strings).
+    This is lexical inspection, not a JavaScript parser."""
+    tokens = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|/\*.*?\*/|//[^\n]*''', re.S)
+
+    def mask(match):
+        token = match.group()
+        if keep_strings and token[0] in "\"'`":
+            return token
+        blank = "".join("\n" if c == "\n" else " " for c in token)
+        return token[0] + blank[1:-1] + token[-1] if token[0] in "\"'`" else blank
+    return tokens.sub(mask, text)
 
 
 class _Py(ast.NodeVisitor):

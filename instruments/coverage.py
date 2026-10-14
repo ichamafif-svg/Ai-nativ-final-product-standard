@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from . import surfaces
-from .bans import violations
+from .bans import analysis_gaps, block_calls, violations
 from .tree import Measure
 
 STATIC_PROBES = ("sri", "migrations-reversible", "lock-hashes")
@@ -108,10 +109,21 @@ def bandit_findings(tree) -> dict:
     if not files:
         return {}
     work = _materialise(tree)
-    r = subprocess.run([sys.executable, "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", "--", *files],
-                       cwd=work, capture_output=True, timeout=900)
+    try:
+        r = subprocess.run([sys.executable, "-m", "bandit", "--ignore-nosec", "-f", "json", "-q", "--", *files],
+                           cwd=work, capture_output=True, timeout=900)
+        report = json.loads(r.stdout)
+        if (r.returncode not in (0, 1) or not isinstance(report, dict)
+                or not isinstance(report.get("results"), list) or report.get("errors") != []):
+            raise ValueError("bandit did not complete its analysis")
+        results = report["results"]
+        if any(not isinstance(x, dict) or not all(k in x for k in ("test_id", "filename", "line_number"))
+               for x in results) or bool(results) != (r.returncode == 1):
+            raise ValueError("inconsistent bandit report")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     out = {}
-    for x in json.loads(r.stdout or b"{}").get("results", []):
+    for x in results:
         out.setdefault(x["test_id"], []).append(f"{x['filename'].removeprefix('./')}:{x['line_number']}")
     return out
 
@@ -154,6 +166,19 @@ def evaluate(tree, catalog: dict, values: dict, *, declared=(), probes=None, ban
     probes = probes if probes is not None else None
     cache = {}
 
+    def static_gaps():
+        if "static_gaps" not in cache:
+            cache["static_gaps"] = [f"{p}: {why}" for p in sorted(tree.paths()) if not surfaces.SKIP.search(p)
+                                    for why in analysis_gaps(p, tree.read(p))]
+        return cache["static_gaps"]
+
+    def calls(module):
+        key = "calls:" + module
+        if key not in cache:
+            cache[key] = set().union(*(block_calls(p, tree.read(p), module) for p in tree.paths()
+                                      if not surfaces.SKIP.search(p)))
+        return cache[key]
+
     def get_probes():
         if "probes" not in cache:
             cache["probes"] = probes if probes is not None else app_probes(tree, values, blocks_paths)
@@ -161,7 +186,10 @@ def evaluate(tree, catalog: dict, values: dict, *, declared=(), probes=None, ban
 
     def get_bandit():
         if "bandit" not in cache:
-            cache["bandit"] = bandit if bandit is not None else bandit_findings(tree)
+            try:
+                cache["bandit"] = bandit if bandit is not None else bandit_findings(tree)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                cache["bandit"] = f"unrun:bandit:{type(exc).__name__}"
         return cache["bandit"]
 
     def block_check(rule) -> list:
@@ -169,12 +197,20 @@ def evaluate(tree, catalog: dict, values: dict, *, declared=(), probes=None, ban
         found = violations(tree, {name: blocks[name]["bans"]})
         if found:
             return ["fail", [f"{p}:{line}:{pat}" for p, line, pat in found[:30]]]
+        gaps = static_gaps()
+        if gaps:
+            return ["unrun:static analysis incomplete", gaps[:30]]
         triggered = not rule["when"] or bool(present & set(rule["when"]))
         if triggered:
             for stack in stacks:
                 module = adoptable(blocks[name], stack)
                 if module and not adopted(module, imports):
                     return [f"unrun:adopt {module}", [f"{module} is not used where the rule applies ({stack})"]]
+                if module and not calls(module):
+                    return [f"unrun:wire {module}", ["import present, no resolved block call; wiring is not verified"]]
+                if stack == "fastapi" and name in ("access", "session") and module and not any(
+                        q.endswith(".bind") for q in calls(module)):
+                    return [f"unrun:bind {module}", ["the block has not been bound to the application"]]
         return ["pass" if triggered else "na", []]
 
     out = {}
@@ -196,8 +232,10 @@ def evaluate(tree, catalog: dict, values: dict, *, declared=(), probes=None, ban
             elif kind == "probe":
                 checks[check] = list(get_probes().get(arg, ["gap", ["no such probe in this release"]]))
             elif kind == "bandit":
-                hits = get_bandit().get(arg, [])
-                checks[check] = ["fail", hits[:30]] if hits else ["pass", []]
+                measured = get_bandit()
+                hits = measured.get(arg, []) if isinstance(measured, dict) else []
+                checks[check] = ([measured, []] if isinstance(measured, str) else
+                                 ["fail", hits[:30]] if hits else ["pass", []])
             elif check == "patrol":
                 checks[check] = ["ai", []]
             elif check == "human":
@@ -216,7 +254,9 @@ def evaluate(tree, catalog: dict, values: dict, *, declared=(), probes=None, ban
             state = "measured" if all(r in ("pass", "na") for r in results) else "partial"
         else:
             state = "patrolled" if "ai" in results else "human" if "human" in results else "gap"
-        out[rule["id"]] = {"state": state, "checks": checks}
+        out[rule["id"]] = {"state": state, "checks": checks,
+                           "limits": ["static block checks inspect call sites; runtime coverage needs probes"]
+                           if "blocks" in checks else []}
     return out
 
 

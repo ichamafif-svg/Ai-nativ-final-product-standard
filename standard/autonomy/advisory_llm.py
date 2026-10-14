@@ -28,8 +28,8 @@ def propose_reading(dossier: dict, tree, research, *, key=None) -> dict:
 
 def propose_patrol(context: dict, tree, research, *, key=None) -> dict:
     """Ask a read-only research loop to patrol for possible law violations not yet deterministically born."""
-    prompt = ("Patrol this repository snapshot for possible violations of Standard law that deterministic instruments "
-              "may miss. You receive the complete rules in force, known findings and weak spots. "
+    prompt = ("Patrol this repository snapshot. Mission: " + context.get("mission", "Find possible law violations.") +
+              " You receive the complete rules in force, known findings and weak spots. "
               "You may read/search the snapshot and propose suspicions only. Do not claim facts, close gaps, authorize "
               "work, change law, or treat your output as evidence. Return JSON {\"suspicions\": [objects with only "
               f"these keys: {', '.join(SUSPICION_KEYS)}]}}.\n\n"

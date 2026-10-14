@@ -68,7 +68,7 @@ BAD = {"package.json": PACKAGE, "app/orders/route.js": BAD_ROUTE}
 class Blocks(unittest.TestCase):
     @unittest.skipUnless(NODE, "node is not installed")
     def test_the_nextjs_blocks_hold_their_contract(self):
-        r = subprocess.run(["node", "--test", str(ROOT / "blocks" / "js" / "nextjs" / "test.mjs")], capture_output=True,
+        r = subprocess.run(["node", "--test", "--test-reporter=tap", str(ROOT / "blocks" / "js" / "nextjs" / "test.mjs")], capture_output=True,
                            text=True, timeout=120, cwd=ROOT)
         self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-2000:])
         self.assertIn("# fail 0", r.stdout)

@@ -1,6 +1,4 @@
-"""The funnel (standard/autonomy/funnel.py): three prompts, each with only the rules the change can act on, chosen
-deterministically; banned APIs left in the draft go back with the block that covers them; a refusal is explained
-with the rule's own text."""
+"""Selected rule context, bounded parallel advisory reviews, one writer and exploratory patrol."""
 import sys
 import unittest
 from pathlib import Path
@@ -29,48 +27,103 @@ BASE = Tree({"shop/main.py": "from fastapi import FastAPI\nfrom standard_blocks.
 
 
 class Passes(unittest.TestCase):
-    def test_three_prompts_each_with_what_the_draft_triggers(self):
-        prompts, replies = [], [
-            {"title": "export", "files": {"shop/export.py": "import os\n\ndef export(name):\n    os.system('zip ' + name)\n"}},
-            {"files": {"shop/export.py": "from standard_blocks.process import run\n\ndef export(name):\n"
-                                         "    run(['zip', name])\n"}}]
+    def test_two_read_only_reviewers_share_one_draft_and_run_in_parallel(self):
+        import threading
+        barrier, seen = threading.Barrier(2), []
+        def ask(text, role, *, tree, read_only, deadline=None):
+            seen.append((role, tree.commit if hasattr(tree, "commit") else "base", read_only))
+            if role == "build":
+                return {"title": "export", "files": {"shop/export.py": "def export(): return 1\n"}}
+            self.assertIn(JUDGED, text)
+            self.assertIn("smallest design", text)
+            barrier.wait(timeout=2)
+            with self.assertRaises(TypeError):
+                tree.files["changed.py"] = b"no"
+            return {"findings": []}
+        result, stats = Funnel().run(ask, BASE, "Add an export.", values={}, scope_ok=lambda p: p.startswith("shop/"))
+        self.assertEqual({r for r, _, _ in seen}, {"build", "correctness", "simplicity"})
+        reviews = [(digest, ro) for role, digest, ro in seen if role != "build"]
+        self.assertEqual(reviews[0], reviews[1])
+        self.assertTrue(reviews[0][1])
+        self.assertEqual(len(stats["rounds"]), 1)
+        self.assertIn("shop/export.py", result["files"])
+        self.assertIn('"authority": "proposal_only"', record(stats))
 
-        def ask(text, name):
-            prompts.append((name, text))
-            return replies.pop(0)
-        values = effective(load(), None)
-        result, stats = Funnel().run(ask, BASE, "Add an export.", values=values, scope_ok=lambda p: p.startswith("shop/"))
-        self.assertEqual([n for n, _ in prompts], ["wide", "fine"])            # no surface: no medium pass
-        self.assertTrue(stats["passes"][1]["skipped"])
-        self.assertTrue(all(JUDGED in t for _, t in prompts))
-        fine = prompts[1][1]
-        self.assertIn("shop/export.py:4:call:os.system", fine)                      # the banned API, exactly
-        self.assertIn("block process", fine)                                        # and the block that covers it
-        self.assertIn("shop/util.py:4: return run(['convert', a, b])", fine)        # how this repository does it
-        self.assertIn("INJ-CMD", fine)
+    def test_corrections_are_reviewed_again_and_new_surfaces_receive_rules(self):
+        seen = []
+        def ask(text, role, *, tree, read_only, deadline=None):
+            seen.append((role, getattr(tree, "commit", None), text))
+            if role == "build":
+                return {"files": {"shop/export.py": "import os\nos.system(name)\n"}}
+            if role == "correct":
+                self.assertIn("INJ-CMD", text)
+                return {"files": {"shop/export.py": "from standard_blocks.process import run\nrun(['zip'])\n"},
+                        "review_responses": [{"id": "correctness:0", "decision": "fixed", "reason": "use the block"}]}
+            if role == "correctness" and "os.system" in tree.read("shop/export.py").decode():
+                return {"findings": [{"path": "shop/export.py", "issue": "shell injection", "effect": "executes input",
+                                      "suggestion": "use the process block"}]}
+            return {"findings": []}
+        result, stats = Funnel().run(ask, BASE, "Export.", values={}, scope_ok=lambda p: True)
+        self.assertEqual(len(stats["rounds"]), 2)
+        self.assertNotEqual(stats["rounds"][0]["candidate"], stats["rounds"][1]["candidate"])
         self.assertEqual(stats["remaining"], [])
-        self.assertIn("run(['zip', name])", result["files"]["shop/export.py"])
-        self.assertIn('"pass": "fine"', record(stats))
+        self.assertIn("run", result["files"]["shop/export.py"])
+        self.assertTrue(all("INJ-CMD" in text for role, _, text in seen if role in ("correctness", "simplicity")))
 
-    def test_a_pass_with_nothing_selected_is_skipped_and_scope_is_kept(self):
-        names = []
+    def test_a_review_is_not_an_edit_or_authority_and_failure_is_visible(self):
+        flow = Funnel()
+        def ask(text, role, **kw):
+            return {"files": {"shop/a.py": "x = 1"}} if role == "build" else {"allowed": True, "files": {}}
+        with self.assertRaisesRegex(ValueError, "REVIEW_UNAVAILABLE"):
+            flow.run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
+        self.assertIn("REVIEW_UNAVAILABLE", flow.last_stats["error"])
 
-        def ask(text, name):
-            names.append(name)
-            return {"files": {"README.md": "docs\n"}}
-        _, stats = Funnel().run(ask, BASE, "Fix the docs.", values={}, scope_ok=lambda p: True)
-        self.assertEqual(names, ["wide"])
-        self.assertTrue(all(p.get("skipped") for p in stats["passes"][1:]))
-        with self.assertRaises(ValueError):
-            Funnel().run(lambda t, n: {"files": {"tests/x.py": ""}}, BASE, "x", values={},
-                         scope_ok=lambda p: not p.startswith("tests/"))
+    def test_no_effect_out_of_scope_and_missing_deletions_are_refused(self):
+        for files in ({"tests/x.py": ""}, {"shop/absent.py": None}, {"../x.py": ""}, {}):
+            with self.assertRaises(ValueError):
+                Funnel().run(lambda *a, **k: {"files": files}, BASE, "Task", values={},
+                             scope_ok=lambda p: not p.startswith("tests/"))
+        overlay = Overlay(BASE, {"shop/util.py": None, "a.ts": "export const x = 1"})
+        self.assertNotIn("shop/util.py", overlay.paths())
+        with self.assertRaises(FileNotFoundError):
+            overlay.read("shop/util.py")
+        self.assertEqual(overlay.read("a.ts"), b"export const x = 1")
 
     def test_a_refusal_is_explained_with_the_text_seen_before_coding(self):
         text = explain(["shop/x.py:3:call:hashlib.md5", "rules-authorization: AUTHZ: probe:access-matrix fail"])
         self.assertIn("block crypto", text)
         self.assertIn("AUTHZ  [wide", text)
         self.assertIn("allow(id)", text)
-        self.assertEqual(Overlay(BASE, {"a.py": "x"}).read("a.py"), b"x")
+
+    def test_reasoned_disagreement_is_recorded_without_a_reviewer_veto(self):
+        def ask(text, role, **kw):
+            if role == "build": return {"files": {"shop/a.py": "x = 1"}}
+            if role == "correct": return {"files": {}, "review_responses": [
+                {"id": "simplicity:0", "decision": "declined", "reason": "the public contract requires this state"}]}
+            return {"findings": [{"path": "shop/a.py", "issue": "extra state", "effect": "more concepts",
+                                  "suggestion": "remove it"}]} if role == "simplicity" else {"findings": []}
+        result, stats = Funnel().run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
+        self.assertEqual(result["files"], {"shop/a.py": "x = 1"})
+        self.assertEqual(stats["rounds"][0]["responses"][0]["decision"], "declined")
+
+    def test_last_round_cannot_publish_a_revision_without_review(self):
+        def ask(text, role, **kw):
+            if role == "build": return {"files": {"shop/a.py": "x = 1"}}
+            if role == "correct": return {"files": {"shop/a.py": "x = 2"}, "review_responses": [
+                {"id": "correctness:0", "decision": "fixed", "reason": "corrected the value"}]}
+            return {"findings": [{"path": "shop/a.py", "issue": "wrong value", "effect": "wrong result",
+                                  "suggestion": "use 2"}]} if role == "correctness" else {"findings": []}
+        with self.assertRaisesRegex(ValueError, "budget exhausted"):
+            Funnel(rounds=1).run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
+
+    def test_dependency_design_is_examined_before_the_writer(self):
+        seen = []
+        base = Tree({"requirements.txt": "packaging==24.1"})
+        def ask(text, role, **kw):
+            seen.append(role)
+            return {"files": {"requirements.txt": "packaging==24.2"}} if role == "build" else {"findings": []}
+        Funnel().run(ask, base, "Upgrade", values={}, scope_ok=lambda p: True, focus=["requirements.txt"])
+        self.assertEqual(seen[:2], ["design", "build"])
 
 
 class Patrol(unittest.TestCase):
@@ -79,12 +132,131 @@ class Patrol(unittest.TestCase):
         from standard.autonomy.patrol import patrol_rules, rotation
         from standard.catalog import categories
         state = Path(tempfile.mkdtemp()) / "rotation.json"
-        rounds = [rotation(state) for _ in range(len(categories()) + 1)]
-        self.assertEqual(rounds[:-1], categories())
-        self.assertEqual(rounds[-1], categories()[0])                              # and again
+        rounds = [rotation(state) for _ in range(len(categories()) + 2)]
+        self.assertEqual(rounds[:-1], ["simplicity", *categories()])
+        self.assertEqual(rounds[-1], "simplicity")                              # and again
         rules = patrol_rules("input-and-business-logic", effective(load(), None), ["api", "database"])
         self.assertTrue(any(r.startswith("TRANSACTION") for r in rules))
         self.assertFalse(any(r.startswith("BIZ-LIMITS") for r in rules))          # deterministic and human only
+
+    def test_simplicity_is_a_design_proposal_and_schedule_failures_are_bounded(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from standard.autonomy.patrol import Patrol as Scheduled, SIMPLICITY
+        root = Path(tempfile.mkdtemp())
+        cycle = SimpleNamespace(agent=SimpleNamespace(store=root / "store", llm=object()))
+        scheduled = Scheduled(cycle, lambda: "base", clock=lambda: 100, interval_ms=60_000)
+        with patch("standard.autonomy.patrol.run_patrol", side_effect=ValueError("model unavailable")) as run:
+            self.assertEqual(scheduled.run({}, "base")["state"], "unavailable")
+            self.assertEqual(scheduled.run({}, "base")["state"], "waiting")
+            self.assertEqual(run.call_count, 1)
+        self.assertIn("not a law violation", SIMPLICITY)
+
+
+class MeasurementFailures(unittest.TestCase):
+    def test_bandit_failure_empty_output_partial_report_and_bad_schema_are_not_clean(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from instruments.coverage import bandit_findings
+        cases = [(2, b""), (1, b""), (0, b"{}"), (0, b'{"results": [], "errors": ["skipped file"]}'),
+                 (1, b'{"results": [], "errors": []}')]
+        for status, output in cases:
+            with self.subTest(status=status, output=output), tempfile.TemporaryDirectory() as tmp:
+                with patch("instruments.coverage._materialise", return_value=Path(tmp)), patch(
+                        "instruments.coverage.subprocess.run", return_value=SimpleNamespace(returncode=status, stdout=output)):
+                    with self.assertRaises(ValueError):
+                        bandit_findings(Tree({"app.py": "x = 1"}))
+
+    def test_import_only_does_not_prove_block_wiring(self):
+        from instruments.coverage import evaluate
+        cat = load()
+        tree = Tree({"app.py": "from fastapi import FastAPI\nfrom standard_blocks.web import secure_app\napp = FastAPI()\n"})
+        states = evaluate(tree, cat, effective(cat, None), probes={}, bandit={})
+        checks = [r["checks"]["blocks"][0] for r in states.values() if "blocks" in r["checks"]]
+        self.assertIn("unrun:wire standard_blocks.web", checks)
+
+    def test_broken_bandit_is_unmeasured_in_rule_coverage(self):
+        from unittest.mock import patch
+        from instruments.coverage import evaluate
+        tree = Tree({"app.py": "from cryptography.fernet import Fernet\nx = Fernet(k)\n"})
+        with patch("instruments.coverage.bandit_findings", side_effect=ValueError("bad report")) as scan:
+            states = evaluate(tree, load(), effective(load(), None), probes={})
+        checks = [v[0] for r in states.values() for k, v in r["checks"].items() if k.startswith("bandit:")]
+        self.assertIn("unrun:bandit:ValueError", checks)
+        self.assertEqual(scan.call_count, 1)
+
+    def test_js_alias_destructuring_and_literal_members_cannot_hide_the_banned_call(self):
+        from instruments.bans import uses, blocks_fact
+        patterns = ["js-call:request.json"]
+        for source in ("const r = request; r.json();", 'const r = request; r["json"]();',
+                       "const {json: read} = request; read();"):
+            self.assertTrue(uses("app.ts", source.encode(), patterns), source)
+        self.assertFalse(uses("app.ts", b'// request.json()\nconst url = "https://request.json()";', patterns))
+        for source in ("request[method]();", "const msg = `x ${request.json()}`;"):
+            status, details = blocks_fact(Tree({}), Tree({"app.ts": source}), ["app.ts"], {"input": patterns})
+            self.assertEqual(status, "uncovered:analysis")
+            self.assertTrue(details)
+
+    def test_dynamic_categories_have_real_registered_measures_and_repair_scopes(self):
+        from tools.coverage import inventory
+        rows = [r for r in inventory() if r["target"].startswith("rules-")]
+        self.assertEqual(len(rows), 17)
+        self.assertTrue(all(r["measurement"] == "REGISTERED" and r["repair"] == "model in scope" for r in rows))
+
+
+class CandidateChanges(unittest.TestCase):
+    def test_deletion_round_trip_preserves_the_base_and_executable_modes(self):
+        import subprocess
+        from test_agent import store_with, git
+        from standard.autonomy.agent import commit_files
+        from instruments.tree import Snapshot
+        store, base = store_with({"keep.py": "x = 1\n", "remove.py": "unused = True\n", "tests/test_x.py": "assert True"})
+        head = commit_files(store, base, {"remove.py": None, "added.ts": b"export const x = 1"}, "simplify")
+        self.assertNotIn("remove.py", Snapshot(store, head).paths())
+        self.assertIn("remove.py", Snapshot(store, base).paths())
+        self.assertEqual(Snapshot(store, head).read("tests/test_x.py"), Snapshot(store, base).read("tests/test_x.py"))
+        self.assertEqual(git("-C", str(store), "rev-parse", f"{head}^"), base)
+        with self.assertRaises(ValueError):
+            commit_files(store, base, {"../escape.py": b""}, "bad")
+        with self.assertRaises(ValueError):
+            commit_files(store, base, {"absent.py": None}, "bad")
+        # An existing executable keeps its mode after an ordinary edit.
+        blob = git("-C", str(store), "rev-parse", f"{base}:keep.py")
+        git("-C", str(store), "read-tree", base)
+        git("-C", str(store), "update-index", "--cacheinfo", f"100755,{blob},keep.py")
+        executable = git("-C", str(store), "commit-tree", git("-C", str(store), "write-tree"), "-p", base, "-m", "mode")
+        edited = commit_files(store, executable, {"keep.py": b"x = 2\n"}, "edit")
+        result = subprocess.run(["git", "-C", str(store), "ls-tree", edited, "--", "keep.py"], capture_output=True, check=True)
+        self.assertTrue(result.stdout.startswith(b"100755"))
+
+    def test_nextjs_sources_are_visible_and_writable_without_opening_reserved_paths(self):
+        from instruments.scope import feature, repair
+        from standard.autonomy.agent import model_context
+        from standard.autonomy.repomap import RepoMap
+        tree = Tree({"app/(shop)/orders/[id]/route.ts": "export const GET = access.route('orders.read', f);"})
+        self.assertIn("export const GET", model_context(tree))
+        self.assertIn("endpoint GET /orders/:id", RepoMap(tree).render())
+        for path in tree.paths():
+            self.assertTrue(feature("r1", path))
+            self.assertTrue(repair("sast", path))
+        for path in ("tests/app.ts", ".github/ci.ts", "standard/rules.ts", "../app.ts"):
+            self.assertFalse(feature("r1", path))
+
+    def test_review_research_reads_the_draft_and_cannot_experiment_or_write(self):
+        import tempfile
+        from unittest.mock import patch
+        from standard.autonomy.research import Research, ResearchError
+        base = Tree({"a.py": "old"})
+        draft = Overlay(base, {"a.py": "new", "gone.py": None})
+        research = Research(None, Path(tempfile.mkdtemp()) / "notes")
+        self.assertEqual(research.read(draft, "a.py"), b"new")
+        with self.assertRaises(ResearchError):
+            research.read(draft, "gone.py")
+        with patch.object(research, "dialogue", return_value={"findings": []}) as dialogue:
+            research.worker("inspect", "simplicity", tree=draft, read_only=True, key="task")
+        self.assertEqual(dialogue.call_args.kwargs["allowed_actions"], ("read", "search"))
 
 
 if __name__ == "__main__":
