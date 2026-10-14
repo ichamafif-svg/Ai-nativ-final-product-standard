@@ -14,6 +14,7 @@ from pathlib import Path
 from dataclasses import replace
 
 from instruments.scope import REPAIR
+from standard.floors import FLOORS
 
 from .agent import Agent, AgentError
 from .memory import Memory
@@ -22,6 +23,9 @@ from .projection import Route
 from .context import model_packet, task_context
 from .read_model import ReadModel
 from .work import WorkEngine
+
+
+RULE_TARGETS = frozenset(t["id"] for t in FLOORS["targets"] if t["id"].startswith("rules-"))
 
 
 class Repairer:
@@ -33,7 +37,7 @@ class Repairer:
         memory: the agent's attempts."""
         self.service, self.engine, self.agent, self.routes = service, engine, agent, tuple(routes)
         if isinstance(agent, Agent):
-            supported = set(agent.scopes) | set(REPAIR) | {"actions"} \
+            supported = set(agent.scopes) | set(REPAIR) | {"actions"} | RULE_TARGETS \
                 if agent.llm else {"sbom", "vulns", "actions"}
             self.routes = tuple(replace(r, target_ids=frozenset(supported))
                                 if r.id == "agent-remediate" and r.target_ids is None else r for r in self.routes)

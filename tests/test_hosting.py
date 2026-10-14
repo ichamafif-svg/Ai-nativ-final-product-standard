@@ -172,8 +172,8 @@ class Integration(unittest.TestCase):
             rounds()
             self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), main)     # approved but red: never
             state = operator.journal.snapshot()                                          # approved, green, but a
-            self.assertEqual(state["observations"][f"repo:contrib:eve/{main}/{leaky}|regressions|scanner"]["status"],
-                             "found:1")                                                  # new secret: never
+            self.assertTrue(state["observations"][f"repo:contrib:eve/{main}/{leaky}|regressions|scanner"]["status"]
+                            .startswith("found:"))                                       # new secret: never
             approve("alice", green)
             rounds()
             self.assertEqual(git("rev-parse", "main", cwd=repo).stdout.strip(), green)

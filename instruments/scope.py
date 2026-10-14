@@ -40,6 +40,8 @@ def repair(target: str, path: str, scopes=None) -> bool:
         return False
     if target in REPAIR:
         return re.fullmatch(REPAIR[target], path) is not None
+    if target.startswith("rules-"):                 # a rule is held in the product's code: source, templates, scripts
+        return re.fullmatch(FEATURE, path) is not None
     patterns = (scopes or {}).get(target) if isinstance(scopes, dict) else None
     return isinstance(patterns, list) and any(isinstance(p, str) and fnmatchcase(path, p) for p in patterns)
 

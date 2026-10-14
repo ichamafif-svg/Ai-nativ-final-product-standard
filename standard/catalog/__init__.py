@@ -130,6 +130,16 @@ def validate(cat: dict) -> None:
         raise CatalogError(f"ASVS: not accounted for: {sorted(missing)[:5]}")
 
 
+def categories() -> list:
+    """Category slugs of the catalog, in a fixed order: one socle target each (rules-<slug>)."""
+    return sorted({re.sub(r"[^a-z0-9]+", "-", r["category"].lower()).strip("-") for r in load()["rules"]})
+
+
+def compact(cat: dict) -> dict:
+    """What the scanner's programs need of the catalog (rules and blocks), as plain data for their inputs."""
+    return {"rules": cat["rules"], "blocks": cat["blocks"]}
+
+
 @functools.lru_cache(maxsize=1)
 def load() -> dict:
     blocks = _read("blocks.toml")["block"]

@@ -1,7 +1,8 @@
 # Named values. Every vague word of the source standard (sensitive, critical, trusted, appropriate…) is one of these.
 # The human sets them in the rules of the game (settings.values); a value not set takes its default, which is the
 # strictest safe choice: deny, smallest limit, shortest lifetime. Loosening is a signed rule; tightening is free.
-# A value whose strictest choice would destroy data (retention) has no default: its rule stays uncovered until set.
+# A value whose strictest choice would destroy data (retention), or that only the product can know (app), has no
+# default: what reads it stays uncovered until it is set.
 #
 # type: list | map | int | text. way: which direction is stricter (less = a smaller number or a shorter list is
 # stricter; more = a larger one is). The AI may draft a value; it never decides one.
@@ -159,4 +160,9 @@ way = "less"
 [retention_days]
 type = "map"
 doc = "model -> days a record is kept once unused. No default: the rule stays uncovered until the human sets it."
+way = "less"
+
+[app]
+type = "text"
+doc = "the product's ASGI application, module:attribute (e.g. shop.main:app), which Standard's probes start in-process. No default: until it is set, every probe of the running app is a coverage debt."
 way = "less"

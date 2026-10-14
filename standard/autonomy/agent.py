@@ -99,6 +99,15 @@ def model_context(tree, limit: int = 120_000, *, redact: bool = False) -> str:
 
 
 FRONTIER = ("sast", "ci", "deps-age")                  # judgment-heavy: the frontier tier; the rest: small
+RULES_TASK = ("Bring the failing rules of this category back (each finding names the rule and the check that failed): "
+              "use the building block the rule names (standard_blocks.<block>), never the API it bans; declare what a "
+              "probe needs (an access id per route, Access(...).bind(app), Oidc(...).bind(app), runtime.install(app)). "
+              "Do not weaken or remove a check.")
+
+
+def task_of(target_id: str) -> str | None:
+    """The instruction for a target: a technical measure, or a category of the rule catalog."""
+    return TASKS.get(target_id) or (RULES_TASK if target_id.startswith("rules-") else None)
 
 
 def dossier(target: dict, status: str, details: list, files: list, check: dict, title: str, risks: str = "") -> str:
@@ -173,7 +182,7 @@ class Agent:
                 raise AgentError(f"the recipe for {target_id} does not pass the agent's precheck: {check['problems']}")
             self.publish(head)
             return head, "recipe"
-        if (target_id not in TASKS and target_id not in self.scopes) or self.llm is None:
+        if (task_of(target_id) is None and target_id not in self.scopes) or self.llm is None:
             raise AgentError(f"{target_id}: no applicable recipe and no model route")
         feedback, upgrades = "", ""
         if target_id in ("vulns", "deps-age", "licenses"):
@@ -181,7 +190,7 @@ class Agent:
                                    for n, p in self.data.packages.items()}, indent=1)[:6000]
         where = "\n".join(d[:400] for d in finding["details"][:20]) or "(none published)"
         for _ in range(self.iterations):
-            instruction = TASKS.get(target_id, "Serve the client requirement within the write scope the rules give it.")
+            instruction = task_of(target_id) or "Serve the client requirement within the write scope the rules give it."
             prompt = (f"Repository maintenance. Target `{target_id}`.\nTask: {instruction}\n"
                       f"Requirement: {target['resource']} must have {target['property']} = {target['expect']}; "
                       f"the independent instrument reports {finding['status']}.\nWhere:\n{where}\n{law_text}\n"
@@ -193,7 +202,8 @@ class Agent:
                       f"changing as few files as possible.\n\n"
                       f"{model_context(tree, redact=target_id == 'secrets')}")
             try:
-                reply = self.research.dialogue(prompt, tree, tier="frontier" if target_id in FRONTIER else "small",
+                reply = self.research.dialogue(prompt, tree, tier="frontier" if target_id in FRONTIER or
+                                               target_id.startswith("rules-") else "small",
                                                key=f"repair:{target_id}")
             except ResearchError as exc:
                 raise AgentError(str(exc)) from exc

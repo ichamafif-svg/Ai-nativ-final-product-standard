@@ -21,6 +21,11 @@ class Access:
         """current_user: the session block's dependency (Oidc.current_user) or any async request -> User."""
         self.current_user, self.values = current_user, values or Values.from_env()
 
+    def bind(self, app):
+        """Let Standard's access probe find this matrix on the app. Returns self."""
+        app.state.standard_access = self
+        return self
+
     def _public(self, request: Request) -> bool:
         route = request.scope.get("route")
         template = getattr(route, "path", request.url.path)

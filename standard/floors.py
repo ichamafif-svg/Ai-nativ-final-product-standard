@@ -24,6 +24,7 @@ import hashlib
 from pathlib import Path
 
 from kernel import FORMAT, Release, floor0_digest
+from standard.catalog import categories
 
 ROLES = ("owner", "inventory_source", "scanner")
 DAY = 86_400_000
@@ -40,6 +41,9 @@ TECHNICAL = (
     ("actions", "repo:ci:actions", "pinned", "all", 7, 30),
     ("sbom", "repo:supply:sbom", "state", "current", 7, 7),
 )
+# The rule catalog (standard/catalog), one target per category: it holds when no rule that applies to the product is
+# failing or left unmeasured by what the product declares. Its debt is repaired like a technical measure.
+RULES = tuple((f"rules-{c}", f"repo:rules:{c}", "failing", "none", 1, 30) for c in categories())
 # Observed by @scanner, repaired by the human at the provider: only the guard moves main.
 SETTINGS = (
     ("branch", "repo:settings:main", "protection", "guard-only", 1, 7),
@@ -221,6 +225,7 @@ FLOORS = {
          "property": "lag", "expect": "none", "min_level": "real", "fresh_ms": 15 * MINUTE, "due_ms": DAY,
          "owner": "@owner", "sources": ["@scanner"], "repair": "deploy"},
         *(_target(*t, "inventory", "@scanner", repair="remediate") for t in TECHNICAL),
+        *(_target(*t, "inventory", "@scanner", repair="remediate") for t in RULES),
         *(_target(*t, "inventory", "@scanner", human=True) for t in SETTINGS),
     ],
     "obligations": [],

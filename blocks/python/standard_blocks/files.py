@@ -18,6 +18,8 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
+from starlette.exceptions import HTTPException
+
 from . import Values
 from . import log
 from .crypto import digest, token
@@ -28,9 +30,11 @@ MAGIC = [(b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"), (
 FID = re.compile(r"[A-Za-z0-9_-]{20,64}")
 
 
-class FileRejected(ValueError):
+class FileRejected(HTTPException):
+    """A refusal the web layer answers with its status (413 too large, 415 wrong type, 404, 409, 422)."""
+
     def __init__(self, status: int, reason: str):
-        super().__init__(reason)
+        super().__init__(status_code=status, detail=reason)
         self.status = status
 
 

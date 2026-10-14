@@ -101,7 +101,17 @@ class Instruments:
                 "judged": sorted(it["args"]["head"] for i, it in state["intents"].items()
                                  if it["op"] in MAIN_OPS and state["line"].get(i, {}).get("state") == "proving"),
                 "production": self.production, "registers": self.registers.read() if self.registers else None,
-                "bans": {name: b["bans"] for name, b in load_catalog()["blocks"].items() if b["bans"]}}
+                "bans": {name: b["bans"] for name, b in load_catalog()["blocks"].items() if b["bans"]},
+                "rules": self._rules(view)}
+
+    def _rules(self, view) -> dict:
+        """The catalog, the named values in force and the features only the rules declare, for the scanner."""
+        from standard.catalog import compact, effective
+        cat = load_catalog()
+        values = effective(cat, view["law"]["effective"].get("settings", {}).get("values"))
+        declared = ["high-value"] if values.get("high_value") else []
+        return {"catalog": compact(cat), "values": values, "declared": declared,
+                "paths": [str(Path(__file__).resolve().parents[2] / "blocks" / "python")]}
 
     def _due(self, law, resource: str, prop: str, status: str) -> bool:
         before = self.signed.get((resource, prop))

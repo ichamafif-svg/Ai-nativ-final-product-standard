@@ -174,6 +174,31 @@ PROBES = {"secrets": lambda t, c: secrets(t), "sbom": lambda t, c: sbom(t), "act
 
 
 LOCAL_PROBES = ("secrets", "sbom", "actions", "vulns", "licenses", "deps-age", "sast")   # no provider, no ledger
+
+
+def rule_states(tree, ctx) -> dict:
+    """The catalog's rules evaluated on one tree (instruments/coverage.py), once per tree and pass."""
+    from . import coverage
+    rules = ctx.get("rules") or {}
+    if not rules.get("catalog"):
+        raise LookupError("no rule catalog in the inputs")
+    cache = ctx.setdefault("_rule_states", {})
+    key = getattr(tree, "commit", None) or id(tree)
+    if key not in cache:
+        cache[key] = coverage.evaluate(tree, rules["catalog"], rules.get("values") or {},
+                                       declared=rules.get("declared") or (), blocks_paths=rules.get("paths") or ())
+    return cache[key]
+
+
+def probe_for(tid: str, *, regression: bool = False):
+    """The probe of a floor target: a fixed one, or a category of the rule catalog (`rules-<category>`)."""
+    if tid in PROBES:
+        return PROBES[tid]
+    if tid.startswith("rules-"):
+        from . import coverage
+        return lambda tree, ctx: coverage.category_measure(rule_states(tree, ctx), ctx["rules"]["catalog"], tid[6:],
+                                                           regression=regression)
+    return None
 COUNT = re.compile(r"found:(\d+)")
 
 
@@ -217,13 +242,13 @@ def regressions(b, h, targets: dict, ctx: dict, follow_ups=frozenset()) -> tuple
     regression of the contribution."""
     try:
         found = []
-        for tid in LOCAL_PROBES:
+        for tid in (*LOCAL_PROBES, *sorted(t for t in targets if t.startswith("rules-"))):
             if tid not in targets or tid in follow_ups:
                 continue
             measures = []
             for tree in (b, h):
                 try:
-                    measures.append(PROBES[tid](tree, ctx))
+                    measures.append(probe_for(tid, regression=True)(tree, ctx))
                 except Exception as exc:
                     measures.append(exc)
             why = worse(*measures)

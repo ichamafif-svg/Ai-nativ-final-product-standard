@@ -48,6 +48,7 @@ def plan(p: dict) -> list:
     targets, settings = {"value": p["targets"]}, p.get("settings") or {}
     scopes = {"value": settings.get("scopes") if isinstance(settings.get("scopes"), dict) else {}}
     bans = {"value": p.get("bans") or {}}
+    rules = {"value": p.get("rules") or {}}
     entities = p["entities"]
     contracted = {r.split("/", 1)[1]: e["fields"]["contract"] for r, e in entities.items()
                   if e["type"] == "request" and e["state"] == "contracted"}
@@ -55,7 +56,7 @@ def plan(p: dict) -> list:
                                          "protections": {"world": "protections"}, "history": {"log": [p["anchor"], main]},
                                          "judged": {"value": sorted(p["judged"])},
                                          "now": {"value": -(-p["now"] // 3_600_000) * 3_600_000},
-                                         "install": install}, "network": p["install"]}]   # next hour: cache expires early
+                                         "install": install, "rules": rules}, "network": p["install"]}]   # next hour: cache expires early
     for c in p["proposals"]:
         if c["parents"] != [main]:
             continue                                        # only transitions from the current main are measured
@@ -65,11 +66,12 @@ def plan(p: dict) -> list:
             jobs.append({"job": "feature", "inputs": {"base": base, "head": head, "data": data, "targets": targets,
                                                       "request": {"value": rid},
                                                       "contract": {"store": "requests", "digest": contracted[rid]}, "install": install,
-                                                      "bans": bans},
+                                                      "bans": bans, "rules": rules},
                          "network": p["install"]})
         elif rid is None:
             jobs.append({"job": "remediation", "inputs": {"base": base, "head": head, "data": data, "targets": targets,
-                                                          "scopes": scopes, "install": install, "bans": bans},
+                                                          "scopes": scopes, "install": install, "bans": bans,
+                                                          "rules": rules},
                          "network": p["install"]})
     for c in p["inbox"]:
         author = AUTHOR.fullmatch(c["ref"])
@@ -80,7 +82,8 @@ def plan(p: dict) -> list:
             if rid in contracted else {}
         jobs.append({"job": "contribution", "inputs": {"base": {"commit": main}, "head": {"commit": c["head"]},
                                                        "author": {"value": author[1]}, "data": data,
-                                                       "targets": targets, "install": install, **extra},
+                                                       "targets": targets, "install": install, "rules": rules,
+                                                       **extra},
                          "network": p["install"]})
     for r, e in sorted(entities.items()):
         if e["type"] == "request" and e["state"] in ("proposed", "contracted"):
@@ -107,9 +110,10 @@ def floors(inp: dict) -> list:
     ctx = {"data": data, "history": inp["history"], "judged": set(inp["judged"]), "install": inp.get("install", False),
            "world": type("World", (), {"protections": lambda _: set(inp["protections"])})()}
     facts = [["repo:inventory:all", "coverage", verdict("complete", probes.inventory(tree)), []]]
-    for tid, probe in probes.PROBES.items():
-        target = targets.get(tid)
-        if target is None:
+    ctx["rules"] = inp.get("rules") or {}
+    for tid, target in targets.items():
+        probe = probes.probe_for(tid)
+        if probe is None:
             continue
         try:
             if tid in probes.DATA_PROBES and not data.fresh(inp["now"], target["fresh_ms"]):
@@ -146,7 +150,8 @@ def reproduced(base: DirTree, head: DirTree, recipe) -> str:
 
 def _regressions(base, head, inp, data):
     targets = {t["id"]: t for t in inp["targets"]}
-    return probes.regressions(base, head, targets, {"data": data}, frozenset(recipes_for(data)))
+    return probes.regressions(base, head, targets, {"data": data, "rules": inp.get("rules") or {}},
+                              frozenset(recipes_for(data)))
 
 
 def remediation(inp: dict) -> list:

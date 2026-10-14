@@ -17,7 +17,7 @@ ALLOWED = {
     "bt": ("kernel", "bt"),
     "instruments": ("kernel", "instruments"),
     "standard/__init__.py": (),
-    "standard/floors.py": ("kernel",),
+    "standard/floors.py": ("kernel", "standard.catalog"),
     "standard/catalog": ("kernel", "standard.catalog"),
     "standard/runtime": ("kernel", "bt", "instruments", "standard.floors", "standard.catalog", "standard.runtime"),
     "standard/autonomy": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.floors", "standard.catalog",

@@ -104,6 +104,12 @@ class Oidc:
         self.pending, self.lock, self._meta, self._jwks = {}, threading.Lock(), None, None
         self.router = self._routes()
 
+    def bind(self, app):
+        """Mount /auth on the app and let Standard's session probes find it. Returns self."""
+        app.include_router(self.router)
+        app.state.standard_session = self
+        return self
+
     # -- provider ------------------------------------------------------------------------------------------------
     async def meta(self) -> dict:
         if self._meta is None:
