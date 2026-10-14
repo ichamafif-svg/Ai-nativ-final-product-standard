@@ -31,11 +31,25 @@ law digest are stale, not current evidence.
 Nothing printed is a permission. You can only submit a statement signed with your own identity; the kernel decides,
 and the second judge decides again. If Standard is unreachable or unqualified, nothing is attested or authorized.
 
+## The rules you code to
+
+The rule catalog is `standard/catalog` (156 rules from OWASP ASVS 5.0, CWE Top 25 and run rules). You do not read it
+whole: each change goes through three passes (wide, medium, fine) that show only the rules it triggers, and a refusal
+comes back with the broken rule's text. `python -m standard.surface rule RULE-ID` prints one rule with the values in
+force; `python -m standard.surface coverage` shows each category's state and debt.
+
+Most rules hold by using a building block (`blocks/python/standard_blocks`, `blocks/js/front.mjs`): `secure_app` for
+the web layer, `Oidc(...).bind(app)` for sign-in and sessions, `Access(...).bind(app)` and `allow("route.id")` on every
+route, `crypto`, `files`, `parse`, `process`, `outbound`, `input`, `render`, `log`, `runtime`, `data`. The APIs a block
+covers are banned elsewhere (`standard/catalog/blocks.toml`); the scanner signs `blocks = clean` only when a change adds
+none. Never copy a block into the product. Values such as `@access`, `@upload_max_bytes` or `@app` are the human's: you
+may draft them, never decide them.
+
 ## Writing code
 
 A repair lands alone only by the `reproduced` route (a recipe the scanner recomputes) or the `scoped` route (tests
 green, no regression, every changed path inside the target's write scope, measured by the scanner from
-`instruments/scope.py`). A request lands alone only when its contract is accepted, inside its own scope. Everything
+`instruments/scope.py`, and no banned API added: `blocks = clean`). A request lands alone only when its contract is accepted, inside its own scope. Everything
 else waits for the human's yes.
 
 Never write under `tests/` (a request's acceptance tests are its contract, measured byte for byte), `.github/` (except

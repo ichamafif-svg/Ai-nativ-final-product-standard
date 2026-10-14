@@ -110,9 +110,9 @@ bans = []
 probes = ["idp-password-policy", "idp-brute-force", "idp-mfa", "idp-reset", "idp-enumeration"]
 
 [block.front]
-module = "standard_blocks/front (JS, lot 9)"
+module = "blocks/js/front.mjs"
 does = "pinned assets with integrity, postMessage helper checking origin and shape, storage helper refusing @sensitive fields, lint rules: no DOM clobbering, no prototype pollution, strict equality"
-use = "import { listen } from '@standard/front'"
+use = "import { listen, prefs, text, safeMerge } from '@standard/front'"
 bans = ["js-call:window.addEventListener:message", "attr-set:innerHTML", "attr-set:outerHTML", "js-call:document.write"]
 probes = ["sri"]
 

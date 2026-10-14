@@ -96,6 +96,23 @@ class Detection(unittest.TestCase):
         fine = [r["id"] for r in select(cat, ["api", "lang:python"], surfaces.touched(base, head), "fine")]
         self.assertEqual(fine, ["REDOS", "REGEX-ESCAPE"])
 
+    def test_an_express_server_is_read_like_a_fastapi_one(self):
+        server = "const express = require('express');\nconst app = express();\napp.get('/orders/:id', h);\n" \
+                 "router.post(\"/orders\", h);\n"
+        out = surfaces.scan(Tree({"server.js": server}))
+        self.assertEqual(out["files"]["server.js"]["endpoints"], ["GET /orders/:id", "POST /orders"])
+        self.assertIn("api", out["features"])
+        self.assertNotIn("client-script", out["files"]["server.js"]["surfaces"])
+
+    def test_the_front_kit_holds_its_rules(self):
+        import shutil
+        import subprocess
+        if shutil.which("node") is None:
+            self.skipTest("node is not installed")
+        r = subprocess.run(["node", str(ROOT / "blocks" / "js" / "front.test.mjs")], capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "front ok"), r.stderr)
+
     def test_unparseable_and_huge_files_are_empty_never_an_error(self):
         out = surfaces.scan(Tree({"bad.py": "def (:", "big.py": b"x = 1\n" * 300_000}))
         self.assertEqual(out["files"]["bad.py"]["constructs"], [])

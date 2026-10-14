@@ -85,6 +85,9 @@ JS_TERMS = {
 }
 
 
+EXPRESS = re.compile(r"""\b(app|router|server)\.(get|post|put|patch|delete)\s*\(\s*(['"`])(/[^'"`]*)\3""")
+
+
 def _strip_js(text: str) -> str:
     """Remove comments and string bodies (keep quotes), so words inside them are not code."""
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
@@ -309,10 +312,14 @@ def _javascript(source: bytes) -> dict:
     if re.search(r"addEventListener\s*\(\s*(['\"])message\1", raw):        # the event name is a string
         found.add("postmessage")
     constructs = sorted(found)
-    surfaces = {"client-script"} | ({"log-call"} if "log-write" in constructs else set()) | \
+    endpoints = sorted({f"{m.group(2).upper()} {m.group(4)}" for m in EXPRESS.finditer(raw)})
+    server = bool(endpoints) or bool(re.search(r"""(require\(\s*|from\s+)['"](express|fastify|koa)['"]""", raw))
+    surfaces = ({"endpoint"} if endpoints else set()) | ({"client-script"} if not server else set()) | \
+        ({"log-call"} if "log-write" in constructs else set()) | \
         ({"outbound-call"} if "http-client" in constructs else set())
-    return {"surfaces": sorted(surfaces), "constructs": constructs, "endpoints": [], "imports": [], "models": False,
-            "tenant": False, "webrtc": "RTCPeerConnection" in code}
+    imports = sorted({m.group(2) for m in re.finditer(r"""(require\(\s*|from\s+)['"]([\w@/.-]+)['"]""", raw)})
+    return {"surfaces": sorted(surfaces), "constructs": constructs, "endpoints": endpoints, "imports": imports,
+            "models": False, "tenant": False, "webrtc": "RTCPeerConnection" in code}
 
 
 def _other(path: str, source: bytes) -> dict:
@@ -366,7 +373,8 @@ def features_of(files: dict, declared=()) -> list:
     def imported(*mods):
         return any(i == m or i.startswith(m + ".") for i in imports for m in mods)
     found = set()
-    if "endpoint" in surfaces or "websocket-endpoint" in surfaces or imported("fastapi", "flask", "django", "starlette"):
+    if "endpoint" in surfaces or "websocket-endpoint" in surfaces or imported("fastapi", "flask", "django", "starlette",
+                                                                             "express", "fastify", "koa"):
         found.add("api")
     if "api" in found and ("template" in surfaces or "html-output" in constructs or "cookie" in surfaces
                            or "form" in surfaces or imported("jinja2", "fastapi.templating")):
