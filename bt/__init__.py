@@ -2,7 +2,7 @@
 
 Second judge, durable journal and pins, effect guard, the trust boundary and the
 narrow admission gateway. Transactions, program hosting and physical adapters live in this package;
-Standard's privileged assembly lives in standard.runtime and remains part of installation trust.
+Standard's privileged assembly lives in runtime and remains part of installation trust.
 Imports only `kernel` (and the checker only kernel.canon and kernel.floor0).
 """
 from .assessment import SignedAssessment, TrustUnavailable, required_for

@@ -1,5 +1,5 @@
 // The named values in force (`@origins`, `@access`\u2026), handed to the product by Standard as JSON in STANDARD_VALUES;
-// a value absent takes its strict default (defaults.json, copied from standard/catalog/values.toml and kept equal by a
+// a value absent takes its strict default (defaults.json, copied from catalog/values.toml and kept equal by a
 // test). Read again on every access, so a signed change of the rules applies at once. A value of the wrong type
 // keeps its strict default (types.json); values that cannot be read stop the product rather than run on a guess.
 import { readFileSync } from "node:fs";

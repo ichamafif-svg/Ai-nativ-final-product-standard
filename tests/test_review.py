@@ -184,7 +184,7 @@ class MeasurementOrder(unittest.TestCase):
     """Review, medium 8: an older reading replaced a newer one of the same source."""
 
     def test_an_older_reading_is_refused(self):
-        from standard.floors import INSTRUMENTS
+        from catalog.floors import INSTRUMENTS
         L = Ledger()
         L.checkpoint()
         sc = L.grant("scanner", ["observe", "certify:real"], ["repo:*"])
@@ -356,7 +356,7 @@ class ClockConfiguration(unittest.TestCase):
 
     def test_only_the_operator_clock(self):
         import types
-        from standard.runtime.daemon import Installation
+        from runtime.operator import Installation
         fake = types.SimpleNamespace(demo=False, config={"ledger": {"genesis": "g"}}, path=Path("/tmp/standard.toml"))
         self.assertTrue(callable(Installation._clock(fake, {"kind": "local"})))
         with self.assertRaises(ValueError):

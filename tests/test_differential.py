@@ -54,7 +54,7 @@ def proposal(rng, L, caps):
                        client_law(settings={"burn_fast": "20"}), client_law(settings={"burn_fast": "1"})])
         return "law", pick(("h1", "agent")), None, {"at": at, "client": client}
     if choice == 4:
-        from standard.floors import INSTRUMENTS
+        from catalog.floors import INSTRUMENTS
         good = {"tests": "green", "reproduced": "yes", "regressions": "none", "scoped": "yes", "blocks": "clean", "candidate": "yes",
                 "window": "open", "budget_pct": "50"}
         prop = pick(sorted(good))

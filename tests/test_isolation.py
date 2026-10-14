@@ -53,7 +53,7 @@ class Isolated(unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_unconfined_is_explicit_and_demo_only(self):
-        from standard.runtime.daemon import isolation
+        from runtime.operator import isolation
         self.assertFalse(isolation({}, demo=True).may_run_candidates)
         self.assertTrue(isolation({"tests": {"unconfined": True}}, demo=True).may_run_candidates)
         with self.assertRaises(ValueError):

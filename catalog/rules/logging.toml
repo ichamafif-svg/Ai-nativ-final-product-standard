@@ -1,0 +1,112 @@
+category = "Logging and errors"
+
+[[rule]]
+id = "LOG-METADATA"
+do = "Log through log.event(name, **fields): JSON with time in UTC, who, what, where and outcome."
+never = "print(); free-text log lines."
+applies = []
+when = ["construct:log-write", "surface:log-call"]
+who = ["det"]
+block = "log"
+absorb = "full"
+phase = "build"
+check = ["blocks"]
+asvs = ["16.2.1", "16.2.2", "16.2.4"]
+cwe = ["778"]
+py_ok = '''log.event("order.cancelled", order=oid, outcome="ok")'''
+py_no = '''print(f"cancelled {oid}")'''
+
+[[rule]]
+id = "LOG-NO-SECRETS"
+do = "Log ids, never values of @sensitive fields; the log block redacts them and secret patterns."
+never = "Log a request body, a token or a password."
+applies = []
+when = ["construct:log-write"]
+who = ["det", "human"]
+block = "log"
+absorb = "full"
+phase = "build"
+values = ["sensitive"]
+check = ["blocks", "probe:log-redaction"]
+asvs = ["16.2.5"]
+cwe = ["532"]
+py_ok = '''log.event("login.failed", user=user_id)'''
+py_no = '''log.event("login.failed", body=await request.body())'''
+
+[[rule]]
+id = "LOG-SECURITY-EVENTS"
+do = "Log sign-ins, refused authorizations, bypass attempts and security failures (the session and access blocks emit them)."
+never = "Swallow a refused authorization silently."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "log"
+absorb = "full"
+phase = "build"
+check = ["blocks", "probe:access-matrix"]
+asvs = ["16.3.1", "16.3.2", "16.3.3", "16.3.4"]
+cwe = ["778", "223"]
+
+[[rule]]
+id = "LOG-INJECTION"
+do = "Pass values as fields to log.event; the log block encodes them."
+never = "Concatenate input into a log message (CR/LF forge entries)."
+applies = []
+when = ["construct:log-write"]
+who = ["det"]
+block = "log"
+absorb = "full"
+phase = "build"
+check = ["blocks"]
+asvs = ["16.4.1"]
+cwe = ["117"]
+
+[[rule]]
+id = "LOG-PROTECT"
+do = "Ship logs to a separate system the product cannot modify."
+never = "Logs only on the application host, writable by the application."
+applies = []
+when = []
+who = ["human", "det"]
+block = "log"
+absorb = "partial"
+phase = "run"
+check = ["human"]
+asvs = ["16.4.2", "16.4.3"]
+cwe = ["779"]
+
+[[rule]]
+id = "ERROR-GENERIC"
+do = "Return a generic error with a reference id; details go to the log."
+never = "A stack trace, an SQL error or a path in a response."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "web"
+absorb = "full"
+phase = "build"
+check = ["blocks", "probe:errors"]
+asvs = ["16.5.1"]
+cwe = ["209"]
+
+[[rule]]
+id = "FAIL-SECURE"
+do = "When a dependency fails, degrade to a safe answer (refuse, retry later); a last-resort handler catches the rest."
+never = "except: pass; allow by default when the permission check errors."
+applies = []
+when = ["surface:outbound-call", "surface:endpoint"]
+who = ["det", "ai"]
+block = "runtime"
+absorb = "partial"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["16.5.2", "16.5.3", "16.5.4"]
+cwe = ["636", "755"]
+py_ok = '''try:
+    allowed = check(user, action)
+except AccessError:
+    allowed = False'''
+py_no = '''try:
+    allowed = check(user, action)
+except Exception:
+    allowed = True'''

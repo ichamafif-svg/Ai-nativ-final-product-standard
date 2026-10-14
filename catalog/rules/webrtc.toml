@@ -1,0 +1,43 @@
+category = "WebRTC"
+
+[[rule]]
+id = "TURN"
+do = "TURN relays refuse reserved and internal addresses and limit allocations per user."
+never = "A TURN server that relays to 10.0.0.0/8 or 169.254.169.254."
+applies = ["webrtc"]
+when = []
+who = ["det"]
+block = ""
+absorb = "none"
+phase = "run"
+check = ["test:turn"]
+asvs = ["17.1.1", "17.1.2"]
+cwe = ["918"]
+
+[[rule]]
+id = "MEDIA-DTLS"
+do = "The media server protects its DTLS key, uses approved suites, checks SRTP authentication and the SDP fingerprint."
+never = "Accept media without checking the fingerprint."
+applies = ["webrtc"]
+when = []
+who = ["det"]
+block = ""
+absorb = "none"
+phase = "build"
+check = ["test:media-dtls"]
+asvs = ["17.2.1", "17.2.2", "17.2.3", "17.2.6", "17.2.8"]
+cwe = ["295"]
+
+[[rule]]
+id = "MEDIA-RESILIENT"
+do = "Media and signalling keep serving legitimate traffic under malformed packets and floods."
+never = "A server that stops on one malformed packet."
+applies = ["webrtc"]
+when = []
+who = ["det"]
+block = ""
+absorb = "none"
+phase = "run"
+check = ["test:media-flood"]
+asvs = ["17.2.4", "17.2.5", "17.2.7", "17.3.1", "17.3.2"]
+cwe = ["400"]

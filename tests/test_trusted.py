@@ -12,7 +12,7 @@ from fixture import CODE, Ledger
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from standard.floors import RELEASE
+from catalog.floors import RELEASE
 from kernel import Kernel, Refused, canon, digest
 from bt import (AdmissionGateway, Checker, Disagreement, EffectPort, GatewayClient, Halted, Journal, PinStore,
                 SignedAssessment, Signer, TrustUnavailable, TrustedService, required_for)

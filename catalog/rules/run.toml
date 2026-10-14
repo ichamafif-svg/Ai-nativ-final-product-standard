@@ -1,0 +1,119 @@
+category = "Run"
+# From the Google SRE launch coordination checklist (https://sre.google/sre-book/launch-checklist/); DORA
+# Delegated Regulation 2024/1774 Art. 17 (change management, fall-back) is the motive, not a claim of compliance.
+
+[[rule]]
+id = "RUN-PROBE"
+do = "Serve the runtime block's health endpoint; declare a probe for every new route in the rules of the game."
+never = "A health check that answers without checking its dependencies."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "runtime"
+absorb = "full"
+phase = "run"
+wire = ["probe-declaration"]
+check = ["blocks", "probe:health"]
+asvs = []
+cwe = []
+
+[[rule]]
+id = "RUN-ROLLBACK"
+do = "Every release can be rolled back: the previous one is kept and proven."
+never = "A release that removes what the previous one needs."
+applies = ["api"]
+when = []
+who = ["det"]
+block = "pipeline"
+absorb = "full"
+phase = "run"
+check = ["fact:previous"]
+asvs = []
+cwe = []
+
+[[rule]]
+id = "RUN-MIGRATIONS"
+do = "Write every migration with its reverse step, and keep the old code working on the new schema for one release."
+never = "A migration without downgrade; dropping a column the running release still reads."
+applies = ["database"]
+when = ["surface:migration"]
+who = ["det"]
+block = "pipeline"
+absorb = "full"
+phase = "build"
+check = ["probe:migrations-reversible"]
+asvs = []
+cwe = []
+
+[[rule]]
+id = "RUN-SLO"
+do = "Every counted route has an SLO and an alert in the rules of the game, from telemetry the runtime block emits."
+never = "A new public route with no objective."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det", "human"]
+block = "runtime"
+absorb = "partial"
+phase = "run"
+wire = ["telemetry"]
+check = ["blocks", "probe:telemetry"]
+asvs = []
+cwe = []
+
+[[rule]]
+id = "RUN-TIMEOUTS"
+do = "Every outgoing call has a timeout of at most @outbound_timeout_s (outbound sets it)."
+never = "A client call with no timeout."
+applies = ["outbound-http"]
+when = ["construct:http-client"]
+who = ["det"]
+block = "outbound"
+absorb = "full"
+phase = "build"
+values = ["outbound_timeout_s"]
+check = ["blocks", "bandit:B113"]
+asvs = []
+cwe = ["400"]
+
+[[rule]]
+id = "RUN-SHUTDOWN"
+do = "Stop cleanly on SIGTERM: stop accepting, finish in-flight requests, close pools."
+never = "Exit in the middle of a write."
+applies = ["api"]
+when = []
+who = ["det"]
+block = "runtime"
+absorb = "full"
+phase = "run"
+check = ["blocks", "probe:shutdown"]
+asvs = []
+cwe = []
+
+[[rule]]
+id = "RUN-CONFIG-ENV"
+do = "Read configuration through the runtime block's settings model, from the environment."
+never = "Endpoints, hosts or limits hard-coded in code."
+applies = []
+when = ["construct:env-read", "surface:config"]
+who = ["det"]
+block = "runtime"
+absorb = "full"
+phase = "build"
+check = ["blocks"]
+asvs = []
+cwe = []
+
+[[rule]]
+id = "RUN-BOUNDED"
+do = "Create queues and pools through the runtime block, bounded by @queue_max."
+never = "queue.Queue() or asyncio.Queue() without maxsize."
+applies = []
+when = ["construct:thread"]
+who = ["det"]
+block = "runtime"
+absorb = "full"
+phase = "build"
+values = ["queue_max"]
+check = ["blocks"]
+asvs = []
+cwe = ["770"]

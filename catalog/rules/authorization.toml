@@ -1,0 +1,137 @@
+category = "Authorization"
+
+[[rule]]
+id = "AUTHZ"
+do = "Give every route an id and the dependency allow(id); load objects through owned() so a user only reaches their own."
+never = "A route without allow(); an object loaded by id alone; access decided by the interface."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det", "ai", "human"]
+block = "access"
+absorb = "partial"
+phase = "build"
+values = ["access"]
+wire = ["access-row", "probe:access-matrix"]
+check = ["blocks", "probe:access-matrix", "probe:idor", "patrol"]
+asvs = ["8.2.1", "8.2.2", "8.3.1"]
+cwe = ["862", "863", "639", "284"]
+py_ok = '''@app.get("/orders/{oid}", dependencies=[allow("orders.read")])
+def read(oid: int, user: User = Depends(current_user)):
+    return session.scalars(owned(select(Order), user).where(Order.id == oid)).one()'''
+py_no = '''@app.get("/orders/{oid}")
+def read(oid: int):
+    return session.get(Order, oid)'''
+
+[[rule]]
+id = "FIELD-AUTHZ"
+do = "Return a response model per role: fields a role may not read are absent, fields it may not write are refused."
+never = "Return the ORM object whole; accept writes to owner, role or price."
+applies = ["api"]
+when = ["construct:response-model", "construct:request-body"]
+who = ["det", "ai", "human"]
+block = "access"
+absorb = "partial"
+phase = "build"
+values = ["access"]
+check = ["blocks", "patrol"]
+asvs = ["8.2.3"]
+cwe = ["213"]
+
+[[rule]]
+id = "MASS-ASSIGN"
+do = "Accept only the fields the Input model declares (extra fields forbidden)."
+never = "Order(**await request.json()); model.update(body)."
+applies = ["api"]
+when = ["construct:request-body"]
+who = ["det"]
+block = "input"
+absorb = "full"
+phase = "build"
+check = ["blocks", "probe:unknown-field"]
+asvs = ["15.3.3"]
+cwe = ["915"]
+
+[[rule]]
+id = "ADAPTIVE-AUTHZ"
+do = "When the rules of the game ask for it, decisions also read time, place or device."
+never = "Context rules hidden in code instead of the rules of the game."
+applies = ["adaptive"]
+when = ["surface:endpoint"]
+who = ["human"]
+block = ""
+absorb = "none"
+phase = "build"
+check = ["human"]
+asvs = ["8.2.4"]
+cwe = []
+
+[[rule]]
+id = "AUTHZ-IMMEDIATE"
+do = "Read permissions on every request; a change applies at once."
+never = "Cache roles in the session or a token for its whole life."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "access"
+absorb = "full"
+phase = "build"
+check = ["blocks", "probe:access-matrix"]
+asvs = ["8.3.2"]
+cwe = ["613"]
+
+[[rule]]
+id = "AUTHZ-SUBJECT"
+do = "Decide with the rights of the user who asked, even when a service acts for them."
+never = "A service account's rights used for a user's request."
+applies = ["api"]
+when = ["surface:outbound-call", "surface:endpoint"]
+who = ["ai"]
+block = ""
+absorb = "none"
+phase = "build"
+check = ["patrol"]
+asvs = ["8.3.3"]
+cwe = ["441"]
+
+[[rule]]
+id = "TENANT"
+do = "Filter every query on a tenant model by the caller's tenant (owned() does it)."
+never = "A query that can return another tenant's rows."
+applies = ["multitenant"]
+when = ["construct:sql-call", "surface:data-model"]
+who = ["det", "ai"]
+block = "data"
+absorb = "partial"
+phase = "build"
+check = ["blocks", "probe:idor", "patrol"]
+asvs = ["8.4.1"]
+cwe = ["639"]
+
+[[rule]]
+id = "ADMIN-LAYERS"
+do = "The admin interface needs the admin role, MFA, a fresh sign-in and a separate route prefix."
+never = "Admin pages reachable with a normal session."
+applies = ["admin"]
+when = ["surface:endpoint"]
+who = ["human", "ai"]
+block = ""
+absorb = "none"
+phase = "build"
+check = ["human", "patrol"]
+asvs = ["8.4.2"]
+cwe = ["284"]
+
+[[rule]]
+id = "AUTH-CRITICAL"
+do = "Routes in @critical refuse unauthenticated calls; only @public routes are open."
+never = "A route open by default."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det", "ai", "human"]
+block = "access"
+absorb = "full"
+phase = "build"
+values = ["critical", "public"]
+check = ["blocks", "probe:unauthenticated"]
+asvs = []
+cwe = ["306"]

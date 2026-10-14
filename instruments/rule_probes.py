@@ -1,4 +1,4 @@
-"""Standard's own probes of the product's application (standard/catalog/blocks.toml, `probes`), filled with the values
+"""Standard's own probes of the product's application (catalog/blocks.toml, `probes`), filled with the values
 in force. They are Standard's, pinned with the release: the agent never writes the probe that judges it.
 
 Run as a separate process with the product's tree as working directory, so importing the product cannot touch the
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import io
 import json
 import os
@@ -501,10 +500,6 @@ def run(payload: dict) -> dict:
         except Exception as exc:
             out[name] = [f"unrun:{type(exc).__name__}", [traceback.format_exception_only(exc)[-1].strip()[:200]]]
     return out
-
-
-def digest_of(payload: dict) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 if __name__ == "__main__":

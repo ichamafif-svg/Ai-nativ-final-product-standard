@@ -8,7 +8,7 @@ from fixture import CODE, HOUR, Keys, Ledger, client_law
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from standard.floors import RELEASE
+from catalog.floors import RELEASE
 from kernel import MECHANISMS, Accountability, Kernel, Refused, apply, digest, empty
 from kernel.accountability import RETIRED, empty as accountability_empty
 from kernel.floor0 import DISPATCH_MS, MAX_AHEAD_MS

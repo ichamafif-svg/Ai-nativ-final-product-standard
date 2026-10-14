@@ -15,8 +15,8 @@ from local_sandbox import LocalSandbox
 
 from tools import ceremony  # noqa: E402
 
-import standard.autonomy.__main__ as agent_process  # noqa: E402
-import standard.runtime.daemon as daemon  # noqa: E402
+import agent.__main__ as agent_process  # noqa: E402
+import runtime.operator as daemon  # noqa: E402
 from bt.gateway import AdmissionGateway  # noqa: E402
 
 
@@ -43,7 +43,7 @@ class Installation(unittest.TestCase):
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            with patch("standard.autonomy.sandbox.Sandbox", LocalSandbox):
+            with patch("agent.sandbox.Sandbox", LocalSandbox):
                 loop, repairer, _, refresh = agent_process.build(root / "install" / "standard.toml")
             loop.clock, loop.backoff_ms, repairer.clock = clock, 0, clock
             for _ in range(3):
@@ -154,10 +154,10 @@ class Refresh(unittest.TestCase):
             if "osv" in url:
                 return {"vulns": answers[body["version"]]}
             return {"info": {"version": "25.0", "license_expression": "Apache-2.0", "classifiers": []}}
-        refresh_data.get = get
         path = Path(tempfile.mkdtemp()) / "requirements.txt"
         path.write_text("packaging==24.1\n")
-        snap = refresh_data.snapshot(path)
+        with patch.object(refresh_data, "get", side_effect=get):
+            snap = refresh_data.snapshot(path)
         self.assertEqual(snap["advisories"], {"packaging==24.1": [{"id": "GHSA-1", "fix_versions": ["24.2"]}],
                                               "packaging==24.2": []})
 

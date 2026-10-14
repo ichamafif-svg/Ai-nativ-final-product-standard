@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 
 import defusedxml.ElementTree as _xml
@@ -76,6 +77,8 @@ def _encodable(value):
             stack += list(v.keys()) + list(v.values())
         elif isinstance(v, list):
             stack += v
+        elif isinstance(v, float) and not math.isfinite(v):
+            raise ParseError("a number outside the finite range")
 
 
 def strict_json(data, *, max_depth: int = 32, max_bytes: int = MAX_DOCUMENT):

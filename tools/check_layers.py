@@ -10,22 +10,19 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STANDARD = {"kernel", "bt", "instruments", "standard", "product", "tools", "tests", "examples",
-            "trusted", "floors", "autonomy", "surface", "demo"}
+STANDARD = {"kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "tests", "examples", "standard", "blocks", "standard_blocks"}
 ALLOWED = {
     "kernel": ("kernel",),
     "bt": ("kernel", "bt"),
-    "instruments": ("kernel", "instruments"),
-    "standard/__init__.py": (),
-    "standard/floors.py": ("kernel", "standard.catalog"),
-    "standard/catalog": ("kernel", "standard.catalog"),
-    "standard/runtime": ("kernel", "bt", "instruments", "standard.floors", "standard.catalog", "standard.runtime"),
-    "standard/autonomy": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.floors", "standard.catalog",
-                          "standard.autonomy"),
-    "standard/surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.catalog", "standard.autonomy",
-                         "standard.surface"),
-    "tools": ("kernel", "bt", "instruments", "standard", "tools"),
-    "examples": (),
+    "instruments": ("kernel", "instruments", "standard_blocks"),  # existing in-process product probes
+    "catalog": ("kernel", "catalog"),
+    "blocks": ("blocks.python.standard_blocks",),
+    "context": ("kernel", "instruments", "catalog", "context", "agent.work"),
+    "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "blocks.python.standard_blocks"),
+    "surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "surface", "blocks.python.standard_blocks"),
+    "runtime": ("kernel", "bt", "instruments", "catalog", "runtime"),
+    "tools": ("kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "blocks.python.standard_blocks"),
+    "examples": ("standard_blocks",),
 }
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
 KERNEL_EFFECT_MODULES = {"os", "pathlib", "time", "socket", "sqlite3", "subprocess", "urllib", "http",
@@ -83,13 +80,9 @@ def violations(root: Path = ROOT) -> list[str]:
                     problems.append(f"{rel} imports {name}: kernel must not perform or observe physical effects")
                 if rel == "bt/checker.py" and ((top == "kernel" and name not in CHECKER_ALLOWED) or top == "bt"):
                     problems.append(f"{rel} imports {name}: second judge must remain independent")
-    # A new Standard module must have a declared role, never silently escape the policy.
-    for path in sorted((root / "standard").rglob("*.py")):
-        rel = str(path.relative_to(root))
-        if not (rel in ("standard/__init__.py", "standard/floors.py")
-                or any(rel.startswith(prefix + "/") for prefix in
-                       ("standard/runtime", "standard/autonomy", "standard/surface", "standard/catalog"))):
-            problems.append(f"{rel}: Standard module has no declared role")
+    # Removed package paths must not silently reintroduce a second implementation.
+    if any((root / "standard").rglob("*.py")):
+        problems.append("standard/: obsolete parallel package")
     return problems
 
 

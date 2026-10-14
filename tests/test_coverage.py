@@ -5,7 +5,7 @@ import unittest
 from test_maintenance import FILES, Stand, sh
 
 from kernel import digest
-from standard.surface.human import decide
+from surface.human import decide
 from instruments.data import DataError, TrustedData
 
 SBOM_24_1 = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
@@ -78,6 +78,8 @@ class Secrets(Route):
     @staticmethod
     def ASK(prompt, key):
         Secrets.prompts.append(prompt)
+        if prompt.startswith(("ROLE correctness:", "ROLE simplicity:", "ROLE design:")):
+            return {"findings": []}
         return {"title": "read the key from the environment",
                 "files": {"app.py": 'import os\n\nAPI_KEY = os.environ.get("API_KEY", "")\n\n\n'
                                     'def add(a, b):\n    return a + b\n'}}
@@ -99,7 +101,7 @@ class Secrets(Route):
 
     def test_when_the_rules_keep_the_move_the_human_decides_and_the_agent_never_can(self):
         from fixture import client_law
-        from standard.surface.human import rules
+        from surface.human import rules
         view = self.service.view()
         self.service.admit(rules(view, self.signer("h1"), client_law(
             bindings={"owner": "h1", "inventory_source": "scanner", "scanner": "scanner"},

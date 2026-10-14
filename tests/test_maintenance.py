@@ -12,14 +12,16 @@ from pathlib import Path
 from fixture import Ledger, client_law
 from local_sandbox import LocalSandbox
 
-from standard.autonomy import Agent, Loop, Repairer, Route, WorkEngine
+from agent.repair import Agent, Repairer
+from agent.loop import Loop
+from agent.work import Route, WorkEngine
 from bt import Journal, PinStore, Signer, TrustedService
 from bt.adapters import GitRepository
 from bt.transactions import Boundary, ledger_of
 from instruments.data import TrustedData
 from bt.isolation import Isolation  # noqa: E402
 from bt.host import Evidence, Host
-from standard.runtime.operator import Instrument, Instruments, Prover
+from runtime.operator import Instrument, Instruments, Prover
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -99,7 +101,7 @@ class Stand(unittest.TestCase):
         git_repo = GitRepository(self.repo, self.store)
         self.world = type("World", (), {"protections": lambda _: set()})()
         self.host = host_for(root, self.repo, self.data, self.world, clock=clock)
-        from standard.floors import CONTRACTS, PROGRAMS
+        from catalog.floors import CONTRACTS, PROGRAMS
         self.boundary = Boundary(self.host.evidence, root / "transactions.jsonl", CONTRACTS, PROGRAMS, clock,
                                  ledger=lambda: ledger_of(self.journal))
         effects = {"remediate": git_repo}
@@ -111,8 +113,8 @@ class Stand(unittest.TestCase):
                                        self.host, self.boundary, self.repo, self.store)
         self.signer = signer
         self.prover = Prover(self.service, resolve, signer("oracle"), self.oracle_cap, clock)
-        routes = [Route("agent-remediate", "RUN", "repo:*", frozenset({"repair"})),
-                  Route("scanner", "RUN", "repo:*", frozenset({"observe", "cover", "prove"}))]
+        routes = [Route("agent-remediate", "repo:*", frozenset({"repair"})),
+                  Route("scanner", "repo:*", frozenset({"observe", "cover", "prove"}))]
         self.repairer = Repairer(self.service, WorkEngine(root / "work.db"),
                                  Agent(self.store, data=self.data, api_key="test" if self.ASK else None, ask=self.ASK,
                                        sandbox=LocalSandbox()),
@@ -183,8 +185,8 @@ class Maintenance(Stand):
         self.assertEqual((before["opened"], before["due"]), (after["opened"], after["due"]))
 
     def test_a_change_outside_its_scope_waits_for_the_human(self):
-        from standard.autonomy import queue
-        from standard.autonomy.agent import commit_files
+        from context.moves import queue
+        from agent.candidate import commit_files
         self.instruments.measure()
         base = self.main()
         head = commit_files(self.store, base, {"sbom.json": b'{"components": []}\n',

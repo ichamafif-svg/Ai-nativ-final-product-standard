@@ -1,4 +1,4 @@
-"""Banned APIs (standard/catalog/blocks.toml): product code reaches what a building block covers only through it.
+"""Banned APIs (catalog/blocks.toml): product code reaches what a building block covers only through it.
 
 Python is read on its syntax tree with imports resolved, as instruments/surfaces.py reads it; JavaScript lexically
 (comments and strings removed). Patterns:
@@ -16,7 +16,7 @@ import re
 from collections import Counter
 from fnmatch import fnmatchcase
 
-from .surfaces import JS, PY, SKIP, _strip_js
+from .surfaces import JS, PY, SKIP, MAX_FILE, _strip_js
 
 
 def _matches(qual: str, pattern: str) -> bool:
@@ -25,19 +25,35 @@ def _matches(qual: str, pattern: str) -> bool:
 
 class _Uses(ast.NodeVisitor):
     def __init__(self, patterns):
-        self.patterns, self.alias, self.hits = patterns, {}, []
+        self.patterns, self.alias, self.hits, self.calls = patterns, {}, [], set()
 
     def qual(self, node) -> str:
+        if isinstance(node, ast.Call):
+            return self.qual(node.func)
         parts = []
         while isinstance(node, ast.Attribute):
             parts.append(node.attr)
             node = node.value
         if isinstance(node, ast.Name):
             return ".".join([self.alias.get(node.id, node.id), *reversed(parts)])
+        if isinstance(node, ast.Call):
+            return ".".join([self.qual(node.func), *reversed(parts)])
         return "?." + ".".join(reversed(parts))
+
+    def visit_ClassDef(self, node):
+        self.calls.update(self.qual(base) for base in node.bases)
+        self.generic_visit(node)
 
     def _hit(self, node, pattern):
         self.hits.append((node.lineno, pattern))
+
+    def visit_Assign(self, node):
+        self.generic_visit(node)
+        value = self.qual(node.value.func if isinstance(node.value, ast.Call) else node.value)
+        if not value.startswith("?"):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.alias[target.id] = value
 
     def visit_Import(self, node):
         for a in node.names:
@@ -58,6 +74,7 @@ class _Uses(ast.NodeVisitor):
 
     def visit_Call(self, node):
         q = self.qual(node.func)
+        self.calls.add(q)
         name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr \
             if isinstance(node.func, ast.Attribute) else ""
         for p in self.patterns:
@@ -83,6 +100,80 @@ class _Uses(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def javascript(source: bytes) -> tuple[str, str]:
+    """Resolve direct imports, aliases and literal member access. Ambiguous dynamic calls remain unmeasured."""
+    raw = _strip_js(source.decode("utf-8", "replace"), keep_strings=True)
+    raw = re.sub(r'''\[\s*(['"])([A-Za-z_$][\w$]*)\1\s*\]''', r".\2", raw)
+    code = _strip_js(raw)
+    aliases = {}
+    for m in re.finditer(r'''import\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2''', raw):
+        for part in m[1].split(","):
+            names = part.strip().split(" as ")
+            if len(names) == 2:
+                aliases[names[1].strip()] = names[0].strip()
+    for m in re.finditer(r'''\b(?:const|let|var)\s+\{([^}]+)\}\s*=\s*([\w$]+)''', code):
+        for part in m[1].split(","):
+            names = part.strip().split(":")
+            if all(re.fullmatch(r"[\w$]+", n.strip()) for n in names):
+                aliases[names[-1].strip()] = m[2] + "." + names[0].strip()
+    aliases.update({m[1]: m[2] for m in re.finditer(
+        r"\b(?:const|let|var)\s+([\w$]+)(?:\s*:\s*[\w$<>]+)?\s*=\s*([\w$]+(?:\.[\w$]+)*)\s*[;,]", code)})
+
+    def expand(match):
+        name, seen = match.group(), set()
+        while name.split(".")[0] in aliases and name.split(".")[0] not in seen:
+            first, _, rest = name.partition(".")
+            seen.add(first)
+            name = aliases[first] + ("." + rest if rest else "")
+        return name
+    # Only code positions are rewritten: words in strings remain data.
+    replacements = [(m.start(), m.end(), expand(m)) for m in re.finditer(r"(?<![\w$.])[A-Za-z_$][\w$]*", code)]
+    for start, end, value in reversed(replacements):
+        raw, code = raw[:start] + value + raw[end:], code[:start] + value + code[end:]
+    return raw, code
+
+
+def analysis_gaps(path: str, source: bytes) -> list[str]:
+    if not path.endswith(PY + JS):
+        return []
+    if len(source) > MAX_FILE:
+        return ["source exceeds the static analysis bound"]
+    if path.endswith(PY):
+        try:
+            ast.parse(source)
+        except (SyntaxError, ValueError):
+            return ["Python source cannot be parsed"]
+        return []
+    raw, code = javascript(source)
+    gaps = []
+    if re.search(r"\[[^\]\n]+\]\s*(?:\?\.)?\s*\(", code):
+        gaps.append("computed JavaScript call")
+    if re.search(r"\b(?:eval|Function|import)\s*\(", code):
+        gaps.append("dynamic JavaScript execution or import")
+    if re.search(r"`(?:\\.|[^`\\])*\$\{", raw):
+        gaps.append("template interpolation needs a JavaScript parser")
+    return gaps
+
+
+def block_calls(path: str, source: bytes, module: str) -> set[str]:
+    """Syntactic call sites, not proof that a call executes or guards every entry point."""
+    if path.endswith(PY):
+        try:
+            v = _Uses(())
+            v.visit(ast.parse(source))
+            return {q for q in v.calls if q.startswith(module + ".")}
+        except (SyntaxError, ValueError):
+            return set()
+    if path.endswith(JS):
+        raw, code = javascript(source)
+        names = set()
+        for m in re.finditer(r'''import\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2''', raw):
+            if m[3] == module:
+                names.update(part.strip().split(" as ")[0].strip() for part in m[1].split(","))
+        return {module + "." + name for name in names if re.search(rf"\b{re.escape(name)}\s*\(", code)}
+    return set()
+
+
 def uses(path: str, source: bytes, patterns) -> list:
     """[(line, pattern)] for one file, sorted."""
     patterns = sorted(set(patterns))
@@ -95,8 +186,7 @@ def uses(path: str, source: bytes, patterns) -> list:
         v.visit(tree)
         return sorted(set(v.hits))
     if path.endswith(JS):
-        raw = source.decode("utf-8", "replace")
-        code = _strip_js(raw)
+        raw, code = javascript(source)
         out = []
         for p in patterns:
             kind, _, rest = p.partition(":")
@@ -138,6 +228,10 @@ def blocks_fact(base, head, changed, bans: dict) -> tuple[str, list]:
     moving a line does not count as a new use."""
     if not bans:
         return "clean", []
+    gaps = [f"{p}:0:unmeasured:{why}" for p in sorted(changed) if p in head.paths() and not SKIP.search(p)
+            for why in analysis_gaps(p, head.read(p))]
+    if gaps:
+        return "uncovered:analysis", gaps[:50]
     vendored = [f"{p}:0:vendored-block" for p in changed if re.search(r"(^|/)standard_blocks/", p)]
     if vendored:                                     # a block is the pinned package, never a copy in the product
         return f"breaks:{len(vendored)}", vendored[:50]

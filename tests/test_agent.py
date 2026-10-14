@@ -11,15 +11,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from standard.autonomy.agent import Agent, AgentError  # noqa: E402
-from standard.autonomy.repair import Repairer  # noqa: E402
-from standard.autonomy.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
-from standard.autonomy.memory import Memory  # noqa: E402
-from standard.autonomy.precheck import precheck  # noqa: E402
-from standard.autonomy.repomap import RepoMap  # noqa: E402
-from standard.autonomy.sandbox import Sandbox  # noqa: E402
+from agent.candidate import AgentError
+from agent.repair import Agent
+from agent.repair import Repairer  # noqa: E402
+from agent.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
+from agent.memory import Memory  # noqa: E402
+from agent.precheck import precheck  # noqa: E402
+from context.repository import RepoMap  # noqa: E402
+from agent.sandbox import Sandbox  # noqa: E402
 from local_sandbox import LocalSandbox  # noqa: E402
-from standard.floors import FLOORS  # noqa: E402
+from catalog.floors import FLOORS  # noqa: E402
 from instruments import probes as instruments  # noqa: E402
 from instruments.data import EMPTY  # noqa: E402
 from instruments.suite import tests_report  # noqa: E402
@@ -117,7 +118,7 @@ class WholeLaw(unittest.TestCase):
             self.skipTest("candidate jail unavailable on this host")
 
     def candidate(self, files):
-        from standard.autonomy.agent import commit_files
+        from agent.candidate import commit_files
         return commit_files(self.store, self.base, {p: c.encode() for p, c in files.items()}, "candidate")
 
     def test_a_fix_that_breaks_main_tests_is_not_proposed(self):
@@ -156,22 +157,23 @@ class Model(unittest.TestCase):
 
         def transport(provider, prompt):
             prompts.append(prompt)
-            return json.dumps(replies.pop(0))
+            return json.dumps({'findings': []} if prompt.startswith(('ROLE correctness:', 'ROLE simplicity:')) else replies.pop(0))
         log = store.parent / "egress.log"
         agent = Agent(store, llm=Gate({"small": Provider("p", "anthropic", "m", "k")}, log,
-                                                       transport=transport), sandbox=LocalSandbox(),
-                      funnel=False)                              # one call per attempt: the funnel has its own test
+                                                       transport=transport), sandbox=LocalSandbox())
         finding = {"status": "found:1", "details": ["app.py:1:secret-rule-0"]}
         head, route = agent.craft("secrets", base, targets=TARGETS, finding=finding)
         self.assertEqual(route, "model")
-        self.assertIn("tests are red", prompts[1])                       # the feedback reached the second attempt
+        builds = [p for p in prompts if p.startswith('ROLE build:')]
+        self.assertEqual(len(builds), 2)
+        self.assertIn("tests are red", builds[1])                        # the feedback reached the second attempt
         self.assertIn("app.py:1:secret-rule-0", prompts[0])              # where the gap is
         self.assertNotIn(KEY, "".join(prompts))                         # what the gap is never leaves
         message = git("-C", str(store), "log", "-1", "--format=%B", head)
         for part in ("Why:", "What: app.py", "Checked by the agent", "Risks: API is empty", "Standard-Target: secrets"):
             self.assertIn(part, message)
         lines = [json.loads(line) for line in log.read_text().splitlines()]
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 6)                                  # both attempts complete the real review path
         self.assertTrue(all(set(line) == {"at", "provider", "model", "tier", "bytes", "redactions", "sha256"}
                             for line in lines))
 
@@ -237,7 +239,7 @@ class Memory_(unittest.TestCase):
             def craft(self, *a, **kw):
                 raise AgentError("nothing passes")
 
-        from standard.autonomy.read_model import ReadModel
+        from context.model import ReadModel
         real = ReadModel.plan
         ReadModel.plan = lambda self, mode="RUN": {"state": "IN_PROGRESS", "tasks": []}
         self.addCleanup(setattr, ReadModel, "plan", real)              # never leak into the next test

@@ -100,6 +100,8 @@ class Outbound:
         self.values, self.services = values or Values.from_env(), {}
         for name, base in services.items():
             parts = urlsplit(base)
+            if not parts.hostname or parts.scheme not in ("http", "https"):
+                raise OutboundRefused(f"{name}: a service needs an HTTP(S) host")
             if parts.scheme != "https" and transport is None:
                 raise OutboundRefused(f"{name}: services are reached over https")
             if parts.username or parts.password or parts.query or parts.fragment:
@@ -161,3 +163,27 @@ class Outbound:
 
     async def aclose(self):
         await self.client.aclose()
+
+
+def request(method: str, service: str, *, endpoints: dict, values: Values, transport=None, **kw) -> httpx.Response:
+    """Synchronous call to one complete, operator-configured endpoint, through the same checked client.
+
+    The caller names a service in `endpoints`, never supplies a model-chosen URL. Query strings are retained.
+    A fresh client is closed on its own event loop, including on refusal; no pool crosses threads or loops.
+    """
+    if service not in endpoints:
+        raise OutboundRefused(f"unknown service {service}")
+    parts = urlsplit(endpoints[service])
+    if parts.username or parts.password or parts.fragment:
+        raise OutboundRefused(f"{service}: an endpoint has no credentials or fragment")
+    path = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+
+    async def call():
+        client = Outbound({service: f"{parts.scheme}://{parts.netloc}"}, values, transport=transport)
+        try:
+            response = await client.request(method, service, path, **kw)
+            response.raise_for_status()                       # redirects are failures, never followed
+            return response
+        finally:
+            await client.aclose()
+    return asyncio.run(call())

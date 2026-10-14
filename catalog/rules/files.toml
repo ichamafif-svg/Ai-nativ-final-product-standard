@@ -1,0 +1,120 @@
+category = "Files"
+
+[[rule]]
+id = "UPLOAD-LIMITS"
+do = "Receive files with receive(): it refuses above @upload_max_bytes, @unpacked_max_bytes, @archive_max_files, @image_max_pixels and @user_quota_bytes before reading the file whole."
+never = "await upload.read() with no limit."
+applies = ["upload"]
+when = ["surface:upload-endpoint"]
+who = ["det", "human"]
+block = "files"
+absorb = "full"
+phase = "build"
+values = ["upload_max_bytes", "unpacked_max_bytes", "archive_max_files", "image_max_pixels", "user_quota_bytes"]
+wire = ["probe:upload-limits"]
+check = ["blocks", "probe:upload-limits"]
+asvs = ["5.2.1", "5.2.3", "5.2.4", "5.2.6"]
+cwe = ["770", "409"]
+py_ok = '''fid = await receive(upload, owner=user)'''
+py_no = '''data = await upload.read()'''
+
+[[rule]]
+id = "UPLOAD-TYPE"
+do = "Accept only @upload_types, checked on the file's content, not its name or the client's Content-Type."
+never = "Trust the extension or the declared type."
+applies = ["upload"]
+when = ["surface:upload-endpoint"]
+who = ["det", "human"]
+block = "files"
+absorb = "full"
+phase = "build"
+values = ["upload_types"]
+check = ["blocks", "probe:upload-type"]
+asvs = ["5.2.2"]
+cwe = ["434"]
+
+[[rule]]
+id = "ARCHIVE-SAFE"
+do = "Unpack archives only through the files block: entries with absolute paths, .. or symlinks are refused."
+never = "extractall on an uploaded archive."
+applies = ["upload"]
+when = ["construct:archive"]
+who = ["det"]
+block = "files"
+absorb = "full"
+phase = "build"
+check = ["blocks", "probe:zip-slip"]
+asvs = ["5.2.5", "5.3.3"]
+cwe = ["22", "59"]
+
+[[rule]]
+id = "UPLOAD-NOEXEC"
+do = "Store uploads by generated id outside any folder the server executes or serves directly."
+never = "Save uploads under static/ or the web root with their own name."
+applies = ["upload"]
+when = ["surface:upload-endpoint"]
+who = ["det"]
+block = "files"
+absorb = "full"
+phase = "run"
+check = ["blocks"]
+asvs = ["5.3.1"]
+cwe = ["434"]
+
+[[rule]]
+id = "PATH-SAFE"
+do = "Address files by an id the app generated; never build a path from input."
+never = "open(base / user_name); a path from the request."
+applies = []
+when = ["construct:file-path"]
+who = ["det"]
+block = "files"
+absorb = "full"
+phase = "build"
+check = ["blocks", "semgrep:standard.path-from-input"]
+asvs = ["5.3.2"]
+cwe = ["22"]
+py_ok = '''return serve(fid, as_name="report.pdf")'''
+py_no = '''return FileResponse(UPLOADS / request.query_params["name"])'''
+
+[[rule]]
+id = "FILENAME-SERVE"
+do = "Set the download name with serve(): the app chooses it and encodes it (RFC 6266)."
+never = "Echo a user-supplied file name in Content-Disposition."
+applies = ["upload"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "files"
+absorb = "full"
+phase = "build"
+check = ["blocks"]
+asvs = ["5.4.1", "5.4.2"]
+cwe = ["113"]
+
+[[rule]]
+id = "AV-SCAN"
+do = "Pass files from outside through the scan hook before anyone can download them."
+never = "Serve an uploaded file before it was scanned."
+applies = ["upload"]
+when = ["surface:upload-endpoint"]
+who = ["human", "det"]
+block = "files"
+absorb = "partial"
+phase = "run"
+check = ["blocks", "human"]
+asvs = ["5.4.3"]
+cwe = ["509"]
+
+[[rule]]
+id = "FILE-METADATA"
+do = "Strip metadata (EXIF location, author) from user files unless the user asked to keep it."
+never = "Store and serve photos with their GPS position."
+applies = ["upload"]
+when = ["surface:upload-endpoint"]
+who = ["det"]
+block = "files"
+absorb = "full"
+phase = "build"
+check = ["blocks"]
+asvs = ["14.2.8"]
+cwe = ["212"]

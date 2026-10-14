@@ -1,4 +1,4 @@
-"""What a product has, and what a change touches: features, surfaces and constructs (standard/catalog/vocabulary.toml).
+"""What a product has, and what a change touches: features, surfaces and constructs (catalog/vocabulary.toml).
 
 Deterministic: the same tree gives the same answer. Python files are read on their syntax tree with imports resolved
 (`from os import system` makes `system(...)` a call to `os.system`); JavaScript and TypeScript are read lexically,
@@ -94,11 +94,18 @@ JS_EXPORT_ACCESS = re.compile(r"""export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*[\w$
 EXPRESS = re.compile(r"""\b(app|router|server)\.(get|post|put|patch|delete)\s*\(\s*(['"`])(/[^'"`]*)\3""")
 
 
-def _strip_js(text: str) -> str:
-    """Remove comments and string bodies (keep quotes), so words inside them are not code."""
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    text = re.sub(r"(?m)//.*$", " ", text)
-    return re.sub(r"(['\"`])(?:\\.|(?!\1).)*\1", lambda m: m[1] * 2, text, flags=re.S)
+def _strip_js(text: str, *, keep_strings: bool = False) -> str:
+    """Mask comments and strings in one scan, preserving offsets and lines (including URLs in strings).
+    This is lexical inspection, not a JavaScript parser."""
+    tokens = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|/\*.*?\*/|//[^\n]*''', re.S)
+
+    def mask(match):
+        token = match.group()
+        if keep_strings and token[0] in "\"'`":
+            return token
+        blank = "".join("\n" if c == "\n" else " " for c in token)
+        return token[0] + blank[1:-1] + token[-1] if token[0] in "\"'`" else blank
+    return tokens.sub(mask, text)
 
 
 class _Py(ast.NodeVisitor):
@@ -366,11 +373,12 @@ def _nextjs(path: str, source: bytes, out: dict) -> dict:
 
 
 def stacks(files: dict) -> list:
-    """The stacks a product is written in, as the catalog names them: fastapi (Python: the Python blocks serve any
-    ASGI app) and nextjs (Next imported, or a Next entry point found)."""
+    """Framework when observed, otherwise Python. A script or another Python framework is never FastAPI by suffix.
+    FastAPI's generic Python blocks are resolved by the catalog, not by a second selector here."""
     out = set()
     if any(p.endswith(PY) for p in files):
-        out.add("fastapi")
+        imports = {i for d in files.values() for i in d["imports"]}
+        out.add("fastapi" if any(i == "fastapi" or i.startswith("fastapi.") for i in imports) else "python")
     if any(i == "next" or i.startswith("next/") for d in files.values() for i in d["imports"]) or \
             any(NEXT_ROUTE.search(p) or NEXT_PAGES_API.search(p) or re.search(r"(^|/)next\.config\.\w+$", p)
                 for p in files):

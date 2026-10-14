@@ -15,9 +15,9 @@ from instruments.data import EMPTY
 from instruments.jobs import JOBS
 from instruments.recipes import recipes_for
 from instruments.scope import REPAIR
-from standard.autonomy.agent import TASKS
-from standard.autonomy.read_model import measurement_for
-from standard.floors import CONTRACTS, FLOORS
+from agent.repair import task_of
+from context.model import measurement_for
+from catalog.floors import CONTRACTS, FLOORS
 
 
 def inventory(targets=None) -> list[dict]:
@@ -43,7 +43,8 @@ def inventory(targets=None) -> list[dict]:
         repair = target.get("repair")
         if repair == "remediate":
             route = "recipe, else model in scope" if tid in recipes else "model in scope"
-            if tid not in TASKS and tid not in recipes or (tid not in REPAIR and tid != "actions"):
+            if (task_of(tid) is None and tid not in recipes or
+                    (tid not in REPAIR and tid != "actions" and not tid.startswith("rules-"))):
                 route = "MISSING"
             verification = "tests + reproduction, or tests + no regression + scoped" if suite_job else "MISSING"
         elif repair in ("deploy", "rollback"):

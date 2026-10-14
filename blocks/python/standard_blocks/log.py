@@ -28,7 +28,7 @@ CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\
 MAX_RECORD = 8192
 _logger = logging.getLogger("standard")
 if not _logger.handlers:
-    _handler = logging.StreamHandler(sys.stdout)
+    _handler = logging.StreamHandler(sys.stderr)
     _handler.setFormatter(logging.Formatter("%(message)s"))
     _logger.addHandler(_handler)
     _logger.setLevel(logging.INFO)

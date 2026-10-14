@@ -1,5 +1,5 @@
-"""The rule catalog (standard/catalog): every ASVS 5.0 requirement accounted for, every name defined, one text for the
-agent before coding and in a refusal, and a deterministic choice of what each funnel pass shows."""
+"""The rule catalog (catalog): every ASVS 5.0 requirement accounted for, every name defined, one text for the
+agent before coding and in a refusal, and a deterministic choice of what each candidate workflow pass shows."""
 import copy
 import sys
 import unittest
@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from standard.catalog import (CatalogError, applicable, check_value, effective, load, render,  # noqa: E402
+from catalog import (CatalogError, applicable, check_value, effective, load, render,  # noqa: E402
                               select, validate)
 
 
@@ -54,23 +54,19 @@ class Catalog(unittest.TestCase):
         self.assertNotIn("MULTI-APPROVAL", one)
         self.assertIn("MULTI-APPROVAL", team)
 
-    def test_each_pass_shows_only_what_the_change_triggers(self):
+    def test_selection_uses_applicability_and_touched_surfaces_without_passes(self):
         features = ["api", "web", "database", "oidc", "upload", "crypto", "outbound-http", "lang:python"]
-        wide = [r["id"] for r in select(self.cat, features, ["surface:endpoint"], "wide")]
-        self.assertIn("NO-OWN-AUTH", wide)
-        self.assertNotIn("PWD-POLICY", wide)                   # the identity provider's, checked by probes
-        self.assertNotIn("NO-OWN-AUTH", [r["id"] for r in select(self.cat, features, [], "wide")])
-        self.assertEqual(select(self.cat, features, [], "fine"), [])                    # nothing touched
-        fine = [r["id"] for r in select(self.cat, features, ["construct:sql-call"], "fine")]
-        self.assertEqual(fine, ["INJ-SQL"])
-        medium = [r["id"] for r in select(self.cat, features, ["surface:upload-endpoint"], "medium")]
-        self.assertIn("UPLOAD-LIMITS", medium)
-        self.assertNotIn("INJ-SQL", medium)
-        again = [r["id"] for r in select(self.cat, list(reversed(features)), ["surface:upload-endpoint"], "medium")]
-        self.assertEqual(medium, again)                                                  # deterministic
-        typical = applicable(self.cat, features)
-        text = [r for r in typical if r["absorb"] == "none"]
-        self.assertLess(len(text), 20)                       # what the AI keeps as text for a typical product
+        endpoint = [r["id"] for r in select(self.cat, features, ["surface:endpoint"])]
+        self.assertIn("NO-OWN-AUTH", endpoint)
+        self.assertNotIn("PWD-POLICY", endpoint)
+        self.assertNotIn("NO-OWN-AUTH", [r["id"] for r in select(self.cat, features, [])])
+        sql = [r["id"] for r in select(self.cat, features, ["construct:sql-call"])]
+        self.assertIn("INJ-SQL", sql)
+        upload = [r["id"] for r in select(self.cat, features, ["surface:upload-endpoint"])]
+        self.assertIn("UPLOAD-LIMITS", upload)
+        self.assertNotIn("INJ-SQL", upload)
+        self.assertEqual(upload, [r["id"] for r in select(self.cat, list(reversed(features)), ["surface:upload-endpoint"])])
+        self.assertTrue(all("pass" not in r for r in self.cat["rules"]))
 
     def test_the_rule_text_resolves_values_and_says_when_one_is_missing(self):
         upload = next(r for r in self.cat["rules"] if r["id"] == "UPLOAD-LIMITS")
@@ -90,18 +86,104 @@ class Catalog(unittest.TestCase):
             with self.assertRaises(CatalogError):
                 check_value(self.cat, name, bad)
 
+    def test_catalog_compiles_the_same_targets_and_policy_used_by_the_law_and_editor(self):
+        from catalog import targets, policy_values, instruction, definition
+        from catalog.floors import FLOORS, RECOMMENDED
+        from context.policy import SCHEMA, change
+        self.assertEqual(targets(self.cat), FLOORS["targets"])
+        self.assertEqual(policy_values("floor"), FLOORS["settings"])
+        self.assertEqual(SCHEMA.keys(), self.cat["policy"]["parameter"].keys())
+        self.assertEqual(policy_values("recommended")["objective"], RECOMMENDED["settings"]["objective"])
+        self.assertIn("never by weakening tests", instruction("ci"))
+        self.assertTrue(all("instruction" not in t for t in FLOORS["targets"]))
+        self.assertEqual(definition({"id": "client-custom", "resource": "repo:custom"})["origin"],
+                         "client law; no catalog mapping")
+        with self.assertRaises(ValueError):
+            change({}, settings={"canary_percent": 51})
+        with self.assertRaises(ValueError):
+            change({}, settings={"research_steps": 10})
+
+    def test_contracts_preserve_exact_policy_and_separate_absorption_from_evidence(self):
+        from catalog import contracts, render_contracts
+        values = effective(self.cat, {"access": {"orders.read": ["buyer"]}})
+        packet = contracts(self.cat, ["api"], values, ids={"AUTHZ"}, stacks=["nextjs"])
+        text = render_contracts(packet)
+        self.assertIn('"orders.read": ["buyer"]', text)
+        self.assertIn("access.route", text)
+        self.assertIn("unauthenticated", text)
+        self.assertIn("critical", packet["parameters"])
+        self.assertIn("public", packet["parameters"])
+        self.assertIn("partial", text)
+        self.assertIn("not evidence", text)
+        self.assertEqual(packet["rules"][0]["checks"], next(r["check"] for r in self.cat["rules"] if r["id"] == "AUTHZ"))
+
+    def test_python_primitives_and_framework_integrations_have_one_resolved_contract(self):
+        import tomllib
+        from catalog import compact, contracts, implementation, render_contracts
+        from instruments.coverage import adoptable, evaluate
+        from instruments.surfaces import scan
+        from test_surfaces import Tree
+
+        declared = tomllib.loads((ROOT / "catalog/blocks.toml").read_text())["block"]
+        generic = {"crypto", "outbound", "parse", "process", "input", "data", "render", "log", "runtime"}
+        for name in generic:
+            self.assertIn("python", declared[name])
+            self.assertNotIn("fastapi", declared[name])    # one definition, inherited by the supported framework
+            self.assertEqual(implementation(self.cat, name, "python"), implementation(self.cat, name, "fastapi"))
+            for stack in ("python", "fastapi"):
+                self.assertEqual(adoptable(compact(self.cat)["blocks"][name], stack),
+                                 implementation(self.cat, name, stack)["module"])
+        for name in ("web", "session", "access", "files"):
+            self.assertIsNone(implementation(self.cat, name, "python"))
+            self.assertIsNotNone(implementation(self.cat, name, "fastapi"))
+
+        tree = Tree({"agent.py": "from standard_blocks.outbound import request\n"
+                                "request('GET', 'docs', endpoints=endpoints, values=values)\n"})
+        product = scan(tree)
+        self.assertEqual(product["stacks"], ["python"])
+        text = render_contracts(contracts(self.cat, product["features"], effective(self.cat, {}),
+                                         ids={"RUN-TIMEOUTS"}, stacks=product["stacks"]))
+        self.assertIn("python: standard_blocks.outbound", text)
+        self.assertNotIn("fastapi:", text)
+        for source, stack in ((tree.read("agent.py"), "python"),
+                              (b"from fastapi import FastAPI\n" + tree.read("agent.py"), "fastapi")):
+            candidate = Tree({"agent.py": source})
+            self.assertEqual(scan(candidate)["stacks"], [stack])
+            states = evaluate(candidate, compact(self.cat), effective(self.cat, {}), probes={}, bandit={})
+            self.assertEqual(states["RUN-TIMEOUTS"]["checks"]["blocks"][0], "pass")
+            bare = Tree({"agent.py": ("from fastapi import FastAPI\n" if stack == "fastapi" else "") +
+                                    "import httpx\nhttpx.get(url)\n"})
+            self.assertEqual(evaluate(bare, compact(self.cat), effective(self.cat, {}), probes={}, bandit={})
+                             ["RUN-TIMEOUTS"]["checks"]["blocks"][0], "fail")
+
+    def test_malformed_maintenance_and_policy_declarations_are_refused(self):
+        for mutate in (lambda c: c["targets"][0].update(fresh_ms=0),
+                       lambda c: c["targets"].append(c["targets"][0]),
+                       lambda c: c["policy"]["parameter"]["objective"].update(bounds=["99", "50"]),
+                       lambda c: c["policy"]["section"]["slos"].update(fields=["unregistered"])):
+            cat = copy.deepcopy(self.cat)
+            mutate(cat)
+            with self.assertRaises(CatalogError):
+                validate(cat)
+
     def test_the_catalog_is_part_of_the_release(self):
-        from standard.runtime import CATALOG_DATA, code_digest
+        from runtime import CATALOG_DATA, code_digest
         import tempfile, shutil
         root = Path(tempfile.mkdtemp())
-        for part in ("kernel", "bt", "standard", "blocks"):
+        for part in ("kernel", "bt", "runtime", "catalog", "blocks"):
             shutil.copytree(ROOT / part, root / part, ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy(ROOT / "requirements.hashes", root / "requirements.hashes")
         before = code_digest(root)
-        rule = root / "standard" / "catalog" / "rules" / "injection.toml"
+        rule = root / "catalog" / "rules" / "injection.toml"
         rule.write_text(rule.read_text().replace("bound parameter", "parameter"))
         self.assertNotEqual(code_digest(root), before)
         self.assertIn("values.toml", CATALOG_DATA)
+        for name in ("maintenance.toml", "policy.toml"):
+            self.assertIn(name, CATALOG_DATA)
+            source = root / "catalog" / name
+            baseline = code_digest(root)
+            source.write_text(source.read_text() + "\n# pin check\n")
+            self.assertNotEqual(code_digest(root), baseline)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,224 @@
+# Signed policy parameters and editor types. Bounds used by the judges remain floors.
+# Model/provider/retry/cadence settings are execution configuration, outside this catalog.
+
+[parameter.objective]
+label = "Objectif de disponibilité"
+help = "%"
+group = "production"
+type = "num"
+bounds = ["50.0", "99.999"]
+recommended = "99.9"
+
+[parameter.failing]
+label = "Échecs"
+help = "% de requêtes en échec, pour agir seul"
+group = "threshold"
+type = "num"
+bounds = ["0.1", "50.0"]
+floor = 5
+
+[parameter.p99_ms]
+label = "Latence p99"
+help = "ms"
+group = "production"
+type = "num"
+bounds = ["1.0", "60000.0"]
+recommended = 1000
+
+[parameter.window_s]
+label = "Fenêtre de jugement"
+help = "s"
+group = "production"
+type = "int"
+bounds = [60, 3600]
+recommended = 300
+
+[parameter.late_periods]
+label = "Tâche planifiée en retard"
+help = "périodes"
+group = "production"
+type = "int"
+bounds = [1, 10]
+recommended = 2
+
+[parameter.burn_fast]
+label = "Brûlure rapide"
+help = "multiple du rythme du budget, pour agir seul"
+group = "threshold"
+type = "num"
+bounds = ["1.0", "100.0"]
+floor = "14.4"
+
+[parameter.burn_slow]
+label = "Brûlure lente (ticket)"
+help = "×"
+group = "production"
+type = "num"
+bounds = ["1.0", "100.0"]
+recommended = "6"
+
+[parameter.rollback_horizon_min]
+label = "Horizon de retour"
+help = "minutes après la bascule"
+group = "threshold"
+type = "int"
+bounds = [1, 240]
+floor = 240
+recommended = 30
+
+[parameter.rollback_migrations]
+label = "Migrations traversées"
+help = "au plus, pour revenir seul (0 : jamais)"
+group = "threshold"
+type = "int"
+bounds = [0, 1000]
+floor = 1000
+
+[parameter.restarts_per_hour]
+label = "Redémarrages"
+help = "déjà faits dans l'heure, au plus"
+group = "threshold"
+type = "int"
+bounds = [0, 11]
+floor = 11
+recommended = 2
+
+[parameter.freeze_below]
+label = "Gel sous budget"
+help = "% de budget restant en dessous duquel on ne déploie plus seul"
+group = "threshold"
+type = "num"
+bounds = ["0.0", "100.0"]
+floor = 0
+
+[parameter.deploy_days]
+label = "Jours de mise en production"
+help = "mon,tue,…"
+group = "production"
+type = "days"
+recommended = "mon,tue,wed,thu,fri,sat,sun"
+
+[parameter.deploy_hours]
+label = "Heures"
+help = "HH-HH"
+group = "production"
+type = "hours"
+recommended = "00-24"
+
+[parameter.deploy_tz]
+label = "Fuseau"
+help = "ex. Europe/Paris"
+group = "production"
+type = "tz"
+recommended = "UTC"
+
+[parameter.canary_percent]
+label = "Part du trafic du canari"
+help = "%"
+group = "production"
+type = "int"
+bounds = [1, 50]
+recommended = 10
+
+[parameter.canary_bake_min]
+label = "Cuisson du canari"
+help = "minutes, au moins"
+group = "threshold"
+type = "int"
+bounds = [1, 240]
+floor = 1
+recommended = 10
+
+[parameter.canary_max_error_delta]
+label = "Écart du canari"
+help = "points d'erreurs de plus que la version en place, au plus"
+group = "threshold"
+type = "num"
+bounds = ["0.0", "10.0"]
+floor = "2"
+recommended = "0.5"
+
+[parameter.canary_min_requests]
+label = "Requêtes du canari"
+help = "au moins, avant de promouvoir"
+group = "threshold"
+type = "int"
+bounds = [10, 100000]
+floor = 20
+recommended = 100
+
+[parameter.base_url]
+label = "URL du produit (sondes)"
+help = "https://…"
+group = "production"
+type = "url"
+recommended = ""
+
+[section.components]
+label = "Composants"
+id = "c-[0-9a-f]{12}"
+fields = ["counted", "objective", "p99_ms"]
+
+[section.probes]
+label = "Sondes"
+id = "p-[a-z0-9]{1,16}"
+fields = ["spec"]
+
+[section.slos]
+label = "SLO"
+id = "s-[a-z0-9]{1,16}"
+fields = ["name", "selector", "sli", "state", "target", "threshold_ms", "window_d"]
+
+[section.silences]
+label = "Silences"
+id = "m-[a-z0-9]{1,16}"
+fields = ["reason", "target_of", "until"]
+
+[field.counted]
+type = "toggle"
+
+[field.spec]
+type = "spec"
+
+[field.name]
+type = "text"
+
+[field.sli]
+type = "choice"
+bounds = ["availability", "latency"]
+
+[field.threshold_ms]
+type = "num"
+bounds = ["1.0", "60000.0"]
+
+[field.target]
+type = "num"
+bounds = ["50.0", "99.999"]
+
+[field.window_d]
+type = "int"
+bounds = [1, 90]
+
+[field.selector]
+type = "selector"
+
+[field.state]
+type = "toggle"
+
+[field.target_of]
+type = "text"
+
+[field.until]
+type = "int"
+bounds = [0, 100000000000000]
+
+[field.reason]
+type = "text"
+
+[field.objective]
+type = "num"
+bounds = ["50.0", "99.999"]
+
+[field.p99_ms]
+type = "num"
+bounds = ["1.0", "60000.0"]

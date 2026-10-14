@@ -21,8 +21,8 @@ from contextlib import closing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from standard.runtime import code_digest  # noqa: E402
-from standard.floors import RELEASE  # noqa: E402
+from runtime import code_digest  # noqa: E402
+from catalog.floors import RELEASE  # noqa: E402
 from kernel import Kernel, empty  # noqa: E402
 from kernel.canon import parse  # noqa: E402
 from bt.assessment import SignedAssessment  # noqa: E402
@@ -202,7 +202,7 @@ def qualify(config_path) -> list:
         out.append(probe("T07 hosted repositories behind the gate", ok, bad or f"{len(hosted)} repositories; "
                          f"canonical owned by {guard.pw_name}, inboxes by {gate.pw_name}",
                          "a client's push, run as the gate user, cannot write a canonical repository",
-                         "sshd's configuration, other accounts on the host, and keys authorized outside tools/host.py"))
+                         "sshd's configuration, other accounts on the host, and keys authorized outside tools/hosting.py"))
     return out
 
 

@@ -1,6 +1,6 @@
-"""Values whose misuse is a type error (beyond review): a secret that never prints, HTML that is safe by
-construction, a URL that was built or checked. Blocks return them and accept them; product code cannot forge the
-safe ones by accident because only the blocks construct them.
+"""Types that reduce accidental disclosure and unsafe output. These exported markers are not attestations:
+callers can construct SafeHtml/TrustedUrl directly, and Secret's str inheritance still exposes the raw value to
+JSON serialization and some string operations (ARCHITECTURE.md §20.7). Normal display and block logs redact it.
 
     key = secret("billing-key")      # Secret: str(key), repr(key), f"{key}" and the log all show [redacted]
     key.reveal()                     # the value, where it is really needed (an explicit, greppable act)

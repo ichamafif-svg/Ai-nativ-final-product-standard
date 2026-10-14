@@ -1,0 +1,85 @@
+category = "Supply chain and code"
+
+[[rule]]
+id = "DEP-SOURCE"
+do = "Install dependencies from the expected registry, locked with hashes."
+never = "A dependency from a URL, a git branch or an unpinned version."
+applies = []
+when = ["surface:dependency"]
+who = ["det"]
+block = "pipeline"
+absorb = "full"
+phase = "build"
+check = ["probe:lock-hashes"]
+asvs = ["15.2.4"]
+cwe = ["1357"]
+
+[[rule]]
+id = "DOS-HEAVY"
+do = "Bound every heavy operation: a timeout, a size limit, and a background job when it takes more than a request."
+never = "An export, a report or an image job run inline without limits."
+applies = ["api"]
+when = ["surface:endpoint", "surface:background-job"]
+who = ["det", "ai"]
+block = "runtime"
+absorb = "partial"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["15.2.2"]
+cwe = ["400", "770"]
+
+[[rule]]
+id = "STRICT-TYPES"
+do = "Type every function; compare with strict equality (=== in JS); no implicit coercion in checks."
+never = "== in JavaScript; truthiness checks on values that can be 0 or empty."
+applies = []
+when = ["surface:client-script"]
+who = ["det"]
+block = "front"
+absorb = "full"
+phase = "build"
+check = ["blocks", "mypy"]
+asvs = ["15.3.5"]
+cwe = ["1287"]
+
+[[rule]]
+id = "PROTO-POLLUTION"
+do = "Use Map and Set for data keyed by input; never merge input into plain objects."
+never = "Object.assign(target, input); obj[key] = value with key from input."
+applies = ["lang:js"]
+when = ["surface:client-script"]
+who = ["det"]
+block = "front"
+absorb = "full"
+phase = "build"
+check = ["blocks"]
+asvs = ["15.3.6"]
+cwe = ["1321"]
+
+[[rule]]
+id = "PARAM-POLLUTION"
+do = "Refuse a request that repeats a parameter the model expects once."
+never = "Take the first or last of repeated parameters silently."
+applies = ["api"]
+when = ["construct:request-body"]
+who = ["det"]
+block = "web"
+absorb = "full"
+phase = "build"
+check = ["blocks", "probe:param-pollution"]
+asvs = ["15.3.7"]
+cwe = ["235"]
+
+[[rule]]
+id = "CONCURRENCY"
+do = "Guard shared state with one lock order, timeouts on waits, and bounded pools."
+never = "Two locks taken in different orders; a wait without timeout; an unbounded thread pool."
+applies = ["concurrency"]
+when = ["construct:thread", "construct:lock"]
+who = ["ai"]
+block = ""
+absorb = "none"
+phase = "build"
+check = ["patrol"]
+asvs = ["15.4.1", "15.4.3", "15.4.4"]
+cwe = ["362", "833"]
