@@ -2,9 +2,10 @@
 
 A wall is measured by trying what it must refuse: reaching the network or the host's loopback, resolving a name,
 seeing a host file, writing where nothing was declared writable, inheriting the caller's environment, holding a
-capability, seeing host processes, exceeding memory, file size, process count or wall time. Each wall is `held`,
-`broken`, `absent` (declared but not built yet) or `unmeasured` (the bac could not run). Nothing here is `held` by
-declaration: only a refused attempt counts.
+capability, seeing host processes, making a system call the filter refuses, exceeding memory, file size, process
+count or wall time. `cgroups` holds only when the kernel itself reports having enforced the run's process limit.
+Each wall is `held`, `broken`, `absent` (the host lacks the mechanism) or `unmeasured` (the bac could not run).
+Nothing here is `held` by declaration: only a refused attempt counts.
 """
 from __future__ import annotations
 
@@ -14,10 +15,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from enclosure.bac import BASE_ENV, MISSING, TIMED_OUT, Bac, Walls
+from enclosure.bac import BASE_ENV, TIMED_OUT, Bac, Walls
 
 WALLS = ("network", "host_loopback", "dns", "host_files", "read_only", "environment", "capabilities",
-         "processes", "memory", "file_size", "process_count", "time", *MISSING)
+         "processes", "syscalls", "memory", "file_size", "process_count", "time", "cgroups")
 
 INSIDE = r"""
 import errno, json, os, socket, sys, time
@@ -38,6 +39,8 @@ r["environment"] = "held" if set(os.environ) <= set(allowed.split(",")) else "br
 status = dict(line.split(":\t", 1) for line in open("/proc/self/status").read().splitlines() if ":\t" in line)
 r["capabilities"] = "held" if int(status["CapEff"], 16) == 0 and int(status["CapPrm"], 16) == 0 else "broken"
 r["processes"] = "held" if len([p for p in os.listdir("/proc") if p.isdigit()]) < 16 else "broken"
+r["syscalls"] = "held" if status.get("Seccomp", "").strip() == "2" and \
+    refused(lambda: os.unshare(os.CLONE_NEWUSER)) == "held" else "broken"
 r["memory"] = refused(lambda: bytearray(int(memory)))
 def big():
     with open("/tmp/bac-probe", "wb") as f:
@@ -67,7 +70,6 @@ def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[
     result = {wall: "unmeasured" for wall in WALLS}
     if not bac.ready:
         return result
-    result.update({wall: "absent" for wall in MISSING})
     allowed = ",".join(sorted({*BASE_ENV, "PWD"}))           # bwrap sets PWD from --chdir
     with socket.socket() as listener, tempfile.TemporaryDirectory(prefix="bac-hidden-") as hidden, \
             tempfile.TemporaryDirectory(prefix="bac-cwd-") as cwd:
@@ -82,6 +84,7 @@ def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[
         except (ValueError, IndexError):
             inside = {}
         result.update({wall: inside[wall] for wall in inside if wall in result and inside[wall] in ("held", "broken")})
+        result["cgroups"] = ("held" if "processes" in ran.limited else "broken") if bac.hierarchy else "absent"
         short = kind(Walls(timeout_s=1, memory_mb=walls.memory_mb, processes=walls.processes,
                           file_bytes=walls.file_bytes), python=python)
         result["time"] = "held" if short.run(["/usr/bin/sleep", "5"], cwd).code == TIMED_OUT else "broken"
