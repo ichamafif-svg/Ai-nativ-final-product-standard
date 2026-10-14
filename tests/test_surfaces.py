@@ -64,6 +64,12 @@ fetch("/api");
 
 
 class Detection(unittest.TestCase):
+    def test_python_and_other_python_frameworks_are_not_fastapi(self):
+        for source in ("print('worker')", "import flask", "from starlette.applications import Starlette"):
+            self.assertEqual(surfaces.scan(Tree({"main.py": source}))["stacks"], ["python"])
+        for source in ("import fastapi as f", "from fastapi.security import HTTPBearer"):
+            self.assertEqual(surfaces.scan(Tree({"main.py": source}))["stacks"], ["fastapi"])
+
     def test_a_product_is_read_from_its_code(self):
         tree = Tree({"app/main.py": APP, "static/app.js": JS, "templates/page.html": "<form method=post></form>",
                      "alembic/versions/001_init.py": "def upgrade(): pass\n", "requirements.txt": "fastapi\n",

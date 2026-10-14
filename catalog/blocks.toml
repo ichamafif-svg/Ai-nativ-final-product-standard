@@ -1,6 +1,8 @@
 # Building blocks. Each block is one contract (what it guarantees: `does`, and the probes that prove it: `probes`)
-# with one implementation per stack: [block.<name>.fastapi] (Python, blocks/python/standard_blocks) and
-# [block.<name>.nextjs] (TypeScript/JavaScript, blocks/js/nextjs). Product code may not call, outside the block, what
+# with Python primitives in [block.<name>.python], FastAPI integrations in [block.<name>.fastapi], and
+# Next.js integrations in [block.<name>.nextjs]. FastAPI uses the Python implementation where there is no specific
+# integration. Python implementations may depend on Pydantic, SQLAlchemy or Jinja; their optional ASGI helpers
+# are named explicitly in `use`. Product code may not call, outside the block, what
 # the block covers (`bans`, per stack). A rule a block absorbs holds when the product's stack has the block, uses it,
 # and adds no banned API: one scanner fact, `blocks = clean`. A stack without the block keeps only its bans and probes.
 #
@@ -26,16 +28,16 @@ bans = ["js-call:NextResponse.redirect", "js-call:Response.redirect", "js-call:c
 does = "auto-escaping templates, one sanitiser for HTML/SVG/Markdown from users, a URL builder that encodes every part and allows only http(s); typed results (SafeHtml, TrustedUrl), sandboxed templates, json_for_script"
 probes = []
 
-[block.render.fastapi]
+[block.render.python]
 module = "standard_blocks.render"
-use = "render('page.html', user=user) \u00b7 clean_html(text) \u00b7 url(base, 'orders', oid, q=term)"
+use = "clean_html(text) · url(base, 'orders', oid, q=term) · Pages('templates').render('page.html', user=user) returns a Starlette response"
 bans = ["call:markupsafe.Markup", "call:jinja2.Template", "call:jinja2.Environment.from_string", "call:django.utils.safestring.mark_safe", "call:starlette.responses.HTMLResponse"]
 
 [block.input]
 does = "every body and query goes through a declared schema (Pydantic, Zod): strict types, extra fields refused, decoding once, allow-lists as literal or constrained types, a bounded body size; every value bounded, one Unicode form, invisible controls and bidi overrides refused, frozen after validation"
 probes = ["unknown-field"]
 
-[block.input.fastapi]
+[block.input.python]
 module = "standard_blocks.input"
 use = "class OrderIn(Input): item: Text[100]; quantity: Count"
 bans = ["call-dyn:json:0", "call:starlette.requests.Request.json", "call:starlette.requests.Request.form", "call:starlette.requests.Request.body"]
@@ -49,7 +51,7 @@ bans = ["js-call:request.json", "js-call:req.json", "js-call:request.formData", 
 does = "SQLAlchemy ORM and bound parameters only; queries on owned models are filtered by owner and tenant by default; for_user(session, user) adds the filters to every ORM statement and stamps new rows; a model with neither column is refused unless declared shared"
 probes = ["idor"]
 
-[block.data.fastapi]
+[block.data.python]
 module = "standard_blocks.data"
 use = "db = for_user(Session(engine), user) \u00b7 owned(select(Order), user).where(Order.id == oid)"
 bans = ["call-dyn:execute:0", "call-dyn:executemany:0", "call-dyn:executescript:0", "call-dyn:text:0", "call-dyn:raw:0"]
@@ -58,7 +60,7 @@ bans = ["call-dyn:execute:0", "call-dyn:executemany:0", "call-dyn:executescript:
 does = "one HTTP client: destinations only from @destinations, timeout @outbound_timeout_s, no redirect to another host, certificates checked, telemetry on every call; addresses checked at connection time on every resolved address (DNS rebinding), metadata and link-local refused, no proxy from the environment, responses bounded (@outbound_max_bytes), one deadline per call"
 probes = ["egress"]
 
-[block.outbound.fastapi]
+[block.outbound.python]
 module = "standard_blocks.outbound"
 use = "await outbound.get('billing', '/invoices', params={'id': iid}) · synchronous: request('GET', 'billing', endpoints=endpoints, values=rules)"
 bans = ["import:requests", "import:urllib.request", "import:urllib3", "import:http.client", "import:aiohttp", "call:httpx.get", "call:httpx.post", "call:httpx.Client", "call:httpx.AsyncClient", "call-kw:*:verify=False"]
@@ -67,7 +69,7 @@ bans = ["import:requests", "import:urllib.request", "import:urllib3", "import:ht
 does = "SHA-256/512 and HMAC, AES-256-GCM with fresh 96-bit nonces, random tokens from secrets (>= 128 bits), constant-time comparison, Argon2id or scrypt for anything password-like, algorithm names from configuration; versioned outputs, key rotation (Keyring), a per-message key (HKDF) under AES-GCM, purpose-bound expiring tokens, stored hash parameters with needs_rehash"
 probes = []
 
-[block.crypto.fastapi]
+[block.crypto.python]
 module = "standard_blocks.crypto"
 use = "ring.seal(data) \u00b7 ring.open(box) \u00b7 sign_token(key, 'email', data, 3600) \u00b7 token() \u00b7 same(a, b)"
 bans = ["call:hashlib.md5", "call:hashlib.sha1", "call-kw:hashlib.new:name=md5", "import:random", "import:Crypto", "import:Cryptodome", "call:cryptography.hazmat.primitives.ciphers.modes.ECB", "call:cryptography.hazmat.primitives.ciphers.modes.CBC", "import:cryptography.hazmat.primitives.ciphers"]
@@ -78,14 +80,14 @@ probes = ["upload-limits", "upload-type", "zip-slip"]
 
 [block.files.fastapi]
 module = "standard_blocks.files"
-use = "fid = await receive(upload, owner=user) \u00b7 return serve(fid, as_name='report.pdf')"
+use = "files = Files(rules) · fid = await files.receive(upload, owner=user.id) · return files.serve(fid, owner=user.id, as_name='report.pdf')"
 bans = ["call:zipfile.ZipFile.extractall", "call:tarfile.TarFile.extractall", "call:shutil.unpack_archive", "call:starlette.responses.FileResponse", "call:fastapi.responses.FileResponse", "call-dyn:open:0"]
 
 [block.parse]
 does = "defused XML, JSON for untrusted data, safe YAML, length-bounded regex on input with no nested quantifiers, CSV cells escaped against formulas, LDAP and XPath values escaped; strict JSON, YAML without anchors or aliases, no overlapping repetition or backreferences, a time limit per match with regex"
 probes = []
 
-[block.parse.fastapi]
+[block.parse.python]
 module = "standard_blocks.parse"
 use = "xml(text) \u00b7 yaml(text) \u00b7 csv_row(cells) \u00b7 search(pattern, text)"
 bans = ["import:pickle", "import:marshal", "import:shelve", "call:yaml.load", "call:yaml.unsafe_load", "import:xml.etree.ElementTree", "import:xml.dom.minidom", "import:xml.sax", "import:lxml.etree", "call-dyn:re.compile:0", "call:csv.writer"]
@@ -94,7 +96,7 @@ bans = ["import:pickle", "import:marshal", "import:shelve", "call:yaml.load", "c
 does = "processes started with an argument list, a fixed executable, no shell, a timeout; clean environment, own process group, CPU/memory/file limits, bounded output, user values refused as options (arg)"
 probes = []
 
-[block.process.fastapi]
+[block.process.python]
 module = "standard_blocks.process"
 use = "run(['convert', arg(src), dst], timeout=30)"
 bans = ["call:os.system", "call:os.popen", "call-kw:subprocess.run:shell=True", "call-kw:subprocess.Popen:shell=True", "call-kw:subprocess.call:shell=True", "call-kw:subprocess.check_output:shell=True", "call:commands.getoutput"]
@@ -105,7 +107,7 @@ probes = ["session-rotation", "session-timeout", "logout", "reauth", "oidc-flow"
 
 [block.session.fastapi]
 module = "standard_blocks.session"
-use = "user: User = Depends(current_user)"
+use = "oidc = Oidc(issuer, client_id, redirect_uri, rules).bind(app) · user: User = Depends(oidc.current_user)"
 bans = ["import:jwt", "import:jose", "import:authlib", "import:itsdangerous", "call:starlette.middleware.sessions.SessionMiddleware"]
 
 [block.session.nextjs]
@@ -119,7 +121,7 @@ probes = ["access-matrix", "unauthenticated"]
 
 [block.access.fastapi]
 module = "standard_blocks.access"
-use = "@app.get('/orders/{oid}', dependencies=[allow('orders.read')])"
+use = "access = Access(oidc.current_user, rules).bind(app) · @app.get('/orders/{oid}', dependencies=[Depends(access.allow('orders.read'))])"
 bans = []
 
 [block.access.nextjs]
@@ -131,7 +133,7 @@ bans = []
 does = "structured JSON logs in UTC with who/what/where/outcome, @sensitive fields and secret patterns redacted, values encoded against log injection, security events emitted by session and access; Secret redacted by type, more credential shapes, control and bidi characters neutralised, a hash chain over records"
 probes = ["log-redaction"]
 
-[block.log.fastapi]
+[block.log.python]
 module = "standard_blocks.log"
 use = "log.event('order.cancelled', order=oid, outcome='ok')"
 bans = ["builtin:print", "call:logging.basicConfig"]
@@ -140,9 +142,9 @@ bans = ["builtin:print", "call:logging.basicConfig"]
 does = "health endpoint, clean SIGTERM shutdown, settings from the environment, secrets from a vault by reference, bounded queues and pools (@queue_max), a last-resort error handler, OpenTelemetry spans and metrics with standard names, debug off in production; secrets as Secret, refused when empty or writable by others; /health says only ok or down in production"
 probes = ["health", "shutdown", "no-debug", "telemetry"]
 
-[block.runtime.fastapi]
+[block.runtime.python]
 module = "standard_blocks.runtime"
-use = "settings = load(Settings) \u00b7 key = secret('billing-key') \u00b7 q = bounded_queue()"
+use = "settings = load(Settings) · key = secret('billing-key') · q = bounded_queue() · FastAPI/Starlette only: install(app) for health and shutdown"
 bans = ["call-kw:uvicorn.run:reload=True", "call-kw:*:debug=True", "call:queue.Queue", "call:asyncio.Queue"]
 
 [block.idp]

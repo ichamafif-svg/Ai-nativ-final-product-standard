@@ -49,9 +49,14 @@ and the interface. `python -m surface rule RULE-ID` prints that contract; `cover
 A rule without a check, a missing parameter or an unknown client mapping stays visible; no opinion becomes proof.
 
 Most rules hold by using a building block (`blocks/python/standard_blocks`, `blocks/js/nextjs`, `blocks/js/front.mjs`).
-FastAPI: `secure_app` for the web layer, `Oidc(...).bind(app)` for sign-in and sessions, `Access(...).bind(app)` and
-`allow("route.id")` on every route, `crypto`, `files`, `parse`, `process`, `outbound`, `input`, `render`, `log`,
-`runtime`, `data`. Next.js (`@standard/blocks`): `guard(values, NextResponse)` as the middleware and
+Python primitives: `crypto`, `parse`, `process`, `outbound`, `input` (Pydantic), `data` (SQLAlchemy), `render`, `log`,
+`runtime`. Their catalog definitions use `.python`; FastAPI inherits them from this one definition.
+FastAPI integrations: `secure_app` for web, `Oidc(...).bind(app)` for sessions, `Access(...).bind(app)` and
+`Depends(access.allow("route.id"))` on every route, `Files` for uploads/downloads. `Pages.render` and `runtime.install(app)` are
+explicit optional Starlette/FastAPI helpers, not portable response/lifecycle APIs. A Python suffix never means
+FastAPI: the scanner must observe a FastAPI import. Other Python frameworks keep generic primitives and do not
+inherit these framework integrations. Install `standard-blocks[web]` for the FastAPI integrations; the base package
+does not require FastAPI or PyJWT. Next.js (`@standard/blocks`): `guard(values, NextResponse)` as the middleware and
 `securityHeaders(values)` in next.config, `createOidc(...)` for sign-in, `access.route("id", fn)` on every route
 handler and `access.action("id", fn, req)` on every server action, `body(request, Schema)` with a strict Zod schema.
 The selected context shows the use for your product's stack; a block your stack does not have yet is not owed, its bans hold.

@@ -39,7 +39,7 @@ def adoptable(block: dict, stack: str) -> str | None:
     bans still hold, nothing is owed), or an implementation that is configuration, not code."""
     impl = block["stacks"].get(stack)
     module = (impl or {}).get("module", "")
-    return module if re.fullmatch(r"[\w@][\w@/.-]*", module) and (stack != "fastapi" or "/" not in module) else None
+    return module if re.fullmatch(r"[\w@][\w@/.-]*", module) and (stack not in ("python", "fastapi") or "/" not in module) else None
 
 
 def adopted(module: str, imports) -> bool:

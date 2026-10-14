@@ -38,7 +38,7 @@ CHECK = re.compile(r"blocks|patrol|human|mypy|fact:[a-z_]+|probe:[a-z0-9-]+|test
 BAN = re.compile(r"(import|call|builtin|attr-set|js-word):[\w.*$]+(:[\w.]+)?"
                  r"|js-call:[\w.*$()]+(:[\w.-]+)?|js-import:[\w@/.:-]+"
                  r"|call-kw:[\w.*]+:\w+=\w+|call-dyn:[\w.]+:\d")
-STACKS = ("fastapi", "nextjs", "js", "any")       # js: bans for any JavaScript; any: no code, a configuration
+STACKS = ("python", "fastapi", "nextjs", "js", "any")  # Python primitives, framework integrations, JS/configuration
 VALUE_REF = re.compile(r"@([a-z_]+)")
 
 
@@ -209,12 +209,14 @@ def compact(cat: dict) -> dict:
 
 
 def _blocks(raw: dict) -> dict:
-    """Each block's contract with its stacks; `module`, `use` and `bans` summarise them (the FastAPI module and use
-    when it exists; the bans of every stack, each checked on its own language)."""
+    """Resolve supported stacks once for scanner and missions. FastAPI inherits generic Python primitives;
+    framework-specific integrations stay unavailable to a plain Python product."""
     out = {}
     for name, b in raw.items():
         stacks = {k: v for k, v in b.items() if isinstance(v, dict)}
-        main = stacks.get("fastapi") or stacks.get("nextjs") or next(iter(stacks.values()), {})
+        if "python" in stacks:
+            stacks.setdefault("fastapi", stacks["python"])
+        main = stacks.get("python") or stacks.get("fastapi") or stacks.get("nextjs") or next(iter(stacks.values()), {})
         out[name] = {**{k: v for k, v in b.items() if not isinstance(v, dict)}, "stacks": stacks,
                      "module": main.get("module", ""), "use": main.get("use", ""),
                      "bans": sorted({p for impl in stacks.values() for p in impl.get("bans", [])})}
@@ -222,7 +224,7 @@ def _blocks(raw: dict) -> dict:
 
 
 def implementation(cat: dict, block: str, stack: str) -> dict | None:
-    """The block's implementation on a stack (fastapi, nextjs), or None when that stack has no such block yet."""
+    """The block's resolved implementation on Python, FastAPI or Next.js; None when absent."""
     return cat["blocks"][block]["stacks"].get(stack)
 
 

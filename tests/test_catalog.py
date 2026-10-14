@@ -117,6 +117,45 @@ class Catalog(unittest.TestCase):
         self.assertIn("not evidence", text)
         self.assertEqual(packet["rules"][0]["checks"], next(r["check"] for r in self.cat["rules"] if r["id"] == "AUTHZ"))
 
+    def test_python_primitives_and_framework_integrations_have_one_resolved_contract(self):
+        import tomllib
+        from catalog import compact, contracts, implementation, render_contracts
+        from instruments.coverage import adoptable, evaluate
+        from instruments.surfaces import scan
+        from test_surfaces import Tree
+
+        declared = tomllib.loads((ROOT / "catalog/blocks.toml").read_text())["block"]
+        generic = {"crypto", "outbound", "parse", "process", "input", "data", "render", "log", "runtime"}
+        for name in generic:
+            self.assertIn("python", declared[name])
+            self.assertNotIn("fastapi", declared[name])    # one definition, inherited by the supported framework
+            self.assertEqual(implementation(self.cat, name, "python"), implementation(self.cat, name, "fastapi"))
+            for stack in ("python", "fastapi"):
+                self.assertEqual(adoptable(compact(self.cat)["blocks"][name], stack),
+                                 implementation(self.cat, name, stack)["module"])
+        for name in ("web", "session", "access", "files"):
+            self.assertIsNone(implementation(self.cat, name, "python"))
+            self.assertIsNotNone(implementation(self.cat, name, "fastapi"))
+
+        tree = Tree({"agent.py": "from standard_blocks.outbound import request\n"
+                                "request('GET', 'docs', endpoints=endpoints, values=values)\n"})
+        product = scan(tree)
+        self.assertEqual(product["stacks"], ["python"])
+        text = render_contracts(contracts(self.cat, product["features"], effective(self.cat, {}),
+                                         ids={"RUN-TIMEOUTS"}, stacks=product["stacks"]))
+        self.assertIn("python: standard_blocks.outbound", text)
+        self.assertNotIn("fastapi:", text)
+        for source, stack in ((tree.read("agent.py"), "python"),
+                              (b"from fastapi import FastAPI\n" + tree.read("agent.py"), "fastapi")):
+            candidate = Tree({"agent.py": source})
+            self.assertEqual(scan(candidate)["stacks"], [stack])
+            states = evaluate(candidate, compact(self.cat), effective(self.cat, {}), probes={}, bandit={})
+            self.assertEqual(states["RUN-TIMEOUTS"]["checks"]["blocks"][0], "pass")
+            bare = Tree({"agent.py": ("from fastapi import FastAPI\n" if stack == "fastapi" else "") +
+                                    "import httpx\nhttpx.get(url)\n"})
+            self.assertEqual(evaluate(bare, compact(self.cat), effective(self.cat, {}), probes={}, bandit={})
+                             ["RUN-TIMEOUTS"]["checks"]["blocks"][0], "fail")
+
     def test_malformed_maintenance_and_policy_declarations_are_refused(self):
         for mutate in (lambda c: c["targets"][0].update(fresh_ms=0),
                        lambda c: c["targets"].append(c["targets"][0]),

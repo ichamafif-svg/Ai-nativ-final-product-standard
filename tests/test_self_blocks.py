@@ -25,6 +25,26 @@ from tools import refresh_data
 
 
 class ModelCalls(unittest.TestCase):
+    def test_python_primitives_import_and_run_without_the_web_extra(self):
+        script = '''
+import importlib.abc, json, sys, tomllib
+from pathlib import Path
+class NoWeb(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, *args):
+        if name.split('.')[0] in ('fastapi', 'starlette', 'jwt'):
+            raise ImportError('web extra is absent')
+sys.meta_path.insert(0, NoWeb())
+from blocks.python.standard_blocks import crypto, data, input, log, outbound, parse, process, render, runtime
+assert parse.strict_json(b'{"ok":true}') == {'ok': True}
+assert crypto.same('same', 'same')
+assert str(render.escape('<value>')) == '&lt;value&gt;'
+package = tomllib.loads(Path('blocks/python/pyproject.toml').read_text())['project']
+assert not any(d.lower().startswith(('fastapi', 'pyjwt')) for d in package['dependencies'])
+assert any(d.startswith('fastapi') for d in package['optional-dependencies']['web'])
+'''
+        subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1],
+                       capture_output=True, check=True, timeout=10)
+
     def test_both_providers_use_blocks_and_reveal_keys_only_in_headers(self):
         provider = Provider("p", "openai", "m", "PRIVATE-MODEL-KEY")
         self.assertNotIn("PRIVATE-MODEL-KEY", repr(provider))

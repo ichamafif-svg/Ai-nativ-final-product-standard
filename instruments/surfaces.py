@@ -373,11 +373,12 @@ def _nextjs(path: str, source: bytes, out: dict) -> dict:
 
 
 def stacks(files: dict) -> list:
-    """The stacks a product is written in, as the catalog names them: fastapi (Python: the Python blocks serve any
-    ASGI app) and nextjs (Next imported, or a Next entry point found)."""
+    """Framework when observed, otherwise Python. A script or another Python framework is never FastAPI by suffix.
+    FastAPI's generic Python blocks are resolved by the catalog, not by a second selector here."""
     out = set()
     if any(p.endswith(PY) for p in files):
-        out.add("fastapi")
+        imports = {i for d in files.values() for i in d["imports"]}
+        out.add("fastapi" if any(i == "fastapi" or i.startswith("fastapi.") for i in imports) else "python")
     if any(i == "next" or i.startswith("next/") for d in files.values() for i in d["imports"]) or \
             any(NEXT_ROUTE.search(p) or NEXT_PAGES_API.search(p) or re.search(r"(^|/)next\.config\.\w+$", p)
                 for p in files):

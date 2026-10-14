@@ -34,6 +34,15 @@ features from signed settings and `@high_value` identically for scanner inputs a
 The scanner receives inert catalog data and evaluates observations independently. Code discovery remains in U;
 no catalog function imports an instrument or an agent. Missing implementation or measurement remains visible.
 
+`blocks.toml` distinguishes generic `.python` implementations from `.fastapi` integrations. `_blocks()` resolves
+FastAPI's use of Python primitives once; `implementation()`, the scanner's compact data and mission contracts read
+that same supported-stack table. A `.py` file alone selects Python; an observed FastAPI import selects FastAPI.
+Other Python frameworks do not acquire FastAPI integrations. The base `standard-blocks` distribution is usable
+without FastAPI/PyJWT; install `standard-blocks[web]` for web, session, access and file integrations. Pydantic,
+SQLAlchemy and Jinja helpers retain their own library contracts; `Pages.render`/`runtime.install` explicitly
+require a Starlette/FastAPI app when used. Applicability is still selected per rule; a block's presence never
+establishes all guarantees in its contract.
+
 ## A rule
 
 ```toml

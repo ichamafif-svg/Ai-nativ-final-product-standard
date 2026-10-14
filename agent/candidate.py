@@ -95,7 +95,8 @@ def explain(details, values: dict | None = None, cat: dict | None = None) -> str
             if block and f"block:{block}" not in shown:
                 shown.add(f"block:{block}")
                 b = cat["blocks"][block]
-                stacks = [s for s in ("fastapi", "nextjs") if s in b["stacks"]] or ["any"]
+                stacks = [s for s in ("python", "fastapi", "nextjs") if s in b["stacks"]
+                          and not (s == "fastapi" and "python" in b["stacks"])] or ["any"]
                 out.append(render_contracts(contracts(cat, cat["vocabulary"]["features"], values,
                     ids={r["id"] for r in cat["rules"] if r["block"] == block}, stacks=stacks)))
     return "\n\n".join(out)

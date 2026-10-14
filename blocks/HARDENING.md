@@ -2,10 +2,12 @@
 
 The standards (OWASP ASVS 5.0, CWE Top 25, NIST SSDF) list what to verify. A block can do more: it removes the way a
 mistake is made instead of checking that nobody made it. Because every product uses the same blocks, one hardening
-protects all of them. This page lists what the blocks do beyond the checklists, on both stacks (FastAPI,
-`blocks/python/standard_blocks`; Next.js, `blocks/js/nextjs`), and what is still left to do.
+protects all of them. This page describes the intended guarantees and implemented mechanisms of Python primitives,
+FastAPI integrations (`blocks/python/standard_blocks`, install `standard-blocks[web]`) and Next.js integrations
+(`blocks/js/nextjs`). It is not proof that every path satisfies every guarantee. Confirmed implementation gaps and
+their falsifiers are recorded in `ARCHITECTURE.md` §20.7; they remain open until corrected and independently checked.
 
-## Principles
+## Design principles
 
 1. **Make the unsafe version impossible to write.** Typed values (`Secret`, `SafeHtml`, `TrustedUrl`), filters
    that SQLAlchemy applies itself, routes that cannot start without an access id.
