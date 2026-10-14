@@ -90,6 +90,7 @@ class Builder:
     # ---- crafting -------------------------------------------------------------------------------------------------
     def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None,
               values: dict | None = None) -> str:
+        self.last_funnel = None
         if self.llm is None:
             raise AgentError("no model is configured: a contributor may implement it (trailer Standard-Request)")
         from .repomap import RepoMap
@@ -120,6 +121,7 @@ class Builder:
                         feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
                         continue
             except ResearchError as exc:
+                self.last_funnel = self.funnel.last_stats if self.funnel else None
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
                 self.last_funnel = self.funnel.last_stats if self.funnel else None

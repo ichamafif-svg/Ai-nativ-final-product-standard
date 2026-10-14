@@ -116,6 +116,20 @@ def bandit_findings(tree) -> dict:
         if (r.returncode not in (0, 1) or not isinstance(report, dict)
                 or not isinstance(report.get("results"), list) or report.get("errors") != []):
             raise ValueError("bandit did not complete its analysis")
+        metrics = report.get("metrics")
+        if not isinstance(metrics, dict):
+            raise ValueError("bandit reported no scan coverage")
+        scanned = set()
+        for filename in metrics:
+            path = Path(filename)
+            if path.is_absolute():
+                try:
+                    path = path.relative_to(work)
+                except ValueError:
+                    continue
+            scanned.add(path.as_posix().removeprefix("./"))
+        if not set(files) <= scanned:
+            raise ValueError("bandit omitted requested source files")
         results = report["results"]
         if any(not isinstance(x, dict) or not all(k in x for k in ("test_id", "filename", "line_number"))
                for x in results) or bool(results) != (r.returncode == 1):

@@ -125,6 +125,44 @@ class Passes(unittest.TestCase):
         Funnel().run(ask, base, "Upgrade", values={}, scope_ok=lambda p: True, focus=["requirements.txt"])
         self.assertEqual(seen[:2], ["design", "build"])
 
+    def test_accepted_contract_is_in_the_shared_draft_but_cannot_be_edited(self):
+        path = "tests/acceptance/test_r.py"
+        def ask(text, role, *, tree, read_only, deadline=None):
+            if role == "build":
+                return {"files": {"shop/a.py": "x = 1"}}
+            self.assertEqual(tree.read(path), b"assert True")
+            return {"action": "finish", "findings": []}
+        result, _ = Funnel().run(ask, BASE, "Task", values={}, scope_ok=lambda p: True,
+                                fixed_files={path: b"assert True"})
+        self.assertNotIn(path, result["files"])
+        with self.assertRaises(ValueError):
+            Funnel().run(lambda *a, **kw: {"files": {path: None}}, BASE, "Task", values={},
+                         scope_ok=lambda p: True, fixed_files={path: b"assert True"})
+
+    def test_a_new_feature_is_included_in_the_review_rules(self):
+        source = ("from fastapi import FastAPI, UploadFile\napp = FastAPI()\n@app.post('/files')\n"
+                  "async def upload(f: UploadFile): return {}\n")
+        def ask(text, role, **kw):
+            if role == "build": return {"files": {"app.py": source}}
+            self.assertIn("UPLOAD-LIMITS", text)
+            return {"findings": []}
+        Funnel().run(ask, Tree({}), "Task", values={}, scope_ok=lambda p: True)
+
+    def test_review_timeout_is_visible_and_cannot_return_a_candidate(self):
+        import threading
+        release = threading.Event()
+        flow = Funnel(timeout_s=1)
+        def ask(text, role, **kw):
+            if role == "build": return {"files": {"shop/a.py": "x = 1"}}
+            release.wait(timeout=3)
+            return {"findings": []}
+        try:
+            with self.assertRaisesRegex(ValueError, "REVIEW_UNAVAILABLE"):
+                flow.run(ask, BASE, "Task", values={}, scope_ok=lambda p: True)
+        finally:
+            release.set()
+        self.assertIn("TimeoutError", flow.last_stats["error"])
+
 
 class Patrol(unittest.TestCase):
     def test_each_round_reads_one_category_of_ai_rules_in_a_fixed_order(self):
@@ -168,6 +206,23 @@ class MeasurementFailures(unittest.TestCase):
                         "instruments.coverage.subprocess.run", return_value=SimpleNamespace(returncode=status, stdout=output)):
                     with self.assertRaises(ValueError):
                         bandit_findings(Tree({"app.py": "x = 1"}))
+
+    def test_bandit_must_account_for_every_requested_file(self):
+        import tempfile
+        import json
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from instruments.coverage import bandit_findings
+        tree = Tree({"app.py": "x = 1"})
+        for metrics in ({}, {"./app.py": {"loc": 1}}):
+            with tempfile.TemporaryDirectory() as tmp, patch("instruments.coverage._materialise", return_value=Path(tmp)), patch(
+                    "instruments.coverage.subprocess.run", return_value=SimpleNamespace(
+                        returncode=0, stdout=json.dumps({"results": [], "errors": [], "metrics": metrics}).encode())):
+                if metrics:
+                    self.assertEqual(bandit_findings(tree), {})
+                else:
+                    with self.assertRaisesRegex(ValueError, "omitted"):
+                        bandit_findings(tree)
 
     def test_import_only_does_not_prove_block_wiring(self):
         from instruments.coverage import evaluate

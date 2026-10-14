@@ -278,6 +278,7 @@ class Funnel:
                     raise ValueError("claimed correction made no change")
                 return {**result, "files": dict(files)}, stats
             # Any edit invalidates the reviews; the next round must inspect the new snapshot.
+        stats["error"] = "REVIEW_BUDGET_EXHAUSTED"
         raise ValueError("review budget exhausted; the revised draft has not completed review")
 
 

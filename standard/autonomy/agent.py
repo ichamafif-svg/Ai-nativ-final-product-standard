@@ -189,6 +189,7 @@ class Agent:
         keeps main's tests green and adds no lint or type error."""
         from .precheck import precheck
         from .repomap import RepoMap
+        self.last_funnel = None
         targets = targets or {}
         target = targets.get(target_id, {"id": target_id, "resource": target_id, "property": "?", "expect": "?"})
         finding = finding or {"status": "?", "details": []}
@@ -235,6 +236,7 @@ class Agent:
                         feedback = "Candidate checks remain incomplete:\n" + "\n".join(stats["remaining"])
                         continue
             except ResearchError as exc:
+                self.last_funnel = self.funnel.last_stats if self.funnel else None
                 raise AgentError(str(exc)) from exc
             except ValueError as exc:
                 self.last_funnel = self.funnel.last_stats if self.funnel else None
