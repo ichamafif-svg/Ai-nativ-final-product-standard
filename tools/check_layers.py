@@ -10,18 +10,19 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STANDARD = {"kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "tests", "examples", "standard", "blocks", "standard_blocks"}
+STANDARD = {"kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "tests", "examples", "standard", "blocks", "standard_blocks", "enclosure"}
 ALLOWED = {
     "kernel": ("kernel",),
     "bt": ("kernel", "bt"),
-    "instruments": ("kernel", "instruments", "standard_blocks"),  # existing in-process product probes
+    "instruments": ("kernel", "instruments", "standard_blocks", "enclosure"),  # existing in-process product probes
     "catalog": ("kernel", "catalog"),
     "blocks": ("blocks.python.standard_blocks",),
+    "enclosure": ("enclosure",),
     "context": ("kernel", "instruments", "catalog", "context", "agent.work"),
-    "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "blocks.python.standard_blocks"),
+    "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "enclosure", "blocks.python.standard_blocks"),
     "surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "surface", "blocks.python.standard_blocks"),
-    "runtime": ("kernel", "bt", "instruments", "catalog", "runtime"),
-    "tools": ("kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "blocks.python.standard_blocks"),
+    "runtime": ("kernel", "bt", "instruments", "catalog", "runtime", "enclosure"),
+    "tools": ("kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "enclosure", "blocks.python.standard_blocks"),
     "examples": ("standard_blocks",),
 }
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}

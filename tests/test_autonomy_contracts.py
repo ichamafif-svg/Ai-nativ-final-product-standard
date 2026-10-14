@@ -594,7 +594,7 @@ class ResearchTools(unittest.TestCase):
 
     def test_experiment_never_falls_back_to_the_agent_account(self):
         research, tree, _ = self.setup_research([])
-        with patch('agent.sandbox._can_isolate', return_value=False), \
+        with patch('enclosure.bac.Bac._available', return_value=False), \
              patch('agent.research.subprocess.run') as run:
             with self.assertRaises(ResearchError):
                 research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
@@ -611,8 +611,8 @@ class ResearchTools(unittest.TestCase):
             seen.append((args, kwargs['env']))
             kwargs['stdout'].write(b'experiment output')
             return type('Done', (), {'returncode': 0})()
-        with patch('agent.sandbox._can_isolate', return_value=True), \
-             patch('agent.sandbox.subprocess.run', side_effect=run):
+        with patch('enclosure.bac.Bac._available', return_value=True), \
+             patch('enclosure.bac.subprocess.run', side_effect=run):
             result = research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
         self.assertTrue(result.ok)
         args, env = seen[0]
