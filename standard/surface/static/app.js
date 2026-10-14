@@ -68,7 +68,7 @@ function subject(s) {
 // ---- routing --------------------------------------------------------------------------------------------------------
 const ROUTES = {
   standard: ["Standard", "standard"],
-  decisions: ["Décisions", "both"], rules: ["Règles du jeu", "both"],
+  decisions: ["Décisions", "both"], rules: ["Règles du jeu", "both"], coverage: ["Couverture des règles", "both"],
   run: ["Run", "run"], alerts: ["Alertes", "run"], autonomy: ["Autonomie", "run"], activity: ["Activité", "run"],
   contributions: ["Contributions", "build"], requests: ["Demandes", "build"],
   proofs: ["Preuves", "both"], settings: ["Clé de signature", "both"],
@@ -90,7 +90,7 @@ function frame() {
   document.title = waiting ? `(${waiting}) Standard` : "Standard";
   $("#nav").innerHTML = `
     <div class="group">Niveau</div>${link("standard")}
-    <div class="group">Toi</div>${link("decisions")}${link("rules")}
+    <div class="group">Toi</div>${link("decisions")}${link("rules")}${link("coverage")}
     <div class="group">Exploitation</div>${link("run")}${link("alerts")}${link("autonomy")}${link("activity")}
     <div class="group">Construction</div>${link("contributions")}${link("requests")}
     <div class="group">Preuves</div>${link("proofs")}${link("settings")}`;
@@ -122,10 +122,11 @@ async function refresh() {
 function render() {
   if (!state) return;
   frame();
-  const views = { standard: standardView, decisions, rules: rulesView, run: runView, alerts: alertsView, autonomy, activity, contributions, requests, proofs, settings };
+  const views = { standard: standardView, decisions, rules: rulesView, coverage: coverageView, run: runView, alerts: alertsView, autonomy, activity, contributions, requests, proofs, settings };
   $("#view").innerHTML = banner() + views[route()]();
   if (route() === "run") loadRun();
   if (route() === "rules") loadRules();
+  if (route() === "coverage") loadCoverage();
   if (route() === "settings") bindSettings();
   document.querySelectorAll("[data-review]").forEach((b) => b.addEventListener("click", () => openReview(b.dataset.review)));
   document.querySelectorAll("[data-agent-context]").forEach((b) => b.addEventListener("click", () => openAgentContext(b.dataset.agentContext, b.dataset.id)));
@@ -563,6 +564,59 @@ async function admit(kind, body) {
 const sayYes = (resource) => admit("observation", { under: state.signing.grants.human.id, resource, property: "decision",
   status: "approve", level: "real" });
 const sayNo = (scope) => admit("freeze", { scope });
+// ---- the rule catalog against this product (lots 5 and 8) -----------------------------------------------------------
+const STATE = { measured: ["Mesurée", "ok"], partial: ["Mesurée en partie", "ok"], failing: ["Enfreinte", "bad"],
+  uncovered: ["Non mesurée : à déclarer", "wait"], patrolled: ["Lue par la patrouille", ""], human: ["Ta décision", ""],
+  gap: ["Pas encore d'instrument", ""], "n/a": ["Sans objet", ""], unmeasured: ["Pas encore mesurée", "wait"] };
+const WHO = { det: "déterministe", ai: "IA", human: "toi" };
+
+function coverageView() {
+  return `<h1>Couverture des règles</h1>
+    <p class="lede">Les règles de sécurité et d'exploitation (OWASP ASVS 5.0, CWE Top 25, mise en production) contre ce produit. Une règle enfreinte ou non mesurée est une dette avec une échéance ;
+      l'agent la répare par les blocs. Ce que seule une lecture peut vérifier passe par la patrouille, jamais par une dette.</p>
+    <div id="coverage"><p class="quiet">Chargement</p></div>`;
+}
+
+async function loadCoverage() {
+  let data;
+  try {
+    const r = await fetch("/api/coverage", { cache: "no-store" });
+    data = await r.json();
+    if (!r.ok) throw new Error(data.error);
+  } catch (err) { $("#coverage").innerHTML = `<div class="note bad">Couverture indisponible : ${esc(err.message)}</div>`; return; }
+  const all = data.categories.flatMap((c) => c.rules);
+  const n = (s) => all.filter((r) => r.state === s).length;
+  const can = Boolean(signer);
+  const ids = [...new Set(Object.values(data.routes).map((r) => r.id).filter(Boolean))].sort();
+  const missing = Object.entries(data.routes).filter(([, r]) => !r.id);
+  $("#coverage").innerHTML = `
+    ${data.app ? "" : `<div class="note warn">Indique dans Règles du jeu l'application du produit (@app, par exemple <span class="sha">shop.main:app</span>) : sans elle, les sondes de Standard ne peuvent pas la démarrer.</div>`}
+    <section class="cols"><div class="panel"><h2>${all.length} règles</h2><div class="facts">
+      ${fact(`${n("measured") + n("partial")} mesurées`, "ok")}${fact(`${n("failing")} enfreintes`, n("failing") ? "bad" : "")}
+      ${fact(`${n("uncovered") + n("unmeasured")} non mesurées`, n("uncovered") ? "wait" : "")}${fact(`${n("patrolled")} par la patrouille`, "")}
+      ${fact(`${n("n/a")} sans objet`, "")}</div></div>
+    <div class="panel"><h2>Matrice d'accès</h2><p class="small quiet">Chaque route nomme un identifiant (allow("…")) ; tu donnes les rôles. Une route absente de la matrice est réservée aux administrateurs.</p>
+      ${missing.length ? `<div class="note warn">${missing.length} route(s) sans identifiant : ${missing.map(([e]) => `<span class="sha">${esc(e)}</span>`).join(" ")}</div>` : ""}
+      <div class="panel sets">${ids.map((id) => `<div class="set"><div class="sl"><b>${esc(id)}</b><span class="small quiet">${Object.entries(data.routes).filter(([, r]) => r.id === id).map(([e]) => esc(e)).join(" · ")}</span></div>
+        <div class="sv"><input type="text" data-roles="${esc(id)}" value="${esc((data.access[id] || []).join(", "))}" placeholder="admin seulement" ${can ? "" : "disabled"}></div></div>`).join("") || `<div class="rowi quiet">Aucune route lue sur main</div>`}</div>
+      ${ids.length ? `<button class="btn" id="signaccess" ${can ? "" : "disabled"}>Signer la matrice</button> <span id="accessmsg" class="small quiet"></span>` : ""}</div></section>
+    ${data.categories.map((c) => `<details class="panel" ${c.rules.some((r) => ["failing", "uncovered"].includes(r.state)) ? "open" : ""}><summary><b>${esc(c.name)}</b> <span class="quiet small">${c.rules.length} règles</span>
+        ${c.status ? fact(c.status === "none" ? "tenue" : c.status, c.status === "none" ? "ok" : "bad") : fact("pas encore mesurée", "wait")}${c.due ? fact(`échéance ${due(c.due)}`, "wait") : ""}</summary>
+      <div class="rows">${c.rules.map((r) => `<div class="rowi"><div class="main"><b>${esc(r.id)}</b> <span class="small">${esc(r.do)}</span>
+        <div class="facts">${fact(...STATE[r.state] || [r.state, ""])}${fact(`vérifiée par ${r.who.map((w) => WHO[w] || w).join(" + ")}`, "")}${r.block ? fact(`bloc ${r.block}`, "") : ""}</div></div></div>`).join("")}</div>
+      ${c.why.length ? `<details><summary class="small">Pourquoi</summary><pre class="small">${esc(c.why.join("\n"))}</pre></details>` : ""}</details>`).join("")}`;
+  const btn = $("#signaccess");
+  if (btn) btn.onclick = () => {
+    const access = {};
+    document.querySelectorAll("[data-roles]").forEach((i) => {
+      const roles = i.value.split(",").map((x) => x.trim()).filter(Boolean);
+      if (roles.length) access[i.dataset.roles] = roles;
+    });
+    const kept = Object.fromEntries(Object.entries(data.access).filter(([k]) => !ids.includes(k)));
+    signRules({ values: { access: { ...kept, ...access } } }, $("#accessmsg"));
+  };
+}
+
 const { view: rulesView, load: loadRules, signRules: signRulesInto } = createRules({ $, esc, fact, ago, getSigner: () => signer, envelope });
 const signRules = (changes, el) => signRulesInto(changes, { set textContent(v) { el.textContent = v; } });
 

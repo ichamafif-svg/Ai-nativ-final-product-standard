@@ -330,6 +330,42 @@ class Installation:
                 "budget": 1 - (failures / events) / allowed, "fast_alerts": episodes["fast"],
                 "slow_alerts": episodes["slow"], "window_d": window_d}
 
+    def coverage(self) -> dict:
+        """The rule catalog against this product: each category's signed state and debt, each rule's state as the
+        scanner published it, and the access matrix: routes read on main with the id their allow() names, and the
+        roles @access gives each id (lots 5 and 8)."""
+        import re as _re
+        from instruments.surfaces import scan
+        from instruments.tree import GitTree
+        from standard.catalog import categories, load
+        cat, findings, view = load(), _json(self.findings), self.client.view()
+        signed = {(f["resource"], f["property"]): f for f in view.get("facts", [])}
+        debts = {o.get("target"): o for o in view["health"].get("open", []) if str(o.get("target", "")).startswith("rules-")}
+        rules = self.settle(view)
+        values = rules.values()
+        out = []
+        for c in categories():
+            resource = f"repo:rules:{c}"
+            published = findings.get(f"{resource}|failing", {}).get("details") or []
+            states = dict(d.split("=", 1) for d in published if _re.fullmatch(r"[A-Z0-9-]+=[a-z/]+", d))
+            why = [d for d in published if "=" not in d.split(" ")[0]]
+            fact = signed.get((resource, "failing"))
+            members = [r for r in cat["rules"] if _re.sub(r"[^a-z0-9]+", "-", r["category"].lower()).strip("-") == c]
+            out.append({"id": c, "name": members[0]["category"] if members else c, "status": fact and fact["status"],
+                        "at": fact and fact["at"], "due": (debts.get(f"rules-{c}") or {}).get("due"), "why": why[:20],
+                        "rules": [{"id": r["id"], "do": r["do"], "who": r["who"], "block": r["block"],
+                                   "state": states.get(r["id"], "unmeasured")} for r in members]})
+        routes = {}
+        try:
+            main = scan(GitTree(self.repo, "main"))
+            for path, d in sorted(main["files"].items()):
+                for endpoint, ident in d.get("access", {}).items():
+                    routes[endpoint] = {"id": ident, "file": path}
+        except Exception as exc:
+            routes = {"error": {"id": None, "file": str(exc)[:200]}}
+        return {"categories": out, "routes": routes, "access": values.get("access", {}), "app": values.get("app"),
+                "public": values.get("public", [])}
+
     @staticmethod
     def named_values(rules) -> dict:
         """The catalog's named values as the human edits them: what each means, its strict default, what is chosen."""
@@ -547,6 +583,8 @@ def handler(inst: Installation, allowed_hosts=LOCAL_HOSTS):
                     return self._ok(inst.alerts())
                 if route == "/api/settings":
                     return self._ok(inst.settings())
+                if route == "/api/coverage":
+                    return self._ok(inst.coverage())
                 if route == "/api/preview":
                     query = dict(q.split("=", 1) for q in self.path.partition("?")[2].split("&") if "=" in q)
                     return self._ok(inst.preview({k: urllib.parse.unquote(v) for k, v in query.items()}))

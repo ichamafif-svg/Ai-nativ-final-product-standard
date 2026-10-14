@@ -147,11 +147,28 @@ def gesture(view: dict, args) -> dict:
     raise ValueError("rules set KEY VALUE | rules route OP ROUTE on|off")
 
 
+def coverage_text(view: dict, findings: dict) -> str:
+    """Each rule category: its signed state, its debt and the rules that fail or are unmeasured."""
+    from standard.catalog import categories
+    signed = {(f["resource"], f["property"]): f["status"] for f in view.get("facts", [])}
+    debts = {o.get("target"): o for o in view["health"].get("open", [])}
+    lines = []
+    for c in categories():
+        status = signed.get((f"repo:rules:{c}", "failing"), "not measured yet")
+        debt = debts.get(f"rules-{c}")
+        details = (findings or {}).get(f"repo:rules:{c}|failing", {}).get("details") or []
+        bad = [d.split("=")[0] for d in details if d.endswith(("=failing", "=uncovered"))]
+        lines.append(f"{c:32} {'held' if status == 'none' else status}" + (f"  due {debt.get('due')}" if debt else "")
+                     + (f"  ({', '.join(bad)})" if bad else ""))
+    return "\n".join(lines)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m standard.surface")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("command", choices=("status", "moves", "queue", "tasks", "context", "drift", "patrol",
-                                            "read-model", "law", "dossier", "yes", "no", "release", "rules"))
+                                            "read-model", "law", "dossier", "yes", "no", "release", "rules",
+                                            "coverage", "rule"))
     parser.add_argument("args", nargs="*")
     parser.add_argument("--identity")
     parser.add_argument("--key")
@@ -192,6 +209,14 @@ def main(argv=None) -> int:
     plan = model.plan()
     if args.command == "status":
         print(status(view))
+    elif args.command == "coverage":
+        print(coverage_text(view, findings))
+    elif args.command == "rule":
+        from standard.catalog import effective, load, render
+        cat = load()
+        rule = next((r for r in cat["rules"] if r["id"] == (ref or "").upper()), None)
+        print(render(rule, effective(cat, view["law"]["effective"].get("settings", {}).get("values")))
+              if rule else f"no rule {ref}")
     elif args.command == "moves":
         print(board(view, moves(view), "no move"))
     elif args.command == "queue":

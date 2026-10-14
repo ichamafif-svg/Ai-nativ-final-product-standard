@@ -102,6 +102,10 @@ class Server(unittest.TestCase):
             self.assertTrue(all(r["no"] for r in run["frontier_reasons"].values()))   # every "no" says why
             self.assertEqual(run["frontier_total"]["act"], 0)                        # nothing acts in production
             self.assertFalse(run["live"]["configured"])                               # no [deploy]: said, not hidden
+            covered = json.loads(urllib.request.urlopen(f"{url}/api/coverage").read())     # the catalog, per category
+            self.assertEqual(len(covered["categories"]), 17)
+            self.assertIsNone(covered["app"])                                               # not declared: said
+            self.assertTrue(all(r["state"] for c in covered["categories"] for r in c["rules"]))
             settings = json.loads(urllib.request.urlopen(f"{url}/api/settings").read())    # D51: the rules of the game
             rules = settings["rules"]
             self.assertEqual(rules["settings"]["objective"], "99.9")

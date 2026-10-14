@@ -205,10 +205,14 @@ def category_measure(states: dict, catalog: dict, category: str, *, regression: 
     rules = [r for r in catalog["rules"] if slug(r["category"]) == category]
     kept = ("failing", "measured", "partial") if regression else ("failing", "uncovered", "measured", "partial")
     universe = {r["id"] for r in rules if states[r["id"]]["state"] in kept}
+    # Every rule's state first (the console's coverage map reads them), then why each failing or unmeasured one is.
+    summary = [f"{r['id']}={states[r['id']]['state']}" for r in sorted(rules, key=lambda r: r["id"])]
+    why = [f"{i}: {c} {r[0]} {'; '.join(r[1][:3])}".strip() for i in sorted(universe)
+           for c, r in states[i]["checks"].items() if r[0] == "fail" or r[0].startswith("unrun")]
+    # A regression compares what each side found: only the failures, never the state summary.
+    details = tuple(why[:50]) if regression else tuple(summary + why[:max(0, 50 - len(summary))])
     if not universe:
-        return Measure(frozenset({category}), frozenset({category}))
+        return Measure(frozenset({category}), frozenset({category}), (), details)
     covered = {i for i in universe if states[i]["state"] != "uncovered"}
     failing = sorted(i for i in universe if states[i]["state"] == "failing")
-    details = [f"{i}: {c} {r[0]} {'; '.join(r[1][:3])}".strip() for i in sorted(universe)
-               for c, r in states[i]["checks"].items() if r[0] == "fail" or r[0].startswith("unrun")]
-    return Measure(frozenset(universe), frozenset(covered), tuple(failing), tuple(details[:50]))
+    return Measure(frozenset(universe), frozenset(covered), tuple(failing), details)

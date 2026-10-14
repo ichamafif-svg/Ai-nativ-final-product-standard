@@ -95,6 +95,7 @@ def _strip_js(text: str) -> str:
 class _Py(ast.NodeVisitor):
     def __init__(self):
         self.alias, self.constructs, self.surfaces, self.endpoints, self.imports = {}, set(), set(), [], set()
+        self.access = {}                                   # endpoint -> the id its allow("…") declares
         self.models, self.tenant = False, False
 
     # -- names -----------------------------------------------------------------------------------------------------
@@ -245,6 +246,11 @@ class _Py(ast.NodeVisitor):
                 str(e.value).upper() for kw in dec.keywords if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple))
                 for e in kw.value.elts if isinstance(e, ast.Constant)) or ["GET"]
             self.endpoints += [f"{m} {path}" for m in methods]
+            ident = next((c.args[0].value for kw in dec.keywords if kw.arg == "dependencies"
+                          for c in ast.walk(kw.value) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                          and c.func.attr == "allow" and c.args and isinstance(c.args[0], ast.Constant)), None)
+            for m in methods:
+                self.access[f"{m} {path}"] = ident
             self.surfaces.add("endpoint")
             self.constructs.add("response-model")
             args = node.args.args + node.args.kwonlyargs
@@ -292,7 +298,8 @@ def _python(source: bytes) -> dict:
     v = _Py()
     v.visit(tree)
     return {"surfaces": sorted(v.surfaces), "constructs": sorted(v.constructs), "endpoints": sorted(set(v.endpoints)),
-            "imports": sorted(v.imports), "models": v.models, "tenant": v.tenant}
+            "imports": sorted(v.imports), "models": v.models, "tenant": v.tenant,
+            "access": dict(sorted(v.access.items()))}
 
 
 def _javascript(source: bytes) -> dict:
