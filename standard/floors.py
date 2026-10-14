@@ -17,7 +17,8 @@ autonomous routes the rules turned off. Everything else the agent plays alone, i
 Technical measures are observed by the scanner and repaired by `remediate`: main moves fast-forward from one exact
 commit (base) to one exact child (head), so the object of the effect is the commit that was judged. A repair lands
 alone when a recipe reproduces it, or when main's tests pass, nothing regresses and the change stays in the target's
-write scope (`scoped`). Production (D30, D36) is measured by the same scanner from the product's own metrics.
+write scope (`scoped`) and adds no use of an API a building block covers (`blocks`, standard/catalog/blocks.toml).
+Production (D30, D36) is measured by the same scanner from the product's own metrics.
 """
 import hashlib
 from pathlib import Path
@@ -79,7 +80,7 @@ CONTRACTS = {
                    "attested": ["the pinned third-party data snapshot (D17)", "the provider's settings of main"]},
         "suite": {"form": "reproducible", "jobs": ["remediation", "feature", "contribution"],
                   "resources": ["repo:"],
-                  "properties": ["tests", "regressions", "reproduced", "acceptance", "scoped"], "attested": []},
+                  "properties": ["tests", "regressions", "reproduced", "acceptance", "scoped", "blocks"], "attested": []},
         "request": {"form": "reproducible", "jobs": ["request"], "resources": ["build:request/"],
                     "properties": ["contract", "accepted"], "attested": []},
         "production": {"form": "composite", "jobs": ["production"], "resources": ["run:"],
@@ -151,7 +152,8 @@ FLOORS = {
         "remediate": {"args": {"area": "segment", "item": "segment", "base": "segment", "head": "segment"},
                       "resource": "repo:{area}:{item}/{base}/{head}",
                       "routes": {"reproduced": _auto(_m("tests", "green"), _m("reproduced", "yes")),
-                                 "scoped": _auto(_m("tests", "green"), _m("regressions", "none"), _m("scoped", "yes")),
+                                 "scoped": _auto(_m("tests", "green"), _m("regressions", "none"), _m("scoped", "yes"),
+                                                 _m("blocks", "clean")),
                                  "human": _human(_m("tests", "green"), _m("regressions", "none"))}},
         # Fast-forward main from `base` to `head`, a contribution from the hosting inbox (D23): code the agent did not
         # write lands only on the human's word, after main's tests and no regression.
@@ -163,7 +165,8 @@ FLOORS = {
         "implement": {"args": {"request": "segment", "base": "segment", "head": "segment"},
                       "resource": "repo:feature:{request}/{base}/{head}",
                       "routes": {"accepted": _auto(_m("acceptance", "green"), _m("tests", "green"),
-                                                   _m("regressions", "none"), _m("scoped", "yes")),
+                                                   _m("regressions", "none"), _m("scoped", "yes"),
+                                                   _m("blocks", "clean")),
                                  "human": _human(_m("acceptance", "green"), _m("tests", "green"),
                                                  _m("regressions", "none"))}},
         # Switch production from release `from` (a commit of main, or none) to main's head `to` (D30): directly in

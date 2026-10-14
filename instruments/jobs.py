@@ -7,9 +7,9 @@ cache them by their inputs and anyone can replay them.
 
     plan          main, proposals, inbox, requests, registers, the rules in force  ->  jobs, with their inputs
     floors        main's tree, pinned data, protections, lineage  ->  every probed floor target
-    remediation   base, head (a proposal)  ->  tests, regressions, scoped (+ reproduced when a recipe recomputes it)
-                  on repo:{area}:{item}/…
-    feature       base, head with a Standard-Request trailer  ->  acceptance, tests, regressions, scoped on
+    remediation   base, head (a proposal)  ->  tests, regressions, scoped, blocks (+ reproduced when a recipe
+                  recomputes it) on repo:{area}:{item}/…
+    feature       base, head with a Standard-Request trailer  ->  acceptance, tests, regressions, scoped, blocks on
                   repo:feature:…
     contribution  base, head from the inbox  ->  tests, regressions (+ acceptance) on repo:contrib:…
     request       main, a request's contract  ->  contract (proposed) or accepted (contracted) on build:request/…
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from kernel.types import ID
 
-from . import probes, production, scope, suite
+from . import bans, probes, production, scope, suite
 from .data import EMPTY, TrustedData
 from .recipes import recipes_for
 from .tree import DirTree, Measure, verdict
@@ -47,6 +47,7 @@ def plan(p: dict) -> list:
     main, data, install = p["main"], {"data": True}, {"value": p["install"]}
     targets, settings = {"value": p["targets"]}, p.get("settings") or {}
     scopes = {"value": settings.get("scopes") if isinstance(settings.get("scopes"), dict) else {}}
+    bans = {"value": p.get("bans") or {}}
     entities = p["entities"]
     contracted = {r.split("/", 1)[1]: e["fields"]["contract"] for r, e in entities.items()
                   if e["type"] == "request" and e["state"] == "contracted"}
@@ -63,11 +64,12 @@ def plan(p: dict) -> list:
         if rid in contracted:
             jobs.append({"job": "feature", "inputs": {"base": base, "head": head, "data": data, "targets": targets,
                                                       "request": {"value": rid},
-                                                      "contract": {"store": "requests", "digest": contracted[rid]}, "install": install},
+                                                      "contract": {"store": "requests", "digest": contracted[rid]}, "install": install,
+                                                      "bans": bans},
                          "network": p["install"]})
         elif rid is None:
             jobs.append({"job": "remediation", "inputs": {"base": base, "head": head, "data": data, "targets": targets,
-                                                          "scopes": scopes, "install": install},
+                                                          "scopes": scopes, "install": install, "bans": bans},
                          "network": p["install"]})
     for c in p["inbox"]:
         author = AUTHOR.fullmatch(c["ref"])
@@ -164,6 +166,7 @@ def remediation(inp: dict) -> list:
     facts["tests"] = suite.tests_report(base, head, install=inp.get("install", False))
     facts["regressions"] = _regressions(base, head, inp, data)       # a repair opens no other gap
     facts["scoped"] = scope.scoped(scope.changed(base, head), lambda path: scope.repair(tid, path, inp.get("scopes")))
+    facts["blocks"] = bans.blocks_fact(base, head, scope.changed(base, head), inp.get("bans") or {})
     return [[f"repo:{area}:{item}/{base.commit}/{head.commit}", p, s, d] for p, (s, d) in facts.items()]
 
 
@@ -173,7 +176,8 @@ def feature(inp: dict) -> list:
     facts = {"acceptance": suite.acceptance_on(head, rid, contract) if contract else ("uncovered:store", []),
              "tests": suite.tests_report(base, head, install=inp.get("install", False)),
              "regressions": _regressions(base, head, inp, data),
-             "scoped": scope.scoped(scope.changed(base, head), lambda path: scope.feature(rid, path))}
+             "scoped": scope.scoped(scope.changed(base, head), lambda path: scope.feature(rid, path)),
+             "blocks": bans.blocks_fact(base, head, scope.changed(base, head), inp.get("bans") or {})}
     return [[f"repo:feature:{rid}/{base.commit}/{head.commit}", p, s, d] for p, (s, d) in facts.items()]
 
 

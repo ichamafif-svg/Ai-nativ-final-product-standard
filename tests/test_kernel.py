@@ -224,7 +224,7 @@ class Routes(unittest.TestCase):
 
     def test_a_scoped_repair_lands_alone_unless_the_rules_turn_it_off(self):
         L = self.L
-        for prop, status in (("tests", "green"), ("regressions", "none"), ("scoped", "yes")):
+        for prop, status in (("tests", "green"), ("regressions", "none"), ("scoped", "yes"), ("blocks", "clean")):
             L.measure("scanner", self.scanner, self.resource, prop, status)
         L.submit("law", "h1", client=client_law(routes={"remediate": ["reproduced"]}))
         self.assertEqual(L.refused("intent", "agent", **self.remediate()), "CAP.ROUTE")
@@ -245,7 +245,7 @@ class Routes(unittest.TestCase):
     def test_code_from_outside_needs_the_human(self):
         L = self.L
         args, res = {"contributor": "bob", "base": A, "head": B}, f"repo:contrib:bob/{A}/{B}"
-        for prop, status in (("tests", "green"), ("regressions", "none"), ("scoped", "yes"), ("reproduced", "yes")):
+        for prop, status in (("tests", "green"), ("regressions", "none"), ("scoped", "yes"), ("blocks", "clean"), ("reproduced", "yes")):
             if prop in ("tests", "regressions"):
                 L.measure("scanner", self.scanner, res, prop, status)
         self.assertEqual(L.refused("intent", "agent", under=self.agent, op="integrate", args=args), "CAP.ROUTE")

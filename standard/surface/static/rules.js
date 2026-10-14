@@ -4,8 +4,8 @@
 // The kernel refuses anything looser than the socle; nothing here is a permission.
 
 const OPS = {
-  remediate: ["Réparer une exigence", { reproduced: "quand une recette la reproduit à l'identique", scoped: "quand les tests passent, sans régression, dans son périmètre" }],
-  implement: ["Implémenter une demande signée", { accepted: "quand le contrat passe, avec les tests, sans régression, dans son périmètre" }],
+  remediate: ["Réparer une exigence", { reproduced: "quand une recette la reproduit à l'identique", scoped: "quand les tests passent, sans régression, dans son périmètre, par les blocs" }],
+  implement: ["Implémenter une demande signée", { accepted: "quand le contrat passe, avec les tests, sans régression, dans son périmètre, par les blocs" }],
   integrate: ["Intégrer une contribution", {}],
   deploy: ["Mettre main en production", { direct: "dans la fenêtre, avec du budget d'erreur", promote: "en promouvant un canari qui a tenu" }],
   canary: ["Démarrer un canari", { auto: "dans la fenêtre, avec du budget d'erreur" }],

@@ -55,7 +55,7 @@ def proposal(rng, L, caps):
         return "law", pick(("h1", "agent")), None, {"at": at, "client": client}
     if choice == 4:
         from standard.floors import INSTRUMENTS
-        good = {"tests": "green", "reproduced": "yes", "regressions": "none", "scoped": "yes", "candidate": "yes",
+        good = {"tests": "green", "reproduced": "yes", "regressions": "none", "scoped": "yes", "blocks": "clean", "candidate": "yes",
                 "window": "open", "budget_pct": "50"}
         prop = pick(sorted(good))
         method, coverage, _ = INSTRUMENTS[prop]

@@ -1,0 +1,29 @@
+"""Strict defaults of the named values, copied from standard/catalog/values.toml (a test keeps them equal).
+
+The product receives the values in force from Standard (STANDARD_VALUES, JSON); a value absent there takes its
+default here. A value with no default (retention_days) is absent: the code that needs it refuses to guess."""
+DEFAULTS = {'access': {},
+ 'archive_max_files': 100,
+ 'critical': ['*'],
+ 'csp_sources': [],
+ 'destinations': [],
+ 'high_value': [],
+ 'image_max_pixels': 25000000,
+ 'mfa': 'all',
+ 'origins': [],
+ 'outbound_timeout_s': 10,
+ 'password_min': 15,
+ 'public': ['GET /health'],
+ 'queue_max': 1000,
+ 'rate_per_minute': 60,
+ 'redirect_targets': [],
+ 'sensitive': ['*'],
+ 'sensitive_actions': ['*:account', '*:security'],
+ 'session_idle_min': 15,
+ 'session_max_hours': 8,
+ 'trackers': [],
+ 'trusted_proxies': [],
+ 'unpacked_max_bytes': 52428800,
+ 'upload_max_bytes': 10485760,
+ 'upload_types': [],
+ 'user_quota_bytes': 1073741824}

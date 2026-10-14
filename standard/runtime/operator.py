@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 from bt.host import Host
+from standard.catalog import load as load_catalog
 from bt.signing import Signer, envelope
 
 MAIN_OPS = ("remediate", "integrate", "implement")   # the operations that move main, by the same CAS
@@ -99,7 +100,8 @@ class Instruments:
                           for o in state["observations"].values()],
                 "judged": sorted(it["args"]["head"] for i, it in state["intents"].items()
                                  if it["op"] in MAIN_OPS and state["line"].get(i, {}).get("state") == "proving"),
-                "production": self.production, "registers": self.registers.read() if self.registers else None}
+                "production": self.production, "registers": self.registers.read() if self.registers else None,
+                "bans": {name: b["bans"] for name, b in load_catalog()["blocks"].items() if b["bans"]}}
 
     def _due(self, law, resource: str, prop: str, status: str) -> bool:
         before = self.signed.get((resource, prop))

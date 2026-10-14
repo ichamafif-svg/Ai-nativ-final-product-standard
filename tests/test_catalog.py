@@ -93,7 +93,7 @@ class Catalog(unittest.TestCase):
         from standard.runtime import CATALOG_DATA, code_digest
         import tempfile, shutil
         root = Path(tempfile.mkdtemp())
-        for part in ("kernel", "bt", "standard"):
+        for part in ("kernel", "bt", "standard", "blocks"):
             shutil.copytree(ROOT / part, root / part, ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy(ROOT / "requirements.hashes", root / "requirements.hashes")
         before = code_digest(root)
