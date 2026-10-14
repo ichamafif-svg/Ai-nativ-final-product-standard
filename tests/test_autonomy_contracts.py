@@ -594,7 +594,7 @@ class ResearchTools(unittest.TestCase):
 
     def test_experiment_never_falls_back_to_the_agent_account(self):
         research, tree, _ = self.setup_research([])
-        with patch('agent.sandbox._can_isolate', return_value=False), \
+        with patch('enclosure.bac.Bac._unavailable', return_value='gone'), \
              patch('agent.research.subprocess.run') as run:
             with self.assertRaises(ResearchError):
                 research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
@@ -608,21 +608,24 @@ class ResearchTools(unittest.TestCase):
         tree = export(tree.repo, tree.commit, Path(tempfile.mkdtemp()) / 'snapshot')
         seen = []
         def run(args, **kwargs):
-            seen.append((args, kwargs['env']))
-            kwargs['stdout'].write(b'experiment output')
+            if 'run' in args:
+                bundle = args[args.index('--bundle') + 1]
+                seen.append(json.loads(Path(bundle, 'config.json').read_text()))
+                kwargs['stdout'].write(b'experiment output')
             return type('Done', (), {'returncode': 0})()
-        with patch('agent.sandbox._can_isolate', return_value=True), \
-             patch('agent.sandbox.subprocess.run', side_effect=run):
+        with patch('enclosure.bac.Bac._unavailable', return_value=None), \
+             patch('enclosure.bac.subprocess.run', side_effect=run):
             result = research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
         self.assertTrue(result.ok)
-        args, env = seen[0]
-        self.assertIn('--unshare-all', args)
-        self.assertIn('--cap-drop', args)
-        self.assertNotIn(str(source_repo), args)
-        self.assertNotIn('/home', args)
-        self.assertNotIn('/srv', args)
-        self.assertEqual(set(env), {'PATH', 'HOME', 'LANG', 'PYTHONDONTWRITEBYTECODE'})
-        self.assertIn('--fsize=1048576', args)
+        config = seen[0]
+        self.assertIn({'type': 'network'}, config['linux']['namespaces'])
+        self.assertEqual(config['process']['capabilities']['effective'], [])
+        sources = [m['source'] for m in config['mounts']]
+        self.assertNotIn(str(source_repo), sources)
+        self.assertFalse(any(s.startswith(('/home', '/srv')) for s in sources))
+        self.assertEqual({e.split('=')[0] for e in config['process']['env']},
+                         {'PATH', 'HOME', 'LANG', 'PYTHONDONTWRITEBYTECODE'})
+        self.assertIn({'type': 'RLIMIT_FSIZE', 'hard': 1048576, 'soft': 1048576}, config['process']['rlimits'])
 
     def test_fetch_uses_only_the_configured_source_and_bounded_content(self):
         import httpx

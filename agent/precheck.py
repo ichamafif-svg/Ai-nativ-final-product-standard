@@ -122,7 +122,8 @@ def tools(sandbox: Sandbox, store, base: str, head: str, changed: list) -> dict:
     if not py:
         return out
     for name, args in (("ruff", ("check", "--no-cache", "--output-format=concise", "--isolated", "--select", "E9,F")),
-                       ("mypy", ("--ignore-missing-imports", "--no-incremental", "--follow-imports=silent"))):
+                       ("mypy", ("--ignore-missing-imports", "--no-incremental", "--follow-imports=silent",
+                                  "--cache-dir=/dev/null"))):
         lines = {}
         for label, commit in (("base", base), ("head", head)):
             with sandbox.checkout(store, commit) as tree:
