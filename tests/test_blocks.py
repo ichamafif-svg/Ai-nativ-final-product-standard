@@ -3,7 +3,6 @@ ban list catches product code that goes around them (instruments/bans.py, fact `
 import asyncio
 import base64
 import io
-import json
 import struct
 import sys
 import tempfile
@@ -19,7 +18,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "blocks" / "python")]
 
 try:
     import fastapi  # noqa: F401
-    from fastapi import Depends, FastAPI, UploadFile
+    from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
     import httpx
     import jwt
