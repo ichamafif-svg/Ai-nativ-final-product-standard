@@ -60,7 +60,7 @@ Un test vert, une CI verte ou une signature ne promeuvent jamais un statut.
 Standard est une plateforme **AI-native** qui crée puis, surtout, **maintient en continu** des dépôts et systèmes logiciels par des agents autonomes, **sans accorder d'autorité souveraine** à un agent, à un humain seul ou à un composant seul.
 
 - **BUILD** crée ou transforme : conception, code, vérifications, intégration, déploiement gouverné. Un dépôt peut partir presque de zéro.
-- **RUN** observe le dépôt et la production, détecte les écarts, corrige, vérifie et maintient sécurité, fiabilité et conformité (ISO 27001, NIS2, DORA).
+- **RUN** observe le dépôt et la production, détecte les écarts, corrige, vérifie et maintient sécurité, fiabilité et exigences techniques du code. Les référentiels motivent certaines règles ; Standard ne certifie pas une organisation.
 - BUILD et RUN sont deux contextes d'un **même système**, sous la même loi. Ni BUILD, ni l'initialisation, ni la récupération n'ont de mode « god ».
 
 **Cycle central :** écart → obligation durable → travail autonome → preuve qualifiée → clôture ou escalade.
@@ -153,7 +153,7 @@ Texte normatif. Le digest de FLOOR-0 couvre ce texte, la table de polarité, les
 
 | Constante | Valeur | Rôle |
 |---|---|---|
-| `MIN_HUMANS` | 1 | k minimal ; une équipe le relève dans sa racine |
+| `MIN_HUMANS` | 1 | Un humain, conformément à la forme de racine de cette release |
 | `HUMANS` | 1 | Exactement un humain dans la racine (jusqu'à huit clés : ses appareils) ; au moins un témoin (l'horloge de l'opérateur, `clock`) |
 | `MAX_AHEAD_MS` | 5 min | Avance maximale d'un horodatage sur l'ancre |
 | `DISPATCH_MS` | 5 min | Fenêtre de départ d'une réservation |
@@ -250,7 +250,7 @@ L'autonomie vient de **l'écart entre ce que Standard et le client demandent et 
 Le système part des situations où une personne doit avoir le dernier mot, pas d'une organisation. Trois objets suffisent :
 
 - **Le socle** (`standard/floors.py`, lié à la genèse) : chaque coup possible (une opération), ses routes, et pour chaque seuil la borne que personne ne peut relâcher.
-- **Les règles du jeu** : le document client, signé par l'humain (une entrée `law`), en vigueur aussitôt. Il ne contient que des choix *à l'intérieur* du socle : quelles routes autonomes restent allumées (`routes`), les seuils que ces routes comparent (`settings`, liés dans les atomes `compare` par `@nom`, jamais plus lâches que le socle : le sens se déduit de `ge`/`le`), et ce contre quoi la production est jugée (objectif, latence, fenêtre de mise en production, composants, SLO, sondes, silences). Les options d'équipe y restent (seuil dans la racine, délais par genre, quorum de témoins) : à une personne, elles valent un, zéro et un.
+- **Les règles du jeu** : le document client, signé par l'humain (une entrée `law`), en vigueur aussitôt. Il ne contient que des choix *à l'intérieur* du socle : quelles routes autonomes restent allumées (`routes`), les seuils que ces routes comparent (`settings`, liés dans les atomes `compare` par `@nom`, jamais plus lâches que le socle : le sens se déduit de `ge`/`le`), et ce contre quoi la production est jugée (objectif, latence, fenêtre de mise en production, composants, SLO, sondes, silences). Les options d’équipe sont retirées : un humain, aucun délai d’élargissement et l’horloge de l’opérateur (D61).
 - **Les coups** : chaque opération sur une ressource exacte. Un coup est *prêt* quand une route autonome tient sur des faits mesurés par le scanner, *décidé* quand l'humain a dit oui, *à toi* quand seule ta décision l'ouvre.
 
 **Les trois gestes de l'humain :** **oui** (une observation `decision = approve` sur la ressource exacte du coup), **non** (un gel de la ressource), **règles** (signer de nouvelles règles du jeu). Rien d'autre n'est requis pour qu'une personne et un agent travaillent ; tout le reste est mesuré.
@@ -839,7 +839,7 @@ La patrouille de simplicité recherche doublons, code mort, responsabilités dis
 | **Run** | Run | Composants et signaux, version en production, SLO et budgets, frontière d'autonomie par composant (Voit, Prévient, Agit, Prouve, D29), écarts non couverts en tête, et ce que l'agent retient et pourquoi |
 | **Décisions** (D51) | Commun | La file de l'humain : chaque coup qui attend son oui, avec les faits mesurés, la route qui manque et ce qu'une règle coupée laisse à sa main ; oui (`decision = approve`) ou non (gel), signés dans le navigateur |
 | **Alertes** (D30) | Run | Une alerte s'ouvre quand un composant passe dégradé ou en échec sur 5 minutes, quand un SLO brûle vite (page) ou lentement (ticket), quand une source se tait ou quand une obligation dépasse son échéance ; silences dans les règles du jeu, fermeture au retour du composant. Bandeau sur toutes les pages, badge, titre de l'onglet. Ni e-mail ni messagerie |
-| **Règles du jeu** (D51) | Commun | Qui joue chaque coup (routes autonomes allumées ou coupées), seuils des routes avec la borne du socle, production (objectif, latence, fenêtre, canari), SLO, composants, sondes, silences, options d'équipe, historique. Le serveur rédige le document complet (`POST /api/rules/draft`), le navigateur le signe (`law`), il est en vigueur aussitôt ; le noyau refuse ce qui serait plus lâche que le socle |
+| **Règles du jeu** (D51) | Commun | Qui joue chaque coup (routes autonomes allumées ou coupées), seuils des routes avec la borne du socle, production (objectif, latence, fenêtre, canari), SLO, composants, sondes, silences et historique. Le serveur rédige le document complet (`POST /api/rules/draft`), le navigateur le signe (`law`), il est en vigueur aussitôt ; le noyau refuse ce qui serait plus lâche que le socle |
 | **Autonomie, Activité** | Run | Ce que l'agent fait seul ou avec un oui ; les exigences du socle (sécurité du code, dépendances et chaîne logicielle, CI, gouvernance du code) ; les écarts rangés par qui s'en occupe, les réparations de l'agent, ses abandons et leur dossier |
 | **Demandes** (D34) | Construction | Écrire une demande et ses tests d'acceptation, voir le contrat mesuré (`red` = demande du nouveau ; `passes:N` = ne promet rien), signer le contrat, suivre l'implémentation, l'acceptation et la livraison |
 | **Contributions** | Construction | La boîte de dépôt et les faits mesurés (tests, régressions, décision), avec la raison exacte d'un blocage (`secrets: found:1 -> found:2 [app.py:15…]`) |
@@ -1002,7 +1002,7 @@ La couverture n'est pas « tout ». Elle se choisit cible par cible, avec une ro
 |---|---|---|
 | **Autonome** (recette reproductible + tests) | `sbom`, `vulns`, `actions` | Le correctif est une fonction déterministe de la base et de données épinglées : un instrument indépendant peut le recalculer octet pour octet |
 | **Revue humaine signée** (proposition de l'agent) | `secrets`, `sast`, `ci`, `deps-age`, `licenses` | Le correctif demande du jugement : aucun instrument ne peut le reproduire, donc un humain habilité signe la revue de la transition exacte |
-| **Humaine** (réglage ou attestation) | `branch`, `lineage`, `soa`, 18 mesures organisationnelles | Ce sont des réglages du fournisseur ou des faits d'organisation : Standard mesure ou recueille l'attestation, ne répare pas |
+| **Humaine** (réglage ou attestation) | `branch`, `lineage` | Ce sont des réglages du fournisseur : Standard les mesure ; l’humain intervient chez le fournisseur |
 
 L'agent fait seul tout ce qui ne demande que du calcul : mesurer pour lui-même, proposer, soumettre. Il ne certifie jamais son propre résultat (F0-8) ; c'est un instrument distinct, automatique lui aussi, qui atteste.
 
@@ -1242,7 +1242,7 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | D50 | **Témoins configurables** (remplacée par D61). `[clock] kind = "witnesses"` assemble `WitnessClock` (HTTPS, quorum, `tolerance_ms` borné à 5 s, état persisté). La lecture retourne la cotation la plus tardive : prudente pour toutes ses utilisations (fenêtre de départ, expirations, horizon), les délais d'élargissement restant sur les checkpoints témoignés | Limite : l'indépendance réelle des témoins reste une propriété à qualifier |
 | D51 | **Une personne, un agent, les règles du jeu.** FLOOR-0 descend à un humain, un témoin, aucun délai ; un élargissement prend effet avec sa propre entrée (les options d'équipe sont retirées par D61). F0-12 : chaque opération déclare ses routes ; la route humaine porte `decision = approve` par un humain ; une loi coupe des routes autonomes, jamais l'humaine. Réglages, règles et loi ne font qu'un document client signé (`routes`, `settings` liés par `@nom`, bornés par le socle) ; `standard/rules.json`, `configure`, la sentinelle, `flag`, `heartbeat`, les profils, `compliance_officer`, les cibles organisationnelles et la projection de conformité sont retirés. L'humain a trois gestes : oui, non (gel), règles | Arrêtée |
 | D52 | **L'agent est une boucle sur les coups.** `moves.py` est la lecture commune (agent et humain) : statut, route, file. `loop.py` joue ce qui est prêt ou décidé sous une seule capacité ; ses producteurs (réparation, construction) n'écrivent que des candidats. Les tactiques ne font que retenir. Deux nouveaux faits du scanner : `scoped` (une seule définition du périmètre d'écriture, `instruments/scope.py`) et `window` (fenêtre de mise en production lue dans les règles en vigueur) | Arrêtée |
-| D53 | **Une cérémonie, l'horloge de l'opérateur.** Identités `human`, `agent`, `guard`, `scanner`, `oracle`, `clock` ; capacités `scanner`, `oracle`, `agent`, `human` ; genèse signée par l'humain, ancre par `clock` tant que la loi ne demande pas plus de témoins ; `[clock] kind = "witnesses"` reste l'option d'équipe (au moins deux). `qualify.py` : T02 « l'humain détient sa propre clé », T03 « temps » selon le quorum rejoué | Arrêtée |
+| D53 | **Une cérémonie, l'horloge de l'opérateur.** Identités `human`, `agent`, `guard`, `scanner`, `oracle`, `clock` ; capacités `scanner`, `oracle`, `agent`, `human` ; genèse signée par l'humain, ancre par `clock` tant que la loi ne demande pas plus de témoins ; `[clock] kind = "witnesses"` reste l'option d'équipe (au moins deux). `qualify.py` : T02 « l'humain détient sa propre clé », T03 « temps » selon le quorum rejoué | Options de témoins remplacées par D61 ; seul le temps de l’opérateur reste courant |
 | D54 | **Le catalogue de règles comme données.** 156 règles tirées d'OWASP ASVS 5.0 (345 exigences toutes rendues ou écartées avec raison), CWE Top 25 2025 et la liste de lancement SRE ; format unique pour tous les langages ; mots vagues remplacés par des valeurs nommées à défaut strict ; partie de l'empreinte de la release. Identité par un fournisseur OpenID Connect : les règles de mot de passe, MFA, réinitialisation et énumération vivent dans sa configuration ; les règles de serveur d'autorisation deviennent une seule règle, NO-OWN-AS | Arrêtée |
 | D55 | **Les blocs.** 13 blocs Python (FastAPI d'abord) et un kit front JS, épinglés dans la release ; interdits vérifiés sur l'arbre syntaxique ; fait `blocks` exigé par les routes autonomes `scoped` et `accepted`, la route humaine inchangée ; une copie d'un bloc dans le produit casse | Arrêtée |
 | D56 | **Sondes et couverture.** Sondes de Standard sur l'application du produit (`@app`), dans un processus séparé ; une cible par catégorie de règles ; dette = enfreinte ou non mesurée par manque de déclaration ; patrouille et lacunes de la release visibles, jamais dette ; adoption d'un bloc = dette, pas refus | Arrêtée |
@@ -1293,7 +1293,7 @@ Ce registre est chronologique : une décision ultérieure peut remplacer un méc
 | `[hosting]` | `config`, `gate_user` | Hébergement des dépôts clients, vérifié par `qualify.py` |
 | `[llm.small]`, `[llm.frontier]` | `kind`, `model`, `key_file` | Porte LLM de l'agent |
 
-Les réglages des ingénieurs ne sont pas dans `standard.toml` : ils vivent dans `standard/rules.json` sur `main` (D35), édités par l'interface et entrés par l'opération `configure` ; les silences restent des énoncés signés.
+Les réglages de comportement vivent dans le document client de la loi effective, notamment `settings`. L’interface en prépare une nouvelle version ; l’humain signe une entrée `law`, immédiatement en vigueur. `standard.toml` assemble l’installation et ses budgets opérationnels ; il n’accorde aucun droit. Le fichier `standard/rules.json` et l’opération `configure` sont retirés.
 
 ### 19.2 Laboratoire remplaçable
 
@@ -1385,13 +1385,13 @@ Tout le code hors démonstration appartient à Standard. Aucun produit métier c
 | BUILD/RUN web reconstruisant leurs listes depuis `view` et `findings` | `standard/surface/read_views.py` projette depuis un `ReadModel` commun ; le serveur garde lecture des fichiers, Git et HTTP. Les vues de télémétrie/production gardent leurs propres entrées, sans nouvelle autorité. |
 | Second juge et tests adversariaux ciblés, sans démonstration générale ni domaine de panne distinct | Limite conservée : aucun énoncé universel de tolérance à un bug ; isolation physique à qualifier |
 
-Les fonctions communes de Standard sont conservées avec leurs contrats de test. Cette consolidation ne certifie pas les propriétés physiques, ne transforme pas les inconnues en preuves et ne prétend pas achever toutes les capacités de Standard. Le chemin `standard/rules.json` reste le contrat du dépôt client ; il est distinct du paquet Python `standard/` de ce dépôt. Aucune règle, permission ou forme d’enveloppe n’a été renommée.
+Les fonctions communes de Standard sont conservées avec leurs contrats de test. Cette consolidation ne certifie pas les propriétés physiques, ne transforme pas les inconnues en preuves et ne prétend pas achever toutes les capacités de Standard. Le paquet Python `standard/` de ce dépôt appartient au socle commun. Le répertoire réservé `standard/` d’un dépôt client ne donne aucune autorité à un fichier : seule la loi admise dans le journal fait foi. Les formes d’enveloppe de l’admission restent inchangées par le workflow de D62.
 
 ---
 
 ### 20.2 Couverture réelle des instruments
 
-`make coverage` (ou `python -m tools.coverage --json`) inventorie les 33 cibles de la release en comparant les floors aux registres des probes, jobs, contrats et routes de réparation. La commande est informative : elle n’exécute aucun instrument, ne signe aucun fait et ne qualifie aucune installation. `REGISTERED` signifie présent dans la passe, pas complet ; `CONDITIONAL` dépend de la configuration ; `MANUAL` est une attestation humaine ; `MISSING` est une mesure absente. Une future cible inconnue reste manquante.
+`make coverage` (ou `python -m tools.coverage --json`) inventorie les 31 cibles de la release (inventaire, 8 techniques, 17 catégories de règles, 2 réglages fournisseur, 3 RUN) en comparant les floors aux registres des probes, jobs, contrats et routes de réparation. La commande est informative : elle n’exécute aucun instrument, ne signe aucun fait et ne qualifie aucune installation. `REGISTERED` signifie présent dans la passe, pas complet ; `CONDITIONAL` dépend de la configuration ; `MANUAL` est une attestation humaine ; `MISSING` est une mesure absente. Une future cible inconnue reste manquante.
 
 La couverture ci-dessous décrit le code actuel, pas une certification du service :
 
@@ -1410,15 +1410,15 @@ La couverture ci-dessous décrit le code actuel, pas une certification du servic
 | Tests et demandes BUILD | Suite de main sur base/head ; contrat d’acceptation signé, intact, initialement rouge puis vert | Propositions, revue signée, CAS main et preuve | **Implémenté sur le périmètre des suites** : code testé et lecteur du rapport partagent l’exécutant ; tests seuls insuffisants, pas preuve des besoins métier |
 | Non-régression | Sondes locales sur base/head, conservation de la suite de main | Admission conditionnée aux faits/revue | **Partiel** : ne couvre que les sondes actuelles ; certaines réparations suivies par recette sont exemptées ; pas règle globale de performance/accessibilité |
 | Service en exploitation | Métriques Prometheus reconnues, probes HTTP déclarés, budgets SLO, p99, jobs et processus | Agent release : deploy/rollback/restart/canary/abort ; registres CAS et relecture | **Conditionnel/partiel** : sources déclarées seulement ; métriques propres au service attestées, preuve de version inconnue encore permissive (§20.1) |
-| Conformité organisationnelle | SOA et 18 cibles : accès, risques, backups, incidents, fournisseurs, etc. | Attestations signées/fraîches, tâches humaines | **Manuel** : aucune inspection automatique de la réalité de ces contrôles ; aucune certification ISO/NIS2/DORA produite |
+| Catalogue de règles | 17 catégories mesurées par les sondes et contrôles disponibles ; import, câblage syntaxique et comportement distingués | Construction/revues U, mesure indépendante, périmètre et non-régression | **Partiel** : lacunes de la release, règles patrouillées et limites lexicales restent visibles ; une catégorie inconnue ne peut pas devenir tenue |
 
-Les 8 cibles techniques ont désormais 8 probes, dont la suite de main pour `ci`. Les 2 cibles de paramètres ont des probes. Les 18 cibles organisationnelles et la SOA reposent sur des attestations. Les 3 cibles RUN nécessitent une configuration. Seules `sbom`, `vulns`, `actions` ont une recette reproductible ; une recette enregistrée peut néanmoins être inapplicable aux entrées. Ni un job ni un helper ne valent une chaîne complète.
+Les 8 cibles techniques ont désormais 8 probes, dont la suite de main pour `ci`. Les 2 cibles de paramètres ont des probes. Les 17 catégories du catalogue ont leurs cibles dynamiques ; les anciennes cibles organisationnelles et la SOA sont retirées (D51). Les 3 cibles RUN nécessitent une configuration. Seules `sbom`, `vulns`, `actions` ont une recette reproductible ; une recette enregistrée peut néanmoins être inapplicable aux entrées. Ni un job ni un helper ne valent une chaîne complète.
 
 ### 20.3 Couverture réelle des outils de Standard
 
 | Outil | Fonction actuelle | Ce qu’il reste à couvrir |
 |---|---|---|
-| `tools/ceremony.py` | Genèse, activation après délai, séparation garde/agent, capacités | Cycle de release/migration qualifiée, rotation opérationnelle et récupération multi-hôte ; pas de migration implicite |
+| `tools/ceremony.py` | Genèse signée, capacités en vigueur immédiatement, séparation garde/agent | Cycle de release/migration qualifiée, rotation opérationnelle et récupération multi-hôte ; pas de migration implicite |
 | `tools/install_server.sh` | Laboratoire Ubuntu remplaçable, dépôt initial vide, comptes Unix, systemd, exécutant ; n'altère ni SSH ni pare-feu | Installation production indépendante, sauvegarde/restauration, contrôles de dérive ; ne pas l'utiliser avec des données client |
 | `tools/host.py` | Dépôts canoniques/inbox, accès SSH forcé par identité | Gestion complète du cycle des accès, offboarding, sauvegarde/restauration et hébergement multi-tenant qualifié |
 | `tools/refresh_data.py` | Instantané OSV/PyPI et résolution de références GitHub, pin par digest | Acquisition planifiée, données multi-écosystèmes, provenance/approbation, fraîcheur et redistribution à grande échelle |
