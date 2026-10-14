@@ -318,7 +318,11 @@ class CryptoParseProcess(unittest.TestCase):
         box = seal(k, b"data", b"ctx")
         self.assertEqual(open_(k, box, b"ctx"), b"data")
         self.assertNotEqual(seal(k, b"data"), seal(k, b"data"))                       # a fresh nonce each time
-        for bad in (box[:-2] + "AA", seal(key(), b"data", b"ctx")):
+        prefix, body = box.rsplit(".", 1)
+        # A different leading base64 character always changes decoded bytes; replacing the tail can be a no-op.
+        tampered = prefix + "." + ("B" if body[0] == "A" else "A") + body[1:]
+        self.assertNotEqual(tampered, box)
+        for bad in (tampered, seal(key(), b"data", b"ctx")):
             with self.assertRaises(CryptoError):
                 open_(k, bad, b"ctx")
         with self.assertRaises(CryptoError):
