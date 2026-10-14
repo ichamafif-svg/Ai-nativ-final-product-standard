@@ -131,7 +131,7 @@ async function idp() {
   }
   const now = () => Math.floor(Date.now() / 1000);
   const claimsFor = (nonce, sub = "alice", roles = ["clerk"]) =>
-    ({ iss: ISSUER, aud: "shop", sub, exp: now() + 300, iat: now(), nonce, roles, ...state.override });
+    ({ iss: ISSUER, aud: "shop", sub, exp: now() + 300, iat: now(), nonce, roles, amr: ["pwd", "otp"], ...state.override });
   async function fetch(url, init = {}) {
     if (url === `${ISSUER}/.well-known/openid-configuration`) {
       return Response.json({ issuer: ISSUER, authorization_endpoint: `${ISSUER}/auth`, token_endpoint: `${ISSUER}/token`, jwks_uri: `${ISSUER}/certs` });

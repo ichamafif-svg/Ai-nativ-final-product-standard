@@ -5,16 +5,22 @@ DOS-HEAVY).
     key = secret("billing-key")               # from the vault folder, by reference
     install(app, checks={"db": db_ok})        # GET /health, clean shutdown, debug refused in production
     q = bounded_queue()                       # never unbounded
+
+Beyond the checklists: a secret comes back as a Secret (it never prints or logs), is refused when anyone may write
+it or when it is empty, and is read without following a link out of the vault; /health tells the outside only ok or
+down (the names of the checks stay inside in production); a check that hangs counts as down.
 """
 from __future__ import annotations
 
 import asyncio
 import os
 import re
+import stat
 from pathlib import Path
 
 from . import Values
 from . import log
+from .types import Secret
 
 NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,99}")
 
@@ -33,16 +39,24 @@ def load(model):
     return model.model_validate(data)
 
 
-def secret(name: str) -> str:
+def secret(name: str) -> Secret:
     """A secret from the vault folder (STANDARD_SECRETS_DIR, default /run/secrets): the environment only names it."""
-    if not NAME.fullmatch(name):
+    if not NAME.fullmatch(name) or ".." in name:
         raise RuntimeRefused("a secret name is lower-case letters, digits, . _ -")
-    root = Path(os.environ.get("STANDARD_SECRETS_DIR", "/run/secrets"))
-    path = root / name
+    root = Path(os.environ.get("STANDARD_SECRETS_DIR", "/run/secrets")).resolve()
+    path = (root / name).resolve()                     # orchestrators link secrets inside the vault: allowed
+    if root not in path.parents:
+        raise RuntimeRefused(f"secret {name} leads out of the vault")
     try:
-        return path.read_text(encoding="utf-8").strip()
+        info = path.stat()
+        if info.st_mode & stat.S_IWOTH or (info.st_mode & stat.S_IWGRP and info.st_uid != os.getuid()):
+            raise RuntimeRefused(f"secret {name} can be written by others")
+        value = path.read_text(encoding="utf-8").strip()
     except OSError:
         raise RuntimeRefused(f"secret {name} is not in the vault") from None
+    if not value:
+        raise RuntimeRefused(f"secret {name} is empty")
+    return Secret(value)
 
 
 def bounded_queue(maxsize: int | None = None, values: Values | None = None) -> asyncio.Queue:
@@ -70,11 +84,14 @@ def install(app, *, checks: dict | None = None, closers=()):
                 result = check()
                 if asyncio.iscoroutine(result):
                     result = await asyncio.wait_for(result, 2)
-                results[name] = "ok" if result else "down"
+                results[name] = "ok" if result is True else "down"
             except Exception:
                 results[name] = "down"
         ok = all(v == "ok" for v in results.values())
-        return JSONResponse({"status": "ok" if ok else "down", "checks": results}, status_code=200 if ok else 503)
+        body = {"status": "ok" if ok else "down"}
+        if os.environ.get("STANDARD_ENV") != "production":
+            body["checks"] = results
+        return JSONResponse(body, status_code=200 if ok else 503, headers={"cache-control": "no-store"})
 
     async def on_shutdown():
         state["stopping"] = True

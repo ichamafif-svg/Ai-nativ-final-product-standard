@@ -14,6 +14,12 @@ standard/catalog/blocks.toml, checked by Standard's scanner on every change).
     render    templates, HTML sanitising, URL building
     log       structured, redacted logs
     runtime   settings, secrets, health, shutdown, bounded queues, last-resort errors
+    data      owner and tenant filters, applied to every ORM statement of a user's session
+    types     Secret, SafeHtml, TrustedUrl: values whose misuse is a type error, not a review comment
+    store     where sessions and rate limits live: in memory for one process, Redis for several
+
+Every block fails closed: a missing or malformed value, an unknown case, a dependency that cannot answer, all refuse.
+Products extend a block only through hooks that can refuse more, never accept more; loosening is a signed value.
 
 Values (`@origins`, `@upload_max_bytes`…) come from the rules of the game the human signed, handed to the product as
 JSON in STANDARD_VALUES (or a file named by STANDARD_VALUES_FILE); a value absent takes its strict default.
@@ -24,9 +30,38 @@ import json
 import os
 import threading
 
-from ._defaults import DEFAULTS
+from ._defaults import DEFAULTS, TYPES
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+_KIND = {"list": list, "map": dict, "int": int, "text": str}
+
+
+class ValuesError(RuntimeError):
+    """The values handed to the product cannot be read: the product refuses to run on a guess."""
+
+
+def _checked(chosen) -> dict:
+    """Keep only well-typed values; a value of the wrong type keeps its strict default (and says so)."""
+    if not isinstance(chosen, dict):
+        raise ValuesError("the values in force are a JSON object")
+    out = {}
+    for name, value in chosen.items():
+        kind = _KIND.get(TYPES.get(name, ""))
+        ok = kind is not None and isinstance(value, kind) and not (kind is int and isinstance(value, bool))
+        if ok and kind is int and value < 0:
+            ok = False
+        if ok and kind is list and not all(isinstance(v, (str, int)) for v in value):
+            ok = False
+        if ok:
+            out[name] = value
+        elif name not in _REPORTED:
+            _REPORTED.add(name)
+            import sys
+            print(f'{{"event": "security.values.refused", "name": {json.dumps(str(name)[:80])}}}', file=sys.stderr)
+    return out
+
+
+_REPORTED: set = set()
 
 
 class Values:
@@ -40,12 +75,22 @@ class Values:
     def from_env(cls) -> "Values":
         path = os.environ.get("STANDARD_VALUES_FILE")
         if path:
-            return cls(source=lambda: json.loads(open(path, encoding="utf-8").read()))
-        return cls(json.loads(os.environ.get("STANDARD_VALUES", "{}") or "{}"))
+            def read():
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        return json.load(f)
+                except (OSError, ValueError) as exc:
+                    raise ValuesError(f"STANDARD_VALUES_FILE cannot be read: {type(exc).__name__}") from None
+            read()                                          # at start: a broken file stops the product now
+            return cls(source=read)
+        try:
+            return cls(json.loads(os.environ.get("STANDARD_VALUES", "{}") or "{}"))
+        except ValueError:
+            raise ValuesError("STANDARD_VALUES is not JSON") from None
 
     def _all(self) -> dict:
         chosen = self._source() if self._source else self._chosen
-        return {**DEFAULTS, **(chosen if isinstance(chosen, dict) else {})}
+        return {**DEFAULTS, **_checked(chosen)}
 
     def __getitem__(self, name: str):
         values = self._all()

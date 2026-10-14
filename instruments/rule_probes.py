@@ -367,7 +367,8 @@ class Probe:
                     return httpx.Response(400, json={"error": "invalid_grant"})
                 now = int(time.time())
                 claims = {"iss": iss, "aud": oidc.client_id, "sub": "probe-user", "iat": now, "exp": now + 300,
-                          "auth_time": pend.get("auth_time", now), "nonce": pend["nonce"], "roles": ["admin"]}
+                          "auth_time": pend.get("auth_time", now), "nonce": pend["nonce"], "roles": ["admin"],
+                          "amr": ["pwd", "otp"]}
                 return httpx.Response(200, json={"id_token": jwt.encode(claims, key, "ES256", headers={"kid": "probe"})})
             return httpx.Response(404)
         oidc.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -439,11 +440,9 @@ class Probe:
             sid = c.cookies.get("__Host-session")
             if not sid:
                 return ["no session after sign-in"]
-            rec = oidc.sessions.by_id.get(sid)
             idle = float(self.values.get("session_idle_min", 15)) * 60
-            if rec is None:
+            if not oidc.sessions.backdate(sid, idle + 1):
                 return ["no server-side session"]
-            rec["seen"] -= idle + 1
             return [] if (await c.get("/auth/sessions")).status_code == 401 else ["an idle session stayed open"]
         return await self._session(body)
 

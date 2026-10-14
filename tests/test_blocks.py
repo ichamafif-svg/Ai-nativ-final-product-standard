@@ -222,7 +222,8 @@ class Session(unittest.TestCase):
                     return httpx.Response(400, json={"error": "pkce"})
                 now = int(time.time())
                 claims = {"iss": self.ISS, "aud": "shop", "sub": "u-1", "iat": now, "exp": now + 300,
-                          "auth_time": now, "nonce": pending["nonce"], "roles": ["clerk"], **self.claims}
+                          "auth_time": now, "nonce": pending["nonce"], "roles": ["clerk"], "amr": ["pwd", "otp"],
+                          **self.claims}
                 return httpx.Response(200, json={"id_token": jwt.encode(claims, self.key, "RS256",
                                                                         headers={"kid": "k1"})})
             return httpx.Response(404)

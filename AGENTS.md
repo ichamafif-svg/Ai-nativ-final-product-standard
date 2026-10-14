@@ -44,7 +44,12 @@ FastAPI: `secure_app` for the web layer, `Oidc(...).bind(app)` for sign-in and s
 `runtime`, `data`. Next.js (`@standard/blocks`): `guard(values, NextResponse)` as the middleware and
 `securityHeaders(values)` in next.config, `createOidc(...)` for sign-in, `access.route("id", fn)` on every route
 handler and `access.action("id", fn, req)` on every server action, `body(request, Schema)` with a strict Zod schema.
-Each pass shows the use for your product's stack; a block your stack does not have yet is not owed, its bans hold. The APIs a block
+Each pass shows the use for your product's stack; a block your stack does not have yet is not owed, its bans hold.
+Use the blocks' types and helpers rather than plain values: `secret()` gives a `Secret` (`.reveal()` only where the
+value is really sent), `for_user(session, user)` for every database session of a request, `arg()` for any user value
+passed to a process, `Text[n]`/`Id`/`Email` in input models. To narrow access, add `also=` predicates; to add a guard
+check, pass `refuse=`: both can only refuse. What the blocks guarantee beyond the standards is in
+`blocks/HARDENING.md`. The APIs a block
 covers are banned elsewhere (`standard/catalog/blocks.toml`); the scanner signs `blocks = clean` only when a change adds
 none. Never copy a block into the product. Values such as `@access`, `@upload_max_bytes` or `@app` are the human's: you
 may draft them, never decide them.

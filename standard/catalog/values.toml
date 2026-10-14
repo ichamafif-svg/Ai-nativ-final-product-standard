@@ -157,6 +157,41 @@ doc = "most items a queue or pool may hold."
 default = 1000
 way = "less"
 
+[body_max_bytes]
+type = "int"
+doc = "largest request body outside file uploads (uploads use @upload_max_bytes); larger bodies get 413 before any parsing."
+default = 1000000
+way = "less"
+
+[json_max_depth]
+type = "int"
+doc = "deepest nesting a JSON body may have; deeper bodies are refused before parsing (stack and CPU exhaustion)."
+default = 32
+way = "less"
+
+[request_timeout_s]
+type = "int"
+doc = "longest a request may take before its response starts; past it the request is cancelled with 503."
+default = 30
+way = "less"
+
+[outbound_max_bytes]
+type = "int"
+doc = "largest response read from another service; the rest is refused, never buffered."
+default = 10485760
+way = "less"
+
+[hosts]
+type = "list"
+doc = "host names the product answers to (Host header); any other host gets 421 (host header injection, poisoned links). No default: until it is set, the check is a coverage debt."
+way = "less"
+
+[trusted_types]
+type = "text"
+doc = "Trusted Types in the CSP, so the browser refuses strings in DOM sinks (innerHTML, eval, script src): enforce | report | off."
+default = "enforce"
+way = "more"
+
 [retention_days]
 type = "map"
 doc = "model -> days a record is kept once unused. No default: the rule stays uncovered until the human sets it."
