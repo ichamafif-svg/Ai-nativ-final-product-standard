@@ -150,7 +150,7 @@ class Installation:
         view = self.client.view()
         drop = [tuple(x) for x in body.get("drop", []) if isinstance(x, list) and len(x) == 2]
         client = change(view["law"]["client"], settings=body.get("settings"), routes=body.get("routes"),
-                        sections=body.get("sections"), drop=drop)
+                        sections=body.get("sections"), drop=drop, values=body.get("values"))
         return {"client": client, "domain": view["prefix"]["genesis"], "as_of": view["health"]["as_of"]}
 
     def store_request(self, body: dict) -> dict:
@@ -330,6 +330,16 @@ class Installation:
                 "budget": 1 - (failures / events) / allowed, "fast_alerts": episodes["fast"],
                 "slow_alerts": episodes["slow"], "window_d": window_d}
 
+    @staticmethod
+    def named_values(rules) -> dict:
+        """The catalog's named values as the human edits them: what each means, its strict default, what is chosen."""
+        from standard.catalog import load
+        cat, current, chosen = load(), rules.values(), rules.get("values") or {}
+        return {name: {"doc": spec["doc"], "type": spec["type"], "default": spec.get("default"),
+                       "current": current.get(name), "chosen": name in chosen,
+                       "rules": sorted(r["id"] for r in cat["rules"] if name in r.get("values", []))}
+                for name, spec in cat["values"].items()}
+
     def settings(self) -> dict:
         """The rules of the game as the human edits them: every move and its routes (on or off), every setting with
         the socle's bound, the components to tune, who changed the rules and when (D51)."""
@@ -348,6 +358,7 @@ class Installation:
                           "team": {"delays": view["law"]["effective"]["delays"],
                                    "witnesses": view["law"]["effective"]["witnesses"]},
                           "history": view.get("rules_history", []),
+                          "values": self.named_values(rules),
                           "silences": rules.silences(int(time.time() * 1000))},
                 "components": components, "slos": self.flagged(findings, rules),
                 "probes": findings.get("run:probes", {}).get("details", []), "configured": self.deploy_root is not None,

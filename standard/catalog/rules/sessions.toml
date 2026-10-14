@@ -1,0 +1,124 @@
+category = "Sessions"
+
+[[rule]]
+id = "SESSION-TOKEN"
+do = "Let the session block create and check sessions on the server: 128-bit random ids, never a static key."
+never = "Sign your own session cookie; trust a session decoded in the browser."
+applies = ["oidc"]
+when = ["construct:cookie-set"]
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks"]
+asvs = ["7.2.1", "7.2.2", "7.2.3"]
+cwe = ["330", "384"]
+
+[[rule]]
+id = "SESSION-ROTATE"
+do = "A new session id at every sign-in and re-authentication; the old one ends."
+never = "Keep the pre-login session id after sign-in."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:session-rotation"]
+asvs = ["7.2.4"]
+cwe = ["384"]
+
+[[rule]]
+id = "SESSION-TIMEOUT"
+do = "Sessions end after @session_idle_min idle and @session_max_hours in total."
+never = "A session that lives until the browser closes."
+applies = ["oidc"]
+when = []
+who = ["det", "human"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+values = ["session_idle_min", "session_max_hours"]
+check = ["blocks", "probe:session-timeout"]
+asvs = ["7.3.1", "7.3.2"]
+cwe = ["613"]
+
+[[rule]]
+id = "SESSION-END"
+do = "Logout, account removal and credential changes end the sessions (all of them on request) and clear what the client stored."
+never = "A logout that only deletes the cookie in the browser."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:logout"]
+asvs = ["7.4.1", "7.4.2", "7.4.3", "7.4.5", "14.3.1"]
+cwe = ["613"]
+
+[[rule]]
+id = "LOGOUT-VISIBLE"
+do = "Every signed-in page shows a logout control."
+never = "Logout hidden in a settings page."
+applies = ["oidc", "web"]
+when = ["surface:template"]
+who = ["det"]
+block = "session"
+absorb = "partial"
+pass = "fine"
+phase = "build"
+check = ["probe:logout"]
+asvs = ["7.4.4"]
+cwe = []
+
+[[rule]]
+id = "REAUTH"
+do = "Routes in @sensitive_actions ask the user to sign in again first (the session block's fresh() dependency)."
+never = "Change an e-mail, a payout account or a security setting on an old session."
+applies = ["oidc"]
+when = ["surface:endpoint"]
+who = ["det", "human"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+values = ["sensitive_actions"]
+check = ["blocks", "probe:reauth"]
+asvs = ["7.5.1", "7.5.3"]
+cwe = ["306"]
+py_ok = '''@app.post("/account/email", dependencies=[allow("account.email"), fresh()])'''
+
+[[rule]]
+id = "SESSION-LIST"
+do = "Users can see their active sessions and end any of them."
+never = "No way to end a session on a lost device."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:logout"]
+asvs = ["7.5.2"]
+cwe = ["613"]
+
+[[rule]]
+id = "FED-SESSION"
+do = "Sessions with the identity provider follow its lifetime and logout, and start only on the user's explicit action."
+never = "A silent sign-in the user did not ask for."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:oidc-flow"]
+asvs = ["7.1.3", "7.6.1", "7.6.2"]
+cwe = ["613"]

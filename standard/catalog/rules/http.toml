@@ -1,0 +1,95 @@
+category = "HTTP and APIs"
+
+[[rule]]
+id = "HTTPS-REDIRECT"
+do = "Redirect HTTP to HTTPS on pages people open in a browser only; APIs answer HTTP with an error."
+never = "An API that silently follows HTTP to HTTPS (its first request already leaked)."
+applies = ["web"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "run"
+check = ["blocks", "probe:https-redirect"]
+asvs = ["4.1.2"]
+cwe = ["319"]
+
+[[rule]]
+id = "TRUSTED-HEADERS"
+do = "Read the client address and forwarded headers only when the request comes from @trusted_proxies."
+never = "Trust X-Forwarded-For, X-Real-IP or Host from anyone."
+applies = ["api"]
+when = ["construct:header-read"]
+who = ["det", "human"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "build"
+values = ["trusted_proxies"]
+check = ["blocks"]
+asvs = ["4.1.3", "15.3.4"]
+cwe = ["348"]
+py_ok = '''ip = client_ip(request)   # the web block applies @trusted_proxies'''
+py_no = '''ip = request.headers["x-forwarded-for"]'''
+
+[[rule]]
+id = "METHODS"
+do = "Answer only the methods each route declares; TRACE and unused methods return 405."
+never = "A catch-all route that accepts every method."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "run"
+check = ["blocks", "probe:methods"]
+asvs = ["4.1.4", "13.4.4"]
+cwe = ["650"]
+
+[[rule]]
+id = "MSG-SIGN"
+do = "Sign each request of an operation in @high_value with a per-message signature the server verifies."
+never = "Rely on TLS alone for those operations."
+applies = ["high-value"]
+when = ["surface:endpoint"]
+who = ["human", "ai"]
+block = ""
+absorb = "none"
+pass = "wide"
+phase = "build"
+values = ["high_value"]
+check = ["human", "patrol"]
+asvs = ["4.1.5"]
+cwe = ["345"]
+
+[[rule]]
+id = "GRAPHQL"
+do = "Limit GraphQL depth and cost, allow-list persisted queries, and turn introspection off in production unless the API is public."
+never = "An unbounded GraphQL endpoint."
+applies = ["graphql"]
+when = ["surface:graphql-schema"]
+who = ["det", "human"]
+block = "web"
+absorb = "partial"
+pass = "medium"
+phase = "build"
+check = ["blocks", "test:graphql-limits"]
+asvs = ["4.3.1", "4.3.2"]
+cwe = ["770"]
+
+[[rule]]
+id = "WEBSOCKET"
+do = "Serve WebSockets over WSS only, check Origin at the handshake, and authenticate with the HTTPS session."
+never = "ws://; a socket token from the query string; no Origin check."
+applies = ["websocket"]
+when = ["surface:websocket-endpoint"]
+who = ["det"]
+block = "web"
+absorb = "partial"
+pass = "medium"
+phase = "build"
+check = ["blocks", "test:websocket-origin"]
+asvs = ["4.4.1", "4.4.2", "4.4.3", "4.4.4"]
+cwe = ["1385"]

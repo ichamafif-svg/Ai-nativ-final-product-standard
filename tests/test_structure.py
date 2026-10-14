@@ -126,6 +126,10 @@ class Structure(unittest.TestCase):
             else:
                 path.mkdir(parents=True, exist_ok=True)
                 (path / "__init__.py").touch()
+        from standard.runtime import CATALOG_DATA
+        (self.root / "standard/catalog/rules").mkdir(parents=True, exist_ok=True)
+        for name in CATALOG_DATA:
+            (self.root / "standard/catalog" / name).touch()
         core, installed = core_digest(self.root), installation_digest(self.root)
         runtime = self.write("standard/runtime/operator.py", "VERSION = 1\n")
         self.assertEqual(core_digest(self.root), core)

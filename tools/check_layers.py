@@ -18,9 +18,12 @@ ALLOWED = {
     "instruments": ("kernel", "instruments"),
     "standard/__init__.py": (),
     "standard/floors.py": ("kernel",),
-    "standard/runtime": ("kernel", "bt", "instruments", "standard.floors", "standard.runtime"),
-    "standard/autonomy": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.floors", "standard.autonomy"),
-    "standard/surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.autonomy", "standard.surface"),
+    "standard/catalog": ("kernel", "standard.catalog"),
+    "standard/runtime": ("kernel", "bt", "instruments", "standard.floors", "standard.catalog", "standard.runtime"),
+    "standard/autonomy": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.floors", "standard.catalog",
+                          "standard.autonomy"),
+    "standard/surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "standard.catalog", "standard.autonomy",
+                         "standard.surface"),
     "tools": ("kernel", "bt", "instruments", "standard", "tools"),
     "examples": (),
 }
@@ -85,7 +88,7 @@ def violations(root: Path = ROOT) -> list[str]:
         rel = str(path.relative_to(root))
         if not (rel in ("standard/__init__.py", "standard/floors.py")
                 or any(rel.startswith(prefix + "/") for prefix in
-                       ("standard/runtime", "standard/autonomy", "standard/surface"))):
+                       ("standard/runtime", "standard/autonomy", "standard/surface", "standard/catalog"))):
             problems.append(f"{rel}: Standard module has no declared role")
     return problems
 

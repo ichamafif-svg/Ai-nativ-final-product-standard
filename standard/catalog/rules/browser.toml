@@ -1,0 +1,205 @@
+category = "Browser"
+
+[[rule]]
+id = "CONTENT-TYPE"
+do = "Every response carries the Content-Type of what it holds, with its charset."
+never = "JSON served as text/html; a file served with a type guessed from its name."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "run"
+check = ["blocks", "probe:headers"]
+asvs = ["3.2.1", "4.1.1"]
+cwe = ["436"]
+
+[[rule]]
+id = "DOM-CLOBBER"
+do = "Declare variables explicitly and read elements with getElementById or querySelector."
+never = "Read window.someId or document.someName as if it were a variable."
+applies = ["lang:js"]
+when = ["surface:client-script"]
+who = ["det", "ai"]
+block = "front"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["3.2.3"]
+cwe = ["79"]
+
+[[rule]]
+id = "COOKIES"
+do = "Set cookies through the web block: __Host- prefix, Secure, HttpOnly unless a script must read it, SameSite, under 4 KB."
+never = "response.set_cookie without these flags."
+applies = ["web"]
+when = ["construct:cookie-set", "surface:cookie"]
+who = ["det"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "run"
+check = ["blocks", "probe:cookies"]
+asvs = ["3.3.1", "3.3.2", "3.3.3", "3.3.4", "3.3.5"]
+cwe = ["614", "1004"]
+
+[[rule]]
+id = "HSTS"
+do = "Send Strict-Transport-Security on every response, max-age one year, includeSubDomains, and preload the domain."
+never = "HSTS only on some routes; a max-age under a year."
+applies = ["web"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "run"
+check = ["blocks", "probe:headers"]
+asvs = ["3.4.1", "3.7.4"]
+cwe = ["319"]
+
+[[rule]]
+id = "CORS"
+do = "Allow cross-origin calls only from @origins, through the web block."
+never = "Access-Control-Allow-Origin: * with credentials; echoing the request's Origin."
+applies = ["api"]
+when = ["surface:endpoint"]
+who = ["det", "human"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "run"
+values = ["origins"]
+check = ["blocks", "probe:cors"]
+asvs = ["3.4.2", "3.5.1", "3.5.2"]
+cwe = ["942"]
+
+[[rule]]
+id = "SEC-HEADERS"
+do = "Send CSP (self plus @csp_sources, frame-ancestors none, report-to), X-Content-Type-Options nosniff, Referrer-Policy strict-origin-when-cross-origin and Cross-Origin-Opener-Policy same-origin."
+never = "unsafe-inline or unsafe-eval in the CSP; a page that can be framed."
+applies = ["web"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "run"
+values = ["csp_sources"]
+check = ["blocks", "probe:headers"]
+asvs = ["3.4.3", "3.4.4", "3.4.5", "3.4.6", "3.4.7", "3.4.8"]
+cwe = ["1021"]
+
+[[rule]]
+id = "CSRF"
+do = "Change state only with POST, PUT, PATCH or DELETE, protected by the web block's CSRF check when a cookie authenticates."
+never = "A GET that changes state; a form without the CSRF token."
+applies = ["web"]
+when = ["surface:endpoint", "surface:form"]
+who = ["det"]
+block = "web"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:csrf"]
+asvs = ["3.5.3"]
+cwe = ["352"]
+py_ok = '''@app.post("/orders/{oid}/cancel")'''
+py_no = '''@app.get("/orders/{oid}/cancel")'''
+
+[[rule]]
+id = "ORIGIN-SPLIT"
+do = "Host separate applications on separate hostnames."
+never = "Two applications under one origin, sharing cookies and storage."
+applies = ["web"]
+when = []
+who = ["human"]
+block = ""
+absorb = "none"
+pass = "wide"
+phase = "run"
+check = ["human"]
+asvs = ["3.5.4"]
+cwe = []
+
+[[rule]]
+id = "POSTMESSAGE"
+do = "Receive window messages through listen(): the origin is checked against a list and the message against a schema."
+never = "addEventListener('message', …) without checking event.origin."
+applies = ["lang:js"]
+when = ["construct:postmessage"]
+who = ["det"]
+block = "front"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["3.5.5"]
+cwe = ["346"]
+js_ok = '''listen(["https://pay.example"], PaymentResult, onResult)'''
+js_no = '''window.addEventListener("message", (e) => onResult(e.data))'''
+
+[[rule]]
+id = "XSSI"
+do = "Serve data as JSON from authenticated routes, never inside scripts; embed authenticated resources only on purpose."
+never = "JSONP; user data inside a .js response."
+applies = ["web"]
+when = ["surface:endpoint"]
+who = ["det", "ai"]
+block = "web"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "probe:headers"]
+asvs = ["3.5.6", "3.5.7", "3.5.8"]
+cwe = ["352"]
+
+[[rule]]
+id = "SRI"
+do = "Serve scripts and styles from the app, or pin each external one with integrity and crossorigin."
+never = "<script src> from a CDN without integrity."
+applies = ["web"]
+when = ["surface:template", "surface:client-script"]
+who = ["det"]
+block = "front"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "probe:sri"]
+asvs = ["3.6.1"]
+cwe = ["353"]
+
+[[rule]]
+id = "FRONT-TECH"
+do = "Use only browser technologies still supported (no Flash, ActiveX, NPAPI, Silverlight, Java applets)."
+never = "An unsupported plug-in or library past its end of life."
+applies = ["web"]
+when = ["surface:client-script", "surface:dependency"]
+who = ["det"]
+block = "front"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks"]
+asvs = ["3.7.1"]
+cwe = ["1104"]
+
+[[rule]]
+id = "REDIRECT"
+do = "Redirect within the app freely; outside it only to @redirect_targets, after telling the user."
+never = "RedirectResponse(request.query_params['next'])."
+applies = ["web"]
+when = ["construct:redirect"]
+who = ["det", "human"]
+block = "web"
+absorb = "full"
+pass = "fine"
+phase = "build"
+values = ["redirect_targets"]
+check = ["blocks", "probe:redirects"]
+asvs = ["3.7.2", "3.7.3"]
+cwe = ["601"]
+py_ok = '''return redirect_to(next_path)   # same-site path or @redirect_targets'''
+py_no = '''return RedirectResponse(request.query_params["next"])'''

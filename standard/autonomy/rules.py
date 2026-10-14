@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 from instruments.production import PROBE, SELECTOR, component_id, measures
 from kernel.law import setting_ways
+from standard.catalog import CatalogError, check_value, effective, load as load_catalog
 from standard.floors import FLOORS
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -117,11 +118,24 @@ def setting(key: str, value):
     return parse(kind, spec, key, value)
 
 
-def change(client: dict, *, settings=None, routes=None, sections=None, drop=()) -> dict:
+def change(client: dict, *, settings=None, routes=None, sections=None, drop=(), values=None) -> dict:
     """The client's rules with these changes: settings {key: value}, routes {op: [autonomous routes kept]},
-    sections {section: {id: {field: value}}} (components, probes, SLOs, silences), drop [(section, id)]."""
+    sections {section: {id: {field: value}}} (components, probes, SLOs, silences), drop [(section, id)], values
+    {name: value} (the catalog's named values; None resets one to its strict default)."""
     out = copy.deepcopy(client)
     s = out.setdefault("settings", {})
+    if values:
+        cat, chosen = load_catalog(), s.setdefault("values", {})
+        for name, value in values.items():
+            try:
+                if value is None:
+                    chosen.pop(name, None)
+                else:
+                    chosen[name] = check_value(cat, name, value)
+            except CatalogError as exc:
+                raise RulesError(str(exc)) from None
+        if not chosen:
+            s.pop("values")
     for key, value in (settings or {}).items():
         s[key] = setting(key, value)
     for op, kept in (routes or {}).items():
@@ -173,6 +187,10 @@ class Rules:
     def slos(self) -> dict:
         """Every SLO in force, exactly as the scanner measures them."""
         return measures(self.settings)["slos"]
+
+    def values(self) -> dict:
+        """The catalog's named values in force: the human's choices over the strict defaults."""
+        return effective(load_catalog(), self.settings.get("values"))
 
     def silences(self, now_ms: int) -> dict:
         """Active silences: id -> {"target_of", "until", "reason"}. They mute the console, never a signed fact."""

@@ -1,0 +1,162 @@
+# Named values. Every vague word of the source standard (sensitive, critical, trusted, appropriate…) is one of these.
+# The human sets them in the rules of the game (settings.values); a value not set takes its default, which is the
+# strictest safe choice: deny, smallest limit, shortest lifetime. Loosening is a signed rule; tightening is free.
+# A value whose strictest choice would destroy data (retention) has no default: its rule stays uncovered until set.
+#
+# type: list | map | int | text. way: which direction is stricter (less = a smaller number or a shorter list is
+# stricter; more = a larger one is). The AI may draft a value; it never decides one.
+
+[access]
+type = "map"
+doc = "route id -> roles allowed. A route not listed is admin-only."
+default = {}
+way = "less"
+
+[critical]
+type = "list"
+doc = "routes that require an authenticated caller. '*' = every route except @public."
+default = ["*"]
+way = "more"
+
+[public]
+type = "list"
+doc = "routes reachable without signing in (health, login callback, public pages)."
+default = ["GET /health"]
+way = "less"
+
+[sensitive]
+type = "list"
+doc = "model fields never logged, cached, put in URLs or sent to third parties. '*' = every field."
+default = ["*"]
+way = "more"
+
+[sensitive_actions]
+type = "list"
+doc = "routes that require a fresh sign-in (re-authentication) before they run."
+default = ["*:account", "*:security"]
+way = "more"
+
+[high_value]
+type = "list"
+doc = "operations that need a second person's approval. Team-only: one human cannot approve twice."
+default = []
+way = "more"
+
+[origins]
+type = "list"
+doc = "origins allowed by CORS. Empty = same origin only."
+default = []
+way = "less"
+
+[redirect_targets]
+type = "list"
+doc = "hosts the app may redirect to outside itself."
+default = []
+way = "less"
+
+[destinations]
+type = "list"
+doc = "host[:port] the app may call. Empty = no outbound call."
+default = []
+way = "less"
+
+[trusted_proxies]
+type = "list"
+doc = "proxy addresses whose forwarded headers are believed."
+default = []
+way = "less"
+
+[trackers]
+type = "list"
+doc = "third parties a page may send data to."
+default = []
+way = "less"
+
+[csp_sources]
+type = "list"
+doc = "extra sources allowed by the Content-Security-Policy beyond 'self'."
+default = []
+way = "less"
+
+[upload_types]
+type = "list"
+doc = "media types an upload may have, checked against the file's real content."
+default = []
+way = "less"
+
+[upload_max_bytes]
+type = "int"
+doc = "largest upload, in bytes."
+default = 10_485_760
+way = "less"
+
+[unpacked_max_bytes]
+type = "int"
+doc = "largest total size of an archive once unpacked, in bytes."
+default = 52_428_800
+way = "less"
+
+[archive_max_files]
+type = "int"
+doc = "most entries in an uploaded archive."
+default = 100
+way = "less"
+
+[image_max_pixels]
+type = "int"
+doc = "largest image, in pixels (width x height)."
+default = 25_000_000
+way = "less"
+
+[user_quota_bytes]
+type = "int"
+doc = "storage one user may fill, in bytes."
+default = 1_073_741_824
+way = "less"
+
+[rate_per_minute]
+type = "int"
+doc = "calls per minute per caller on a route that is costly or sensitive."
+default = 60
+way = "less"
+
+[session_idle_min]
+type = "int"
+doc = "minutes of inactivity before a session ends."
+default = 15
+way = "less"
+
+[session_max_hours]
+type = "int"
+doc = "hours after which a session ends whatever the activity."
+default = 8
+way = "less"
+
+[password_min]
+type = "int"
+doc = "shortest password the identity provider accepts."
+default = 15
+way = "more"
+
+[mfa]
+type = "text"
+doc = "who must use a second factor: all | admins."
+default = "all"
+way = "more"
+
+[outbound_timeout_s]
+type = "int"
+doc = "seconds before an outbound call gives up."
+default = 10
+way = "less"
+
+[queue_max]
+type = "int"
+doc = "most items a queue or pool may hold."
+default = 1000
+way = "less"
+
+[retention_days]
+type = "map"
+doc = "model -> days a record is kept once unused. No default: the rule stays uncovered until the human sets it."
+way = "less"

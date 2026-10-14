@@ -94,6 +94,10 @@ export function createRules({ $, esc, fact, ago, getSigner, envelope }) {
         <div class="rows">${moves}</div></section>
       <section><h2>Seuils des routes</h2><div class="panel sets">${Object.entries(THRESHOLDS).map(([k, v]) => input(k, v, R.bounds[k])).join("")}</div></section>
       <section><h2>Production</h2><div class="panel sets">${Object.entries(PRODUCTION).map(([k, v]) => input(k, v)).join("")}</div></section>
+      <section><h2>Valeurs nommées <span class="quiet small">${Object.keys(R.values).length}</span></h2>
+        <p class="small quiet">Chaque mot vague des règles de sécurité (sensible, critique, de confiance…) est une valeur ici. Non fixée, elle prend sa valeur stricte par défaut : refuser, la plus petite limite, la durée la plus courte. L'agent peut la proposer, seule ta signature la met en vigueur.</p>
+        <div class="panel sets">${Object.entries(R.values).map(([k, v]) => `<div class="set"><div class="sl"><b>@${esc(k)}</b><span class="small quiet">${esc(v.doc)}${v.rules.length ? ` · règles : ${esc(v.rules.join(", "))}` : ""}${v.chosen ? "" : " · valeur par défaut"}</span></div>
+          <div class="sv"><input type="text" data-value="${esc(k)}" value='${esc(v.current === undefined || v.current === null ? "" : JSON.stringify(v.current))}' placeholder="non fixée : règle non couverte" ${dis}><button class="btn tiny" data-savevalue="${esc(k)}" ${dis}>Signer</button></div></div>`).join("")}</div></section>
       ${sections("slos", ["name", "sli", "target", "window_d", "threshold_ms", "selector", "state"], "SLO")}
       ${sections("components", ["objective", "p99_ms", "counted"], "Composants")}
       ${sections("probes", ["spec"], "Sondes")}
@@ -112,6 +116,11 @@ export function createRules({ $, esc, fact, ago, getSigner, envelope }) {
     document.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => {
       const key = b.dataset.save, value = document.querySelector(`[data-set="${key}"]`).value.trim();
       signRules({ settings: { [key]: value } }, msg);
+    });
+    document.querySelectorAll("[data-savevalue]").forEach((b) => b.onclick = () => {
+      const key = b.dataset.savevalue, raw = document.querySelector(`[data-value="${key}"]`).value.trim();
+      try { signRules({ values: { [key]: raw === "" ? null : JSON.parse(raw) } }, msg); }
+      catch (err) { msg.textContent = `Format : du JSON, par exemple ["a", "b"] ou 10 (${err.message})`; }
     });
     document.querySelectorAll("[data-drop]").forEach((b) => b.onclick = () => signRules({ drop: [b.dataset.drop.split("/")] }, msg));
     document.querySelectorAll("[data-add]").forEach((b) => b.onclick = () => {

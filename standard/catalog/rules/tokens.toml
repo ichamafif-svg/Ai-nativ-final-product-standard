@@ -1,0 +1,139 @@
+category = "Tokens and OAuth"
+
+[[rule]]
+id = "JWT-VERIFY"
+do = "Verify tokens with the session block: signature checked, algorithms from an allow-list, keys from the issuer's configured set, expiry and not-before checked."
+never = "Decode a token without verification; accept alg none or an algorithm the token names."
+applies = ["jwt"]
+when = ["construct:token-decode"]
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["9.1.1", "9.1.2", "9.1.3", "9.2.1"]
+cwe = ["347", "345"]
+py_ok = '''claims = verify(token, audience="orders-api")'''
+py_no = '''jwt.decode(token, options={"verify_signature": False})'''
+
+[[rule]]
+id = "JWT-AUDIENCE"
+do = "Accept a token only of the expected type, for this service's audience."
+never = "Accept an ID token as an access token; skip the aud check."
+applies = ["jwt"]
+when = ["construct:token-decode"]
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["9.2.2", "9.2.3", "9.2.4", "10.3.1", "10.5.4"]
+cwe = ["287"]
+
+[[rule]]
+id = "OAUTH-EXPOSURE"
+do = "Keep tokens on the server (backend for frontend); the browser holds only the session cookie."
+never = "Access or refresh tokens in localStorage or in JavaScript."
+applies = ["oauth-client"]
+when = ["construct:browser-storage", "construct:token-decode"]
+who = ["ai"]
+block = "session"
+absorb = "partial"
+pass = "wide"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["10.1.1"]
+cwe = ["522"]
+
+[[rule]]
+id = "OAUTH-FLOW"
+do = "Use the code flow with PKCE, state and nonce through the session block; accept values only for the transaction you started."
+never = "The implicit flow; a callback without state."
+applies = ["oauth-client"]
+when = ["surface:endpoint"]
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:oidc-flow"]
+asvs = ["10.1.2", "10.2.1"]
+cwe = ["352"]
+
+[[rule]]
+id = "OAUTH-MIXUP"
+do = "Check the issuer on every response so one authorization server cannot pose as another."
+never = "Several providers sharing one callback without issuer checks."
+applies = ["oauth-client"]
+when = []
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:oidc-flow"]
+asvs = ["10.2.2", "10.5.3"]
+cwe = ["346"]
+
+[[rule]]
+id = "OAUTH-SCOPES"
+do = "Request and accept only the scopes the product needs."
+never = "Ask for offline_access or admin scopes \"just in case\"."
+applies = ["oauth-client"]
+when = []
+who = ["det", "human"]
+block = "session"
+absorb = "partial"
+pass = "medium"
+phase = "build"
+check = ["blocks", "human"]
+asvs = ["10.2.3", "10.4.11"]
+cwe = ["250"]
+
+[[rule]]
+id = "OIDC-IDTOKEN"
+do = "Check the ID token's nonce, identify users by issuer and sub, and treat back-channel logout safely."
+never = "Identify a user by e-mail; accept a replayed ID token."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks", "probe:oidc-flow"]
+asvs = ["10.5.1", "10.5.2", "10.5.5"]
+cwe = ["294"]
+
+[[rule]]
+id = "RS-CLAIMS"
+do = "Decide on the access token's claims: delegated scope, the user's sub, and the authentication strength the route needs."
+never = "Accept any valid token for any route."
+applies = ["resource-server"]
+when = ["construct:token-decode", "surface:endpoint"]
+who = ["det", "ai"]
+block = "session"
+absorb = "partial"
+pass = "medium"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["10.3.2", "10.3.3", "10.3.4"]
+cwe = ["863"]
+
+[[rule]]
+id = "RS-SENDER"
+do = "Accept only sender-constrained access tokens (DPoP or mTLS-bound) when the rules of the game ask for it."
+never = "Bearer tokens on routes listed in @high_value."
+applies = ["resource-server"]
+when = []
+who = ["det", "human"]
+block = "session"
+absorb = "full"
+pass = "wide"
+phase = "build"
+values = ["high_value"]
+check = ["blocks"]
+asvs = ["10.3.5", "10.4.14"]
+cwe = ["294"]

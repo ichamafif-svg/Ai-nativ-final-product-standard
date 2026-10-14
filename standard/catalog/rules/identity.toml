@@ -1,0 +1,335 @@
+category = "Identity"
+# Users sign in with the identity provider (OpenID Connect). These rules hold in its configuration, applied and
+# probed by Standard; the product never handles a password.
+
+[[rule]]
+id = "NO-OWN-AUTH"
+do = "Sign users in through the identity provider with the session block; never store, check or reset passwords in the product."
+never = "A login form that posts a password to the product; a users table with a password column."
+applies = ["oidc"]
+when = ["surface:endpoint", "surface:data-model"]
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "wide"
+phase = "build"
+check = ["blocks", "probe:oidc-flow"]
+asvs = []
+cwe = ["287"]
+
+[[rule]]
+id = "PWD-POLICY"
+do = "The provider accepts passwords of @password_min to at least 64 characters, of any characters, checks them against breached and common lists, never truncates them and never forces rotation."
+never = "Composition rules (one digit, one capital…); periodic forced changes."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+values = ["password_min"]
+check = ["probe:idp-password-policy"]
+asvs = ["6.2.1", "6.2.4", "6.2.5", "6.2.8", "6.2.9", "6.2.10", "6.2.11", "6.2.12"]
+cwe = ["521"]
+
+[[rule]]
+id = "PWD-CHANGE"
+do = "Users change their password in the provider, giving the current one."
+never = "A password change in the product."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-password-policy"]
+asvs = ["6.2.2", "6.2.3"]
+cwe = ["620"]
+
+[[rule]]
+id = "PWD-FIELD"
+do = "The provider's sign-in page masks passwords and allows paste and password managers."
+never = "A custom sign-in page that blocks paste or autocomplete."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-password-policy"]
+asvs = ["6.2.6", "6.2.7"]
+cwe = ["549"]
+
+[[rule]]
+id = "BRUTE-FORCE"
+do = "The provider slows and then blocks repeated failed sign-ins per account and per source."
+never = "Unlimited sign-in attempts."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-brute-force"]
+asvs = ["6.3.1"]
+cwe = ["307"]
+
+[[rule]]
+id = "DEFAULT-ACCOUNTS"
+do = "Ship no default account or default credential, in the provider or in service-to-service configuration."
+never = "admin/admin; a sample user in production; a default database password."
+applies = []
+when = ["surface:config"]
+who = ["det"]
+block = "idp"
+absorb = "partial"
+pass = "medium"
+phase = "run"
+check = ["probe:idp-enumeration", "bandit:B105"]
+asvs = ["6.3.2", "13.2.3"]
+cwe = ["1392", "798"]
+
+[[rule]]
+id = "MFA"
+do = "The provider requires a second factor for @mfa."
+never = "Sign-in with a password alone for those users."
+applies = ["oidc"]
+when = []
+who = ["det", "human"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+values = ["mfa"]
+check = ["probe:idp-mfa"]
+asvs = ["6.3.3"]
+cwe = ["308"]
+
+[[rule]]
+id = "AUTH-PATHS"
+do = "Every way into the product goes through the identity provider: no second login, no back door, no API key that skips it."
+never = "An admin route with its own password; a debug login."
+applies = ["oidc"]
+when = ["surface:endpoint"]
+who = ["ai", "human"]
+block = ""
+absorb = "none"
+pass = "wide"
+phase = "build"
+check = ["patrol", "probe:unauthenticated"]
+asvs = ["6.3.4"]
+cwe = ["288"]
+
+[[rule]]
+id = "AUTH-NOTIFY"
+do = "The provider notifies the user of suspicious sign-ins and of every change to their credentials."
+never = "Change an e-mail, a password or a factor silently."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-reset"]
+asvs = ["6.3.5", "6.3.7"]
+cwe = ["778"]
+
+[[rule]]
+id = "NO-EMAIL-FACTOR"
+do = "E-mail is a channel for notices and recovery links, never a sign-in factor."
+never = "A one-time code by e-mail as the only or the second factor."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-mfa"]
+asvs = ["6.3.6"]
+cwe = ["308"]
+
+[[rule]]
+id = "USER-ENUM"
+do = "Sign-in, reset and registration answer the same way whether the account exists or not."
+never = "\"Unknown user\" versus \"wrong password\"; a faster answer for unknown accounts."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-enumeration"]
+asvs = ["6.3.8"]
+cwe = ["204"]
+
+[[rule]]
+id = "INITIAL-SECRETS"
+do = "Initial passwords and activation codes come from the provider: random, single use, short-lived."
+never = "A welcome password chosen by an admin or sent in clear."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-reset"]
+asvs = ["6.4.1"]
+cwe = ["330"]
+
+[[rule]]
+id = "NO-HINTS"
+do = "No password hints and no secret questions anywhere."
+never = "\"Your first pet's name\"."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-reset"]
+asvs = ["6.4.2"]
+cwe = ["640"]
+
+[[rule]]
+id = "RESET"
+do = "Resets go through the provider: they keep MFA, a lost factor needs the same identity proof as enrolment, and admins can start a reset but never choose the password."
+never = "A reset that skips the second factor; an admin who sets a user's password."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-reset"]
+asvs = ["6.4.3", "6.4.4", "6.4.6"]
+cwe = ["640"]
+
+[[rule]]
+id = "RENEWAL-NOTICE"
+do = "Users are told to renew an expiring authenticator early enough to do it."
+never = "A certificate or key that expires without warning."
+applies = ["oidc"]
+when = []
+who = ["det", "human"]
+block = "idp"
+absorb = "partial"
+pass = "wide"
+phase = "run"
+check = ["human"]
+asvs = ["6.4.5"]
+cwe = []
+
+[[rule]]
+id = "OTP"
+do = "One-time codes from the provider: random (CSPRNG), enough entropy, single use, short lifetime, bound to their request, rate-limited, checked against server time."
+never = "A code valid twice, without expiry or unlimited in tries."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-mfa"]
+asvs = ["6.5.1", "6.5.2", "6.5.3", "6.5.4", "6.5.5", "6.5.8", "6.6.2", "6.6.3", "6.6.4"]
+cwe = ["330", "307"]
+
+[[rule]]
+id = "FACTOR-REVOKE"
+do = "Any factor (device, key, app) can be revoked when lost."
+never = "A lost device that still signs in."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-mfa"]
+asvs = ["6.5.6"]
+cwe = []
+
+[[rule]]
+id = "BIOMETRIC"
+do = "Biometrics only as a second factor, with something the user has or knows."
+never = "A fingerprint as the only factor."
+applies = ["oidc"]
+when = []
+who = ["human"]
+block = "idp"
+absorb = "partial"
+pass = "wide"
+phase = "run"
+check = ["human"]
+asvs = ["6.5.7"]
+cwe = []
+
+[[rule]]
+id = "PSTN"
+do = "SMS and phone codes only as a restricted fallback, never the default second factor."
+never = "SMS as the standard second factor."
+applies = ["oidc"]
+when = []
+who = ["human"]
+block = "idp"
+absorb = "partial"
+pass = "wide"
+phase = "run"
+check = ["human"]
+asvs = ["6.6.1"]
+cwe = []
+
+[[rule]]
+id = "WEBAUTHN"
+do = "Hardware and passkey assertions: certificates kept unalterable, challenges of 64 bits or more, unique."
+never = "A reused or short challenge."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "idp"
+absorb = "full"
+pass = "wide"
+phase = "run"
+check = ["probe:idp-mfa"]
+asvs = ["6.7.1", "6.7.2"]
+cwe = []
+
+[[rule]]
+id = "FEDERATION"
+do = "With several identity providers: users cannot be spoofed across them, assertions are signed, used once and their strength checked."
+never = "Match users across providers by e-mail alone."
+applies = ["oidc"]
+when = []
+who = ["det"]
+block = "session"
+absorb = "full"
+pass = "wide"
+phase = "build"
+check = ["probe:oidc-flow"]
+asvs = ["6.8.1", "6.8.2", "6.8.3", "6.8.4"]
+cwe = ["347", "294"]
+
+[[rule]]
+id = "NO-OWN-AS"
+do = "Never build an authorization server or OpenID provider; use the identity provider."
+never = "Issue access or refresh tokens, consent screens or authorization codes from the product."
+applies = []
+when = ["surface:endpoint"]
+who = ["det", "ai"]
+block = "session"
+absorb = "full"
+pass = "wide"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["10.4.1", "10.4.2", "10.4.3", "10.4.4", "10.4.5", "10.4.6", "10.4.7", "10.4.8", "10.4.9", "10.4.10", "10.4.12", "10.4.13", "10.4.15", "10.4.16", "10.6.1", "10.6.2", "10.7.1", "10.7.2", "10.7.3"]
+cwe = ["287"]

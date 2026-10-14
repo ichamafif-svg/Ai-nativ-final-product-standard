@@ -1,0 +1,347 @@
+category = "Injection and encoding"
+
+[[rule]]
+id = "INJ-SQL"
+do = "Pass every value as a bound parameter or through the ORM."
+never = "Build SQL text from values: f-string, +, %, .format, template literal."
+applies = ["database"]
+when = ["construct:sql-call"]
+who = ["det"]
+block = "data"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "bandit:B608"]
+asvs = ["1.2.4"]
+cwe = ["89"]
+py_ok = '''session.scalars(select(User).where(User.id == uid))'''
+py_no = '''conn.execute(f"SELECT * FROM users WHERE id = {uid}")'''
+js_ok = '''db.query("SELECT * FROM users WHERE id = $1", [uid])'''
+js_no = '''db.query(`SELECT * FROM users WHERE id = ${uid}`)'''
+
+[[rule]]
+id = "INJ-CMD"
+do = "Start processes with an argument list and a fixed executable, through run()."
+never = "shell=True, os.system, os.popen, a command string built from values."
+applies = []
+when = ["construct:subprocess"]
+who = ["det"]
+block = "process"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "bandit:B602", "bandit:B605"]
+asvs = ["1.2.5"]
+cwe = ["78", "77"]
+py_ok = '''run(["convert", src, dst], timeout=30)'''
+py_no = '''os.system(f"convert {src} {dst}")'''
+
+[[rule]]
+id = "INJ-EVAL"
+do = "Map input to behaviour with a dict or a match; never run input as code."
+never = "eval, exec, compile, __import__, importlib on values, getattr with a name from input."
+applies = []
+when = ["construct:dynamic-code"]
+who = ["det"]
+block = "bans"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "bandit:B307", "bandit:B102"]
+asvs = ["1.3.2"]
+cwe = ["94"]
+py_ok = '''HANDLERS = {"csv": export_csv, "pdf": export_pdf}; HANDLERS[fmt](rows)'''
+py_no = '''eval(f"export_{fmt}")(rows)'''
+
+[[rule]]
+id = "INJ-TEMPLATE"
+do = "Load templates from files shipped with the code; pass values as context."
+never = "Create a template from a string that holds input."
+applies = ["web"]
+when = ["construct:template-build"]
+who = ["det"]
+block = "render"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["1.3.7"]
+cwe = ["1336"]
+py_ok = '''render("welcome.html", name=name)'''
+py_no = '''Template("Hello " + name).render()'''
+
+[[rule]]
+id = "OUT-ENCODE"
+do = "Let the template engine or the JSON encoder escape output for its context; show text as text."
+never = "|safe, Markup(), mark_safe, innerHTML or HTMLResponse built from values."
+applies = ["web"]
+when = ["construct:html-output", "surface:template"]
+who = ["det", "ai"]
+block = "render"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "semgrep:standard.html-output"]
+asvs = ["1.1.2", "1.2.1", "1.2.3", "3.2.2"]
+cwe = ["79"]
+py_ok = '''render("order.html", note=order.note)   # {{ note }} is escaped'''
+py_no = '''HTMLResponse(f"<p>{order.note}</p>")'''
+js_ok = '''el.textContent = note'''
+js_no = '''el.innerHTML = note'''
+
+[[rule]]
+id = "URL-BUILD"
+do = "Build URLs with url(): every path part and query value encoded, scheme http or https only."
+never = "Concatenate input into a URL; accept javascript:, data: or file: URLs from users."
+applies = []
+when = ["construct:url-build"]
+who = ["det", "ai"]
+block = "render"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["1.2.2", "4.2.5"]
+cwe = ["601"]
+py_ok = '''url(base, "search", q=term)'''
+py_no = '''base + "/search?q=" + term'''
+
+[[rule]]
+id = "CANON"
+do = "Decode input once, at the edge, into its canonical form; validate after decoding."
+never = "Decode again after validation; unquote twice."
+applies = ["api"]
+when = ["construct:request-body"]
+who = ["det"]
+block = "input"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks"]
+asvs = ["1.1.1"]
+cwe = ["174"]
+
+[[rule]]
+id = "INJ-LDAP"
+do = "Escape every value put in an LDAP filter or DN with the block's escape."
+never = "Format input into an LDAP filter."
+applies = ["ldap"]
+when = ["construct:ldap-query"]
+who = ["det", "ai"]
+block = "parse"
+absorb = "partial"
+pass = "fine"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["1.2.6"]
+cwe = ["90"]
+py_ok = '''conn.search(base, f"(uid={ldap_escape(uid)})")'''
+py_no = '''conn.search(base, f"(uid={uid})")'''
+
+[[rule]]
+id = "INJ-XPATH"
+do = "Pass values to XPath as variables, never in the expression."
+never = "Format input into an XPath expression."
+applies = ["xml"]
+when = ["construct:xpath-query"]
+who = ["det", "ai"]
+block = "parse"
+absorb = "partial"
+pass = "fine"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["1.2.7"]
+cwe = ["643"]
+py_ok = '''doc.xpath("//user[@id=$uid]", uid=uid)'''
+py_no = '''doc.xpath(f"//user[@id='{uid}']")'''
+
+[[rule]]
+id = "INJ-LATEX"
+do = "Run LaTeX without shell escape, with only the commands on an allow-list."
+never = "--shell-escape, \\write18, user text placed in a document unescaped."
+applies = ["latex"]
+when = ["construct:subprocess"]
+who = ["det", "ai"]
+block = "process"
+absorb = "partial"
+pass = "fine"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["1.2.8"]
+cwe = ["78"]
+
+[[rule]]
+id = "REGEX-ESCAPE"
+do = "Escape input placed inside a regular expression; bound the input length before matching."
+never = "Compile a pattern built from input; nested quantifiers like (a+)+ on input."
+applies = []
+when = ["construct:regex"]
+who = ["det", "ai"]
+block = "parse"
+absorb = "partial"
+pass = "fine"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["1.2.9"]
+cwe = ["625"]
+py_ok = '''search(re.escape(term), text[:10_000])'''
+py_no = '''re.compile(term).search(text)'''
+
+[[rule]]
+id = "REDOS"
+do = "Use patterns without nested or overlapping quantifiers on input, and bound the input length."
+never = "(a+)+, (a|a)*, (.*a){n} applied to input."
+applies = []
+when = ["construct:regex"]
+who = ["det"]
+block = "parse"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "semgrep:standard.redos"]
+asvs = ["1.3.12"]
+cwe = ["1333"]
+
+[[rule]]
+id = "CSV-INJ"
+do = "Write CSV rows with csv_row(): cells starting with = + - @ tab or CR are escaped (RFC 4180)."
+never = "csv.writer on user values."
+applies = ["csv-export"]
+when = ["construct:csv-write"]
+who = ["det"]
+block = "parse"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["1.2.10"]
+cwe = ["1236"]
+
+[[rule]]
+id = "SANITIZE-RICH"
+do = "Pass HTML, SVG, Markdown or CSS from users through clean_html() before storing or showing it."
+never = "Store or render user markup as received."
+applies = ["rich-content"]
+when = ["construct:html-output"]
+who = ["det", "ai"]
+block = "render"
+absorb = "full"
+pass = "medium"
+phase = "build"
+check = ["blocks"]
+asvs = ["1.3.1", "1.3.4", "1.3.5"]
+cwe = ["79"]
+
+[[rule]]
+id = "INJ-OTHER"
+do = "Escape values put into cache keys, format strings and mail headers; mail headers never contain CR or LF."
+never = "A format string from input; a header built from input."
+applies = []
+when = ["construct:format-string", "construct:mail-send"]
+who = ["det", "ai"]
+block = "render"
+absorb = "partial"
+pass = "fine"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["1.3.3", "1.3.9", "1.3.10", "1.3.11"]
+cwe = ["134", "93"]
+py_ok = '''msg["Subject"] = one_line(subject)'''
+py_no = '''template.format(**request.query_params)'''
+
+[[rule]]
+id = "SSRF"
+do = "Call other services only through outbound, to a destination listed in @destinations."
+never = "A URL or host from input given to an HTTP client; following a redirect to another host."
+applies = ["outbound-http"]
+when = ["construct:http-client", "surface:outbound-call"]
+who = ["det", "ai", "human"]
+block = "outbound"
+absorb = "full"
+pass = "medium"
+phase = "build"
+values = ["destinations"]
+check = ["blocks", "probe:egress"]
+asvs = ["1.3.6", "13.2.4", "13.2.5", "15.3.2"]
+cwe = ["918"]
+py_ok = '''await outbound.get("billing", "/invoices", params={"id": iid})'''
+py_no = '''httpx.get(request.query_params["callback"])'''
+
+[[rule]]
+id = "INJ-JNDI"
+do = "Never pass input to a JNDI lookup."
+never = "InitialContext.lookup(input)."
+applies = ["lang:java"]
+when = ["construct:dynamic-code"]
+who = ["det"]
+block = "bans"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks"]
+asvs = ["1.3.8"]
+cwe = ["74"]
+
+[[rule]]
+id = "MEM-SAFE"
+do = "Use bounded copies and checked arithmetic; free memory once and clear the pointer."
+never = "strcpy, sprintf, gets, unchecked size arithmetic, use after free."
+applies = ["lang:c"]
+when = ["construct:dynamic-code"]
+who = ["det", "ai"]
+block = "bans"
+absorb = "partial"
+pass = "fine"
+phase = "build"
+check = ["blocks", "patrol"]
+asvs = ["1.4.1", "1.4.2", "1.4.3"]
+cwe = ["787", "125", "416", "120", "121", "122", "476"]
+
+[[rule]]
+id = "XXE"
+do = "Parse XML with xml(): external entities and DTDs off."
+never = "xml.etree, minidom, sax or lxml on input."
+applies = ["xml"]
+when = ["construct:xml-parse"]
+who = ["det"]
+block = "parse"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "bandit:B314"]
+asvs = ["1.5.1"]
+cwe = ["611"]
+py_ok = '''doc = xml(body)'''
+py_no = '''ElementTree.fromstring(body)'''
+
+[[rule]]
+id = "DESER"
+do = "Read untrusted data as JSON or with yaml() into a declared model."
+never = "pickle, marshal, shelve, yaml.load on data that crossed a boundary."
+applies = []
+when = ["construct:deserialize"]
+who = ["det"]
+block = "parse"
+absorb = "full"
+pass = "fine"
+phase = "build"
+check = ["blocks", "bandit:B301", "bandit:B506"]
+asvs = ["1.5.2"]
+cwe = ["502"]
+py_ok = '''Order.model_validate_json(body)'''
+py_no = '''pickle.loads(body)'''
+
+[[rule]]
+id = "PARSER-CONSIST"
+do = "Parse each format with the one parser the parse block provides, everywhere."
+never = "Two JSON or URL parsers for the same data in different places."
+applies = []
+when = ["construct:xml-parse", "construct:deserialize"]
+who = ["det"]
+block = "parse"
+absorb = "full"
+pass = "wide"
+phase = "build"
+check = ["blocks"]
+asvs = ["1.5.3"]
+cwe = ["436"]
