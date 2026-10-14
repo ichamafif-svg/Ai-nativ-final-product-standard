@@ -1,30 +1,31 @@
 # Agents
 
-Repository layout: `kernel/` judges, `bt/` owns physical trust mechanisms, `instruments/` computes pinned measures.
-`standard/` holds Standard's common autonomy, interface, socle and privileged runtime assembly, not a client product.
-`tools/` installs, operates and inspects Standard; `examples/` contains demonstrations only. Moving the runtime does not
-remove it from the installation's release pin. Run `make layers` for dependency checks; line counts are informational.
+The repository is Standard. `kernel/` judges; `bt/` owns physical trust mechanisms; `instruments/` computes pinned
+measures; `catalog/` defines product requirements and compiles the socle. `context/` derives the shared reading for
+humans and agents. `agent/` proposes and schedules work; `surface/` presents it and forwards signed human gestures.
+`runtime/` assembles the operator and runs product releases. `tools/` installs and audits; `examples/` is demonstration.
+Run `make layers` for dependency checks. Location does not remove code from its release pin or effective trust role.
 
 ## The game
 
-One human, one agent (ARCHITECTURE.md §4.8, D51–D53). The socle (`standard/floors.py`) declares every move (an op on an
+One human, one agent (ARCHITECTURE.md §4.8, D51–D53). The socle (`catalog/floors.py`) declares every move (an op on an
 exact resource) and its routes. The rules of the game are one client document the human signs, in force at once: which
 autonomous routes stay on, the thresholds those routes compare with (never looser than the socle), and what production
 is judged against. The human has three gestures: **yes** (`decision = approve` on the exact resource), **no** (a freeze),
 **rules** (sign new rules). The agent never signs rules and holds one capability.
 
 A move is `ready` when an autonomous route holds on facts the scanner measured, `decided` when the human said yes,
-`yours` when only the human's decision opens it. `python -m standard.surface moves` shows every move and its status,
-`python -m standard.surface queue` what waits for the human.
+`yours` when only the human's decision opens it. `python -m surface moves` shows every move and its status,
+`python -m surface queue` what waits for the human.
 
 ## Reading
 
-From the repository root, `python -m standard.surface tasks` shows the work the law asks for, then
-`python -m standard.surface context TASK_ID` one task: its debt, its requirement, its routes and the facts each needs.
-`python -m standard.surface law SECTION/ID` shows one declaration of the effective law.
-`python -m standard.surface drift [TARGET] --findings findings.json` shows the drift dossier for born gaps;
-`python -m standard.surface patrol [FOCUS] --findings findings.json` builds an exploratory patrol context.
-`standard/autonomy/read_model.py` is the shared, derived reading graph behind all of these. Neither this graph nor a
+From the repository root, `python -m surface tasks` shows the work the law asks for, then
+`python -m surface context TASK_ID` one task: its debt, its requirement, its routes and the facts each needs.
+`python -m surface law SECTION/ID` shows one declaration of the effective law.
+`python -m surface drift [TARGET] --findings findings.json` shows the drift dossier for born gaps;
+`python -m surface patrol [FOCUS] --findings findings.json` builds an exploratory patrol context.
+`context/model.py` is the shared, derived reading graph behind all of these. Neither this graph nor a
 diagnostic finding is authority; K and the independent checker never import it. Findings from another main commit or
 law digest are stale, not current evidence.
 
@@ -33,17 +34,17 @@ and the second judge decides again. If Standard is unreachable or unqualified, n
 
 ## The rules you code to
 
-`standard/catalog` is the release's common definition of product requirements. `maintenance.toml` declares the
+`catalog` is the release's common definition of product requirements. `maintenance.toml` declares the
 maintenance targets and repair instructions; `policy.toml` defines signed policy parameters, their editor types,
 floors and recommended values; `rules/*.toml` details the technical requirements; `values.toml` and `blocks.toml`
-define their parameters and minimum implementation contracts. `standard/floors.py` compiles these declarations into
+define their parameters and minimum implementation contracts. `catalog/floors.py` compiles these declarations into
 the existing law language and defines governed moves. The human's signed choices instantiate the effective law.
 Model providers, budgets and schedules in `standard.toml` are execution configuration, never product policy.
 
 Selection uses product features and touched surfaces/constructs, including the draft's new features and declared
 features. `declared_features()` derives these from signed settings, including `@high_value`; scanner inputs and
 model missions use the same projection. `contracts()` supplies the same rule/block/parameter/check reading to construction, review, exploration
-and the interface. `python -m standard.surface rule RULE-ID` prints that contract; `coverage` shows measured state.
+and the interface. `python -m surface rule RULE-ID` prints that contract; `coverage` shows measured state.
 `absorb` describes the intended division of work: it never proves correct block adoption or complete path coverage.
 A rule without a check, a missing parameter or an unknown client mapping stays visible; no opinion becomes proof.
 
@@ -59,7 +60,7 @@ value is really sent), `for_user(session, user)` for every database session of a
 passed to a process, `Text[n]`/`Id`/`Email` in input models. To narrow access, add `also=` predicates; to add a guard
 check, pass `refuse=`: both can only refuse. What the blocks guarantee beyond the standards is in
 `blocks/HARDENING.md`. The APIs a block
-covers are banned elsewhere (`standard/catalog/blocks.toml`); the scanner signs `blocks = clean` only when a change adds
+covers are banned elsewhere (`catalog/blocks.toml`); the scanner signs `blocks = clean` only when a change adds
 none. Never copy a block into the product. Values such as `@access`, `@upload_max_bytes` or `@app` are the human's: you
 may draft them, never decide them.
 
@@ -86,7 +87,7 @@ Optional `[llm.correctness]`, `[llm.simplicity]` choose reader providers; otherw
 Provider calls time out after 120 seconds. An already running HTTP call may finish after the review deadline; its late
 answer cannot publish the candidate or start another research step. No recursive delegation or reviewer-of-reviewer.
 
-All model missions use `context.assemble`: pinned journal/law/code/catalog basis, task, exact scope, selected
+All model missions use `context.missions.assemble`: pinned journal/law/code/catalog basis, task, exact scope, selected
 contracts, diagnostics and a bounded repository map. The initial packet is bounded to 28,000 characters. Large entries
 are deferred whole, with their references; selection never exempts omitted requirements. `read(ref=..., offset=...)`
 reads complete pinned declarations/documents in pages; `search(in=context, query=...)` discovers their references.
@@ -102,7 +103,7 @@ Without a repository snapshot, a human context leaves applicability unavailable 
 Automatic rounds rotate questions and repository/subsystem scopes, each category keeping its own scope cursor.
 They run after ordinary moves, by default at most once per hour; `[agent] patrol_interval_ms` is
 60000..86400000. Schedule state survives failures and restarts. Manual use:
-`python -m standard.autonomy patrol standard.toml simplicity:app`; inspect proposals with `patrol-results`.
+`python -m agent patrol standard.toml simplicity:app`; inspect proposals with `patrol-results`.
 Results retain main, law digest and scope, become stale when main or law changes, and remain proposals. Serve an
 existing debt within its scope, or propose a human-contracted BUILD request for a transversal refactor.
 
@@ -136,3 +137,18 @@ read/search its snapshot, fetch only configured research sources, and experiment
 Research outputs are notes, never signed facts or permission to register an instrument.
 
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## One work path and one observation source
+
+BUILD/RUN are presentation contexts, not route filters or separate task queues. Routes match a resource, need and
+supported targets. WorkEngine keys tasks by their obligation-derived id. Opening an older scheduling store collapses
+its partitions transactionally, retaining the earliest deadline, total attempts, longest retry/lease and event history.
+A request keeps its accepted contract; a repair keeps its obligation. Both use the common candidate and precheck path;
+request checks add acceptance and reject every local regression, while repair retains its existing recipe follow-ups.
+
+The interface never scrapes metrics. BT captures declared sources; `runtime.operator.publish_readings` publishes only
+retained metrics chunks and their referenced bytes, with source, capture time and digest. No probe response, runner
+capture or privileged key is published. The interface verifies digests and builds a disposable presentation cache;
+old independently collected metric rows are discarded when that cache first adopts capture provenance. Missing,
+corrupt or stale captures remain unavailable, and unknown capture state cannot resolve an existing incident. This
+public projection grants no authority and never becomes an input to independent measurement or kernel admission.

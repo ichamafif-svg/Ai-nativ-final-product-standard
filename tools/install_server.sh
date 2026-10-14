@@ -104,7 +104,7 @@ install_lab() {
   git -C "$ROOT/seed" init -q -b main
   git -C "$ROOT/seed" -c user.name=Standard -c user.email=lab@localhost \
     commit --allow-empty -qm "Empty laboratory repository"
-  "$PY" "$CODE/tools/host.py" create "$ROOT/hosting/hosting.toml" lab --from "$ROOT/seed" \
+  "$PY" "$CODE/tools/hosting.py" create "$ROOT/hosting/hosting.toml" lab --from "$ROOT/seed" \
     --guard-user standard-guard --gate-user standard-gate
   git config --global --add safe.directory "$ROOT/hosting/repos/lab.git"
   runuser -u standard-web -- env HOME=/home/standard-web git config --global --add safe.directory \
@@ -129,9 +129,9 @@ EOF
   printf 'standard-guard ALL=(standard-runner) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/standard-runner
   chmod 440 /etc/sudoers.d/standard-runner
 
-  unit standard-operator standard-guard "-m standard.runtime serve $ROOT/install/standard.toml 30"
-  unit standard-agent standard-agent "-m standard.autonomy run $ROOT/install/standard.toml 60"
-  unit standard-web standard-web "-m standard.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
+  unit standard-operator standard-guard "-m runtime serve $ROOT/install/standard.toml 30"
+  unit standard-agent standard-agent "-m agent run $ROOT/install/standard.toml 60"
+  unit standard-web standard-web "-m surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
   systemctl enable --now standard-operator
   systemctl enable --now standard-agent standard-web

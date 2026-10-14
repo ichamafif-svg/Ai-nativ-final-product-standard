@@ -11,15 +11,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from standard.autonomy.agent import Agent, AgentError  # noqa: E402
-from standard.autonomy.repair import Repairer  # noqa: E402
-from standard.autonomy.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
-from standard.autonomy.memory import Memory  # noqa: E402
-from standard.autonomy.precheck import precheck  # noqa: E402
-from standard.autonomy.repomap import RepoMap  # noqa: E402
-from standard.autonomy.sandbox import Sandbox  # noqa: E402
+from agent.candidate import AgentError
+from agent.repair import Agent
+from agent.repair import Repairer  # noqa: E402
+from agent.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
+from agent.memory import Memory  # noqa: E402
+from agent.precheck import precheck  # noqa: E402
+from context.repository import RepoMap  # noqa: E402
+from agent.sandbox import Sandbox  # noqa: E402
 from local_sandbox import LocalSandbox  # noqa: E402
-from standard.floors import FLOORS  # noqa: E402
+from catalog.floors import FLOORS  # noqa: E402
 from instruments import probes as instruments  # noqa: E402
 from instruments.data import EMPTY  # noqa: E402
 from instruments.suite import tests_report  # noqa: E402
@@ -117,7 +118,7 @@ class WholeLaw(unittest.TestCase):
             self.skipTest("candidate jail unavailable on this host")
 
     def candidate(self, files):
-        from standard.autonomy.agent import commit_files
+        from agent.candidate import commit_files
         return commit_files(self.store, self.base, {p: c.encode() for p, c in files.items()}, "candidate")
 
     def test_a_fix_that_breaks_main_tests_is_not_proposed(self):
@@ -238,7 +239,7 @@ class Memory_(unittest.TestCase):
             def craft(self, *a, **kw):
                 raise AgentError("nothing passes")
 
-        from standard.autonomy.read_model import ReadModel
+        from context.model import ReadModel
         real = ReadModel.plan
         ReadModel.plan = lambda self, mode="RUN": {"state": "IN_PROGRESS", "tasks": []}
         self.addCleanup(setattr, ReadModel, "plan", real)              # never leak into the next test

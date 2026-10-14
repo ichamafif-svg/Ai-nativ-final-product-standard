@@ -100,9 +100,9 @@ class Integration(unittest.TestCase):
         from test_install import Clock
         from test_maintenance import FILES, demo_repository
 
-        import standard.autonomy.__main__ as agent_process
-        import standard.runtime.daemon as daemon
-        from standard.surface.human import decide, load_signer
+        import agent.__main__ as agent_process
+        import runtime.operator as daemon
+        from surface.human import decide, load_signer
         from bt.gateway import AdmissionGateway
 
         root = Path(tempfile.mkdtemp())

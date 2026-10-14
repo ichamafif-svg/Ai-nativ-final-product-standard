@@ -15,8 +15,8 @@ from local_sandbox import LocalSandbox
 
 from tools import ceremony  # noqa: E402
 
-import standard.autonomy.__main__ as agent_process  # noqa: E402
-import standard.runtime.daemon as daemon  # noqa: E402
+import agent.__main__ as agent_process  # noqa: E402
+import runtime.operator as daemon  # noqa: E402
 from bt.gateway import AdmissionGateway  # noqa: E402
 
 
@@ -43,7 +43,7 @@ class Installation(unittest.TestCase):
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            with patch("standard.autonomy.sandbox.Sandbox", LocalSandbox):
+            with patch("agent.sandbox.Sandbox", LocalSandbox):
                 loop, repairer, _, refresh = agent_process.build(root / "install" / "standard.toml")
             loop.clock, loop.backoff_ms, repairer.clock = clock, 0, clock
             for _ in range(3):

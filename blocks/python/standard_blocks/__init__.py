@@ -1,6 +1,6 @@
 """Standard's building blocks for Python products (FastAPI first): one module per concern, so a rule holds by using
 the block rather than by remembering the rule. Product code may not call what a block covers (the ban list in
-standard/catalog/blocks.toml, checked by Standard's scanner on every change).
+catalog/blocks.toml, checked by Standard's scanner on every change).
 
     web       security headers, cookies, CORS, CSRF, methods, errors, proxies, redirects, rate limits
     session   OpenID Connect sign-in, server-side sessions, re-authentication, token verification

@@ -4,7 +4,7 @@
     python tools/ceremony.py init DIR --github OWNER/NAME --token-file F [--pins PATH]
     python tools/ceremony.py separate DIR --guard-user U --agent-user V      (as root, before serving)
 
-`init` writes the keys, the recommended rules (standard/floors.py RECOMMENDED), the genesis, the clock's first
+`init` writes the keys, the recommended rules (catalog/floors.py RECOMMENDED), the genesis, the clock's first
 checkpoint, the four capabilities (the human's decisions and requests, the agent's moves, the scanner's measures, the
 oracle's proofs), a self-assessment and DIR/standard.toml. Widening takes effect at once: the installation runs as
 soon as `init` returns.
@@ -29,11 +29,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat  # noqa: E402
 
-from standard.floors import RELEASE, rules  # noqa: E402
+from catalog.floors import RELEASE, rules  # noqa: E402
 from kernel import Kernel, canon, digest, empty  # noqa: E402
 from bt.assessment import CONTRACTS, PREFIX, SignedAssessment  # noqa: E402
 from bt.journal import Journal, PinStore  # noqa: E402
-from standard.runtime import code_digest  # noqa: E402
+from runtime import code_digest  # noqa: E402
 from bt.signing import Signer, entry  # noqa: E402
 
 IDENTITIES = {"human": "human", "agent": "agent", "guard": "guard", "scanner": "service", "oracle": "oracle",
@@ -198,7 +198,7 @@ def separate(args) -> None:
     if "separation" not in c:
         with open(d / "standard.toml", "a") as f:
             f.write(f'\n[separation]\nguard_user = "{guard.pw_name}"\nagent_user = "{agent.pw_name}"\n')
-    print(f"separated: {guard.pw_name} runs `python -m standard.runtime serve`, {agent.pw_name} runs `python -m standard.autonomy run`")
+    print(f"separated: {guard.pw_name} runs `python -m runtime serve`, {agent.pw_name} runs `python -m agent run`")
 
 
 def main() -> int:
@@ -210,7 +210,7 @@ def main() -> int:
     i.add_argument("--github")
     i.add_argument("--token-file")
     i.add_argument("--pins")
-    i.add_argument("--inbox", help="the hosting inbox of this repository (tools/host.py)")
+    i.add_argument("--inbox", help="the hosting inbox of this repository (tools/hosting.py)")
     i.add_argument("--data", help="a reviewed snapshot from tools/refresh_data.py, pinned by its digest")
     i.add_argument("--unconfined-tests", action="store_true",
                    help="DEMO ONLY: run candidate tests as the operator, with its keys (no jail)")

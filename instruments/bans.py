@@ -1,4 +1,4 @@
-"""Banned APIs (standard/catalog/blocks.toml): product code reaches what a building block covers only through it.
+"""Banned APIs (catalog/blocks.toml): product code reaches what a building block covers only through it.
 
 Python is read on its syntax tree with imports resolved, as instruments/surfaces.py reads it; JavaScript lexically
 (comments and strings removed). Patterns:

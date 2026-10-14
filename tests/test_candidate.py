@@ -6,8 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from standard.autonomy.candidate import JUDGED, CandidateWorkflow, Overlay, explain, record  # noqa: E402
-from standard.catalog import effective, load  # noqa: E402
+from agent.candidate import JUDGED, CandidateWorkflow, Overlay, explain, record  # noqa: E402
+from catalog import effective, load  # noqa: E402
 
 
 class Tree:
@@ -166,7 +166,7 @@ class Candidates(unittest.TestCase):
 
     def test_all_roles_share_catalog_contracts_and_pinned_readable_context(self):
         import json
-        from standard.catalog import definition, targets
+        from catalog import definition, targets
         target = next(t for t in targets() if t["id"] == "rules-authorization")
         ctx = {"basis": {"head": "journal"}, "law_digest": "law", "requirement": target,
                "definition": definition(target), "effective_law": {"conditions": {"client-only": {"all": []}}}}
@@ -204,8 +204,8 @@ class Candidates(unittest.TestCase):
 class Patrol(unittest.TestCase):
     def test_each_round_reads_one_category_of_ai_rules_in_a_fixed_order(self):
         import tempfile
-        from standard.autonomy.patrol import rotation
-        from standard.catalog import categories, contracts
+        from agent.patrol import rotation
+        from catalog import categories, contracts
         state = Path(tempfile.mkdtemp()) / "rotation.json"
         rounds = [rotation(state) for _ in range(len(categories()) + 2)]
         self.assertEqual(rounds[:-1], ["simplicity", *categories()])
@@ -219,11 +219,11 @@ class Patrol(unittest.TestCase):
         import tempfile
         from types import SimpleNamespace
         from unittest.mock import patch
-        from standard.autonomy.patrol import Patrol as Scheduled, SIMPLICITY
+        from agent.patrol import Patrol as Scheduled, SIMPLICITY
         root = Path(tempfile.mkdtemp())
         cycle = SimpleNamespace(agent=SimpleNamespace(store=root / "store", llm=object()))
         scheduled = Scheduled(cycle, lambda: "base", clock=lambda: 100, interval_ms=60_000)
-        with patch("standard.autonomy.patrol.run_patrol", side_effect=ValueError("model unavailable")) as run:
+        with patch("agent.patrol.run_patrol", side_effect=ValueError("model unavailable")) as run:
             self.assertEqual(scheduled.run({}, "base")["state"], "unavailable")
             self.assertEqual(scheduled.run({}, "base")["state"], "waiting")
             self.assertEqual(run.call_count, 1)
@@ -318,7 +318,7 @@ class CandidateChanges(unittest.TestCase):
     def test_deletion_round_trip_preserves_the_base_and_executable_modes(self):
         import subprocess
         from test_agent import store_with, git
-        from standard.autonomy.agent import commit_files
+        from agent.candidate import commit_files
         from instruments.tree import Snapshot
         store, base = store_with({"keep.py": "x = 1\n", "remove.py": "unused = True\n", "tests/test_x.py": "assert True"})
         head = commit_files(store, base, {"remove.py": None, "added.ts": b"export const x = 1"}, "simplify")
@@ -341,8 +341,8 @@ class CandidateChanges(unittest.TestCase):
 
     def test_nextjs_sources_are_visible_and_writable_without_opening_reserved_paths(self):
         from instruments.scope import feature, repair
-        from standard.autonomy.context import assemble
-        from standard.autonomy.repomap import RepoMap
+        from context.missions import assemble
+        from context.repository import RepoMap
         tree = Tree({"app/(shop)/orders/[id]/route.ts": "export const GET = access.route('orders.read', f);"})
         self.assertIn("export const GET", assemble({}, tree, role="build", focus=list(tree.paths()))[0])
         self.assertIn("endpoint GET /orders/:id", RepoMap(tree).render())
@@ -355,7 +355,7 @@ class CandidateChanges(unittest.TestCase):
     def test_review_research_reads_the_draft_and_cannot_experiment_or_write(self):
         import tempfile
         from unittest.mock import patch
-        from standard.autonomy.research import Research, ResearchError
+        from agent.research import Research, ResearchError
         base = Tree({"a.py": "old"})
         draft = Overlay(base, {"a.py": "new", "gone.py": None})
         research = Research(None, Path(tempfile.mkdtemp()) / "notes")

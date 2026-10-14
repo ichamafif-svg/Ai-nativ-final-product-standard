@@ -15,9 +15,9 @@ from instruments.data import EMPTY
 from instruments.jobs import JOBS
 from instruments.recipes import recipes_for
 from instruments.scope import REPAIR
-from standard.autonomy.agent import task_of
-from standard.autonomy.read_model import measurement_for
-from standard.floors import CONTRACTS, FLOORS
+from agent.repair import task_of
+from context.model import measurement_for
+from catalog.floors import CONTRACTS, FLOORS
 
 
 def inventory(targets=None) -> list[dict]:

@@ -11,8 +11,8 @@ sys.path.insert(0, str(ROOT))
 
 from instruments import coverage, probes  # noqa: E402
 from instruments.tree import verdict  # noqa: E402
-from standard.catalog import compact, effective, load  # noqa: E402
-from standard.floors import FLOORS  # noqa: E402
+from catalog import compact, effective, load  # noqa: E402
+from catalog.floors import FLOORS  # noqa: E402
 
 try:
     import fastapi  # noqa: F401

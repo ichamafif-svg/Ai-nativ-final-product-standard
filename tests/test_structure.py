@@ -1,16 +1,17 @@
 """Refactoring must keep trust boundaries enforced and pin privileged product assembly."""
+
 import tempfile
 import unittest
 import shutil
 from pathlib import Path
 
 from bt.release import code_digest as core_digest
-from standard.runtime import SOURCES, code_digest as installation_digest
+from runtime import SOURCES, code_digest as installation_digest
 from tools.check_layers import ALLOWED, imports, violations
 from tools.coverage import inventory
-from standard.autonomy.read_model import human_target, work_role
-from standard.floors import FLOORS
-from standard.autonomy.work import WorkEngine
+from context.model import human_target, work_role
+from catalog.floors import FLOORS
+from agent.work import WorkEngine
 from tomllib import loads as parse_toml
 
 
@@ -18,12 +19,25 @@ class Structure(unittest.TestCase):
     def test_progress_failures_exclude_required_stops_and_closed_debt(self):
         with tempfile.TemporaryDirectory() as root:
             engine = WorkEngine(Path(root) / "work.db")
-            task = {"id": "o:repair", "obligation": "o", "need": "repair", "resource": "repo:code:x",
-                    "due": 5, "state": "AVAILABLE", "routes": [{"route": "agent", "state": "AVAILABLE"}]}
+            task = {
+                "id": "o:repair",
+                "obligation": "o",
+                "need": "repair",
+                "resource": "repo:code:x",
+                "due": 5,
+                "state": "AVAILABLE",
+                "routes": [{"route": "agent", "state": "AVAILABLE"}],
+            }
             projection = {"mode": "RUN", "basis": {"head": "h"}, "tasks": [task]}
             engine.sync(projection)
-            engine.record(at=6, mode="RUN", task=task, basis=projection["basis"], main="m",
-                          outcome="progress_failure", reason_code="budget_exhausted")
+            engine.record(
+                at=6,
+                task=task,
+                basis=projection["basis"],
+                main="m",
+                outcome="progress_failure",
+                reason_code="budget_exhausted",
+            )
             self.assertEqual(WorkEngine.read_progress(engine.path)["pf"], 1)
             engine.sync({**projection, "tasks": [{**task, "state": "TRUST_BLOCKED"}]})
             self.assertEqual(engine.progress()["pf"], 0)
@@ -34,29 +48,39 @@ class Structure(unittest.TestCase):
     def test_new_basis_releases_old_retry_and_lease(self):
         with tempfile.TemporaryDirectory() as root:
             engine = WorkEngine(Path(root) / "work.db")
-            task = {"id": "o:repair", "obligation": "o", "need": "repair", "resource": "repo:code:x",
-                    "due": 5, "state": "AVAILABLE", "routes": []}
+            task = {
+                "id": "o:repair",
+                "obligation": "o",
+                "need": "repair",
+                "resource": "repo:code:x",
+                "due": 5,
+                "state": "AVAILABLE",
+                "routes": [],
+            }
             projection = {"mode": "RUN", "basis": {"head": "old"}, "tasks": [task]}
             engine.sync(projection)
-            claimed = engine.claim(mode="RUN", now=10)
-            engine.complete_attempt(mode="RUN", task_id=task["id"], lease_until=claimed["lease_until"],
-                                    next_at=999)
-            self.assertIsNone(engine.claim(mode="RUN", now=11))
+            claimed = engine.claim(now=10)
+            engine.complete_attempt(task_id=task["id"], lease_until=claimed["lease_until"], next_at=999)
+            self.assertIsNone(engine.claim(now=11))
             engine.sync({**projection, "basis": {"head": "new"}})
-            self.assertEqual(engine.claim(mode="RUN", now=11)["attempt"], 1)
+            self.assertEqual(engine.claim(now=11)["attempt"], 1)
 
     def test_who_repairs_follows_the_routes_in_force_not_the_resource_prefix(self):
         target = {"id": "client-thing", "resource": "repo:client:custom", "repair": "remediate"}
         self.assertFalse(human_target(target))
         self.assertEqual(work_role(target, FLOORS)["level"], "autonomous")
-        human_only = {**FLOORS, "ops": {**FLOORS["ops"], "remediate": {**FLOORS["ops"]["remediate"],
-                                                                         "routes": {"human": {"all": []}}}}}
+        human_only = {
+            **FLOORS,
+            "ops": {**FLOORS["ops"], "remediate": {**FLOORS["ops"]["remediate"], "routes": {"human": {"all": []}}}},
+        }
         self.assertEqual(work_role(target, human_only)["level"], "decision")
         self.assertTrue(human_target({**target, "human": True}))
 
     def test_installation_toml_uses_a_complete_parser(self):
-        self.assertEqual(parse_toml('name = "a#b"\n[agent]\nscopes = ["code", "tests"]'),
-                         {"name": "a#b", "agent": {"scopes": ["code", "tests"]}})
+        self.assertEqual(
+            parse_toml('name = "a#b"\n[agent]\nscopes = ["code", "tests"]'),
+            {"name": "a#b", "agent": {"scopes": ["code", "tests"]}},
+        )
 
     def test_coverage_does_not_invent_an_instrument_for_a_declared_target(self):
         rows = {r["target"]: r for r in inventory()}
@@ -67,8 +91,10 @@ class Structure(unittest.TestCase):
 
     def test_coverage_distinguishes_recipes_human_repairs_and_conditional_production(self):
         rows = {r["target"]: r for r in inventory()}
-        self.assertEqual({tid for tid, r in rows.items() if r["repair"] == "recipe, else model in scope"},
-                         {"sbom", "vulns", "actions"})
+        self.assertEqual(
+            {tid for tid, r in rows.items() if r["repair"] == "recipe, else model in scope"},
+            {"sbom", "vulns", "actions"},
+        )
         self.assertEqual(rows["branch"]["repair"], "human")
         self.assertEqual(rows["run-slo"]["measurement"], "CONDITIONAL")
 
@@ -91,9 +117,9 @@ class Structure(unittest.TestCase):
         return path
 
     def test_product_cannot_reach_the_privileged_runtime_or_guard(self):
-        self.write("standard/autonomy/agent.py", "from ..runtime import daemon\nfrom bt import Guard\n")
+        self.write("agent/repair.py", "from runtime import operator\nfrom bt import Guard\n")
         problems = violations(self.root)
-        self.assertTrue(any("standard.runtime" in p for p in problems), problems)
+        self.assertTrue(any("runtime" in p for p in problems), problems)
         self.assertTrue(any("imports bt:" in p for p in problems), problems)
 
     def test_kernel_and_programs_cannot_import_physical_effects(self):
@@ -112,9 +138,9 @@ class Structure(unittest.TestCase):
         self.assertTrue(any("second judge" in p and "bt.service" in p for p in problems), problems)
 
     def test_relative_imports_of_packages_resolve_within_the_correct_role(self):
-        path = self.write("standard/autonomy/__init__.py", "from . import agent\nfrom bt.gateway import GatewayClient\n")
-        self.write("standard/autonomy/agent.py", "")
-        self.assertIn("standard.autonomy.agent", imports(path, self.root))
+        path = self.write("agent/__init__.py", "from . import repair\nfrom bt.gateway import GatewayClient\n")
+        self.write("agent/repair.py", "")
+        self.assertIn("agent.repair", imports(path, self.root))
         self.assertEqual(violations(self.root), [])
 
     def test_privileged_product_code_stays_bound_to_the_installation(self):
@@ -126,18 +152,19 @@ class Structure(unittest.TestCase):
             else:
                 path.mkdir(parents=True, exist_ok=True)
                 (path / "__init__.py").touch()
-        from standard.runtime import CATALOG_DATA
-        (self.root / "standard/catalog/rules").mkdir(parents=True, exist_ok=True)
+        from runtime import CATALOG_DATA
+
+        (self.root / "catalog/rules").mkdir(parents=True, exist_ok=True)
         for name in CATALOG_DATA:
-            (self.root / "standard/catalog" / name).touch()
+            (self.root / "catalog" / name).touch()
         core, installed = core_digest(self.root), installation_digest(self.root)
-        runtime = self.write("standard/runtime/operator.py", "VERSION = 1\n")
+        runtime = self.write("runtime/operator.py", "VERSION = 1\n")
         self.assertEqual(core_digest(self.root), core)
         self.assertNotEqual(installation_digest(self.root), installed)
         bound = installation_digest(self.root)
         runtime.write_text("VERSION = 2\n")
         self.assertNotEqual(installation_digest(self.root), bound)
-        (self.root / "standard/floors.py").unlink()
+        (self.root / "catalog/floors.py").unlink()
         with self.assertRaises(FileNotFoundError):
             installation_digest(self.root)
 
@@ -159,6 +186,72 @@ class Structure(unittest.TestCase):
                 file.write_text(previous + "y = 2\n")
                 self.assertNotEqual(installation_digest(self.root), original, file)
                 file.write_text(previous)
+
+
+class WorkMigration(unittest.TestCase):
+    def test_old_partitions_collapse_without_losing_deadlines_attempts_or_leases(self):
+        import json
+        import sqlite3
+        from agent.work import WorkError
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "work.db"
+            db = sqlite3.connect(path)
+            db.execute(
+                "CREATE TABLE tasks (mode TEXT,id TEXT,obligation TEXT,need TEXT,resource TEXT,due INTEGER,"
+                "state TEXT,task TEXT,attempts INTEGER,next_at INTEGER,lease_until INTEGER,basis TEXT,PRIMARY KEY(mode,id))"
+            )
+            db.execute(
+                "CREATE TABLE events (id INTEGER PRIMARY KEY,at INTEGER,mode TEXT,task_id TEXT,obligation TEXT,"
+                "basis TEXT,main TEXT,attempt INTEGER,route TEXT,outcome TEXT,reason_code TEXT,detail TEXT)"
+            )
+            task = {
+                "id": "o:repair",
+                "obligation": "o",
+                "need": "repair",
+                "resource": "repo:code:x",
+                "due": 12,
+                "state": "AVAILABLE",
+                "routes": [],
+            }
+            basis = json.dumps({"head": "h"}, sort_keys=True)
+            for mode, due, attempts, next_at, lease in [("BUILD", 5, 2, 100, 999), ("RUN", 12, 3, 200, 1000)]:
+                db.execute(
+                    "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        mode,
+                        task["id"],
+                        "o",
+                        "repair",
+                        task["resource"],
+                        due,
+                        "AVAILABLE",
+                        json.dumps(task),
+                        attempts,
+                        next_at,
+                        lease,
+                        basis,
+                    ),
+                )
+            db.execute(
+                "INSERT INTO events VALUES (1,3,?,?,?,?,?,?,?,?,?,?)",
+                ("RUN", "o:repair", "o", basis, "main", 3, "agent", "progress_failure", "budget_exhausted", "detail"),
+            )
+            db.commit()
+            db.close()
+            self.assertEqual(WorkEngine.read_progress(path)["status"], "unavailable")
+            engine = WorkEngine(path)
+            self.assertEqual(len(engine.tasks()), 1)
+            self.assertEqual((engine.tasks()[0]["due"], engine.tasks()[0]["attempts"]), (5, 5))
+            self.assertEqual(engine.progress()["pf"], 1)
+            self.assertIsNone(engine.claim(now=999))
+            claimed = engine.claim(now=1001)
+            self.assertEqual((claimed["due"], claimed["attempt"]), (5, 6))
+            with self.assertRaises(WorkError):
+                engine.complete_attempt(task_id=task["id"], lease_until=1000, next_at=0)
+            engine.complete_attempt(task_id=task["id"], lease_until=claimed["lease_until"], next_at=2000)
+            self.assertIsNone(engine.claim(now=1999))
+            self.assertEqual(WorkEngine(path).tasks()[0]["due"], 5)
 
 
 if __name__ == "__main__":

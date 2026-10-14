@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from fixture import Ledger  # noqa: E402
 
-from standard.floors import CONTRACTS, INSTRUMENTS, PROGRAMS  # noqa: E402
+from catalog.floors import CONTRACTS, INSTRUMENTS, PROGRAMS  # noqa: E402
 from kernel import canon  # noqa: E402
 from bt.guard import NotDispatched  # noqa: E402
 from bt.host import Evidence  # noqa: E402

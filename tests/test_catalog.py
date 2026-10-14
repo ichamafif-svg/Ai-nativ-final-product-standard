@@ -1,4 +1,4 @@
-"""The rule catalog (standard/catalog): every ASVS 5.0 requirement accounted for, every name defined, one text for the
+"""The rule catalog (catalog): every ASVS 5.0 requirement accounted for, every name defined, one text for the
 agent before coding and in a refusal, and a deterministic choice of what each candidate workflow pass shows."""
 import copy
 import sys
@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from standard.catalog import (CatalogError, applicable, check_value, effective, load, render,  # noqa: E402
+from catalog import (CatalogError, applicable, check_value, effective, load, render,  # noqa: E402
                               select, validate)
 
 
@@ -87,9 +87,9 @@ class Catalog(unittest.TestCase):
                 check_value(self.cat, name, bad)
 
     def test_catalog_compiles_the_same_targets_and_policy_used_by_the_law_and_editor(self):
-        from standard.catalog import targets, policy_values, instruction, definition
-        from standard.floors import FLOORS, RECOMMENDED
-        from standard.autonomy.rules import SCHEMA, change
+        from catalog import targets, policy_values, instruction, definition
+        from catalog.floors import FLOORS, RECOMMENDED
+        from context.policy import SCHEMA, change
         self.assertEqual(targets(self.cat), FLOORS["targets"])
         self.assertEqual(policy_values("floor"), FLOORS["settings"])
         self.assertEqual(SCHEMA.keys(), self.cat["policy"]["parameter"].keys())
@@ -104,7 +104,7 @@ class Catalog(unittest.TestCase):
             change({}, settings={"research_steps": 10})
 
     def test_contracts_preserve_exact_policy_and_separate_absorption_from_evidence(self):
-        from standard.catalog import contracts, render_contracts
+        from catalog import contracts, render_contracts
         values = effective(self.cat, {"access": {"orders.read": ["buyer"]}})
         packet = contracts(self.cat, ["api"], values, ids={"AUTHZ"}, stacks=["nextjs"])
         text = render_contracts(packet)
@@ -128,20 +128,20 @@ class Catalog(unittest.TestCase):
                 validate(cat)
 
     def test_the_catalog_is_part_of_the_release(self):
-        from standard.runtime import CATALOG_DATA, code_digest
+        from runtime import CATALOG_DATA, code_digest
         import tempfile, shutil
         root = Path(tempfile.mkdtemp())
-        for part in ("kernel", "bt", "standard", "blocks"):
+        for part in ("kernel", "bt", "runtime", "catalog", "blocks"):
             shutil.copytree(ROOT / part, root / part, ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy(ROOT / "requirements.hashes", root / "requirements.hashes")
         before = code_digest(root)
-        rule = root / "standard" / "catalog" / "rules" / "injection.toml"
+        rule = root / "catalog" / "rules" / "injection.toml"
         rule.write_text(rule.read_text().replace("bound parameter", "parameter"))
         self.assertNotEqual(code_digest(root), before)
         self.assertIn("values.toml", CATALOG_DATA)
         for name in ("maintenance.toml", "policy.toml"):
             self.assertIn(name, CATALOG_DATA)
-            source = root / "standard" / "catalog" / name
+            source = root / "catalog" / name
             baseline = code_digest(root)
             source.write_text(source.read_text() + "\n# pin check\n")
             self.assertNotEqual(code_digest(root), baseline)

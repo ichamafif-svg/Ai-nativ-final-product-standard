@@ -19,12 +19,12 @@ from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 from local_sandbox import LocalSandbox  # noqa: E402
 
-import standard.autonomy.__main__ as agent_process  # noqa: E402
-import standard.runtime.daemon as daemon  # noqa: E402
-from standard.autonomy.agent import AgentError  # noqa: E402
-from standard.autonomy.build import Builder, in_scope  # noqa: E402
-from standard.autonomy.llm import Gate, Provider  # noqa: E402
-from standard.surface.human import load_signer  # noqa: E402
+import agent.__main__ as agent_process  # noqa: E402
+import runtime.operator as daemon  # noqa: E402
+from agent.candidate import AgentError
+from agent.build import Builder, in_scope  # noqa: E402
+from agent.llm import Gate, Provider  # noqa: E402
+from surface.human import load_signer  # noqa: E402
 from bt.gateway import AdmissionGateway  # noqa: E402
 from bt.signing import envelope  # noqa: E402
 

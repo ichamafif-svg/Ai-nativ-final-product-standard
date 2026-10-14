@@ -1,4 +1,4 @@
-"""What a product has, and what a change touches: features, surfaces and constructs (standard/catalog/vocabulary.toml).
+"""What a product has, and what a change touches: features, surfaces and constructs (catalog/vocabulary.toml).
 
 Deterministic: the same tree gives the same answer. Python files are read on their syntax tree with imports resolved
 (`from os import system` makes `system(...)` a call to `os.system`); JavaScript and TypeScript are read lexically,

@@ -26,12 +26,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from standard.floors import RELEASE  # noqa: E402
+from catalog.floors import RELEASE  # noqa: E402
 from kernel import Kernel  # noqa: E402
 from bt.host import Evidence, Host  # noqa: E402
 from bt.journal import Journal, PinStore  # noqa: E402
-from standard.runtime import code_digest  # noqa: E402
-from standard.runtime.daemon import isolation  # noqa: E402
+from runtime import code_digest  # noqa: E402
+from runtime.operator import isolation  # noqa: E402
 
 
 def facts(output: dict) -> set:

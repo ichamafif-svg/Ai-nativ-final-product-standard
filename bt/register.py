@@ -7,7 +7,7 @@
 
 Each register is a small file in a directory the guard owns, replaced atomically under one lock; every move is first
 appended to history.jsonl with its reservation key, then made. The guard never builds or exports a release: the
-product's runner reads the commit from the canonical repository by its hash (tools/run_release.py).
+product's runner reads the commit from the canonical repository by its hash (runtime/runner.py).
 
 D38, as boundary transactions: deploy, rollback, canary and abort are `cas` effects on the registers themselves:
 applied when this key's move is in the history and the registers show it; not_applied when the key never reached the

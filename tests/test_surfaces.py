@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from instruments import surfaces  # noqa: E402
-from standard.catalog import load, select  # noqa: E402
+from catalog import load, select  # noqa: E402
 
 
 class Tree:

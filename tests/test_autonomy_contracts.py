@@ -13,26 +13,27 @@ from instruments import jobs, probes, suite
 from instruments.tree import Measure, Snapshot, export, verdict
 from bt.assessment import TrustUnavailable
 from bt.service import TrustedService
-from standard.runtime.operator import Instruments
+from runtime.operator import Instruments
 from instruments.scope import repair as in_scope
-from standard.autonomy.agent import Agent, AgentError
-from standard.autonomy.build import Builder
-from standard.autonomy.context import render_context, task_context
-from standard.autonomy.repair import Repairer
-from standard.autonomy.context import gap_dossiers
-from standard.autonomy.patrol import patrol_context
-from standard.autonomy.patrol import propose_patrol
-from standard.autonomy.read_model import target_state
-from standard.autonomy.llm import Gate, Provider
-from standard.autonomy.patrol import run_patrol
-from standard.autonomy.read_model import ReadModel
-from standard.autonomy.precheck import precheck, suite as agent_suite
-from standard.autonomy.projection import installed_routes, project
-from standard.autonomy.research import NoRedirect, Research, ResearchError
-from standard.autonomy.sandbox import Result
-from standard.autonomy.work import WorkEngine
-from standard.floors import FLOORS
-from standard.surface.web import Installation
+from agent.candidate import AgentError
+from agent.repair import Agent
+from agent.build import Builder
+from context.missions import render_context, task_context
+from agent.repair import Repairer
+from context.missions import gap_dossiers
+from agent.patrol import patrol_context
+from agent.patrol import propose_patrol
+from context.model import target_state
+from agent.llm import Gate, Provider
+from agent.patrol import run_patrol
+from context.model import ReadModel
+from agent.precheck import precheck, suite as agent_suite
+from agent.work import installed_routes, project
+from agent.research import NoRedirect, Research, ResearchError
+from agent.sandbox import Result
+from agent.work import WorkEngine
+from catalog.floors import FLOORS
+from surface.web import Installation
 from test_agent import Signer, store_with
 from test_install import Clock
 from test_maintenance import demo_repository, FILES
@@ -101,7 +102,7 @@ class Reports(unittest.TestCase):
         self.assertTrue(job['network'])
 
     def test_client_target_identifiers_follow_the_kernel_language_in_proposals(self):
-        from standard.autonomy.agent import commit_files
+        from agent.candidate import commit_files
         store, base = store_with(FILES)
         tid = 'Client.Rule/v2'
         head = commit_files(store, base, {'app.py': b'x = 1\n'}, f'Standard-Target: {tid}\n')
@@ -186,7 +187,7 @@ class ContextAndRoutes(unittest.TestCase):
             ReadModel(view)
 
     def test_read_model_queries_share_one_basis_across_consumers(self):
-        from standard.surface.read_views import run
+        from surface.views import run
 
         view = self.view(self.target())
         view['entities'] = {'build:request/r1': {'type': 'request'}}
@@ -349,7 +350,7 @@ class ContextAndRoutes(unittest.TestCase):
         cycle = SimpleNamespace(agent=SimpleNamespace(llm=object(), research=Research_(), store=root / 'store'),
                                 service=SimpleNamespace(view=lambda: view, qualify=lambda contracts: None),
                                 _findings=lambda: {}, routes=installed_routes())
-        with patch('standard.autonomy.patrol.Snapshot', return_value=Snapshot(*store_with(FILES))):
+        with patch('agent.patrol.Snapshot', return_value=Snapshot(*store_with(FILES))):
             result = run_patrol(cycle, main=lambda: 'main-head')
         self.assertEqual(calls[0][1], ('read', 'search'))
         self.assertEqual(result['suspicions'][0]['authority'], 'proposal_only')
@@ -396,8 +397,8 @@ class ContextAndRoutes(unittest.TestCase):
 
     def test_generic_precheck_does_not_claim_an_unmeasured_target_fixed(self):
         store, base = store_with(FILES)
-        with patch('standard.autonomy.precheck.suite', return_value=('green', [])), \
-             patch('standard.autonomy.precheck.tools', return_value={}):
+        with patch('agent.precheck.suite', return_value=('green', [])), \
+             patch('agent.precheck.tools', return_value={}):
             result = precheck(store, base, base, 'client-specific', {'client-specific': self.target()}, None,
                               SimpleNamespace(isolation='test fixture'))
         self.assertIsNone(result['fixed'])
@@ -419,7 +420,7 @@ class ContextAndRoutes(unittest.TestCase):
         self.assertIn('repo:feature:{request}/{base}/{head}', sent[0])
 
     def test_bounded_context_preserves_full_declarations_and_documents_for_reading(self):
-        from standard.autonomy.context import assemble, write_scope
+        from context.missions import assemble, write_scope
         store, base = store_with({"app.py": "x = 1", "unrelated.py": "PRIVATE_UNRELATED_CODE = 1"})
         view = self.view(self.target())
         view["law"]["effective"]["conditions"]["large-client-condition"] = {"description": "x" * 60000}
@@ -442,7 +443,7 @@ class ContextAndRoutes(unittest.TestCase):
             research.act(Snapshot(store, base), {"action": "read", "ref": "/etc/passwd"}, sources)
 
     def test_scoped_patrol_cannot_read_or_search_outside_its_subsystem(self):
-        from standard.autonomy.research import ReadScope
+        from agent.research import ReadScope
         store, base = store_with({"app/a.py": "visible = 1", "other/b.py": "OUTSIDE_MARKER = 1"})
         research = Research(None, store.parent / "notes")
         tree = ReadScope(Snapshot(store, base), {"app/a.py"})
@@ -476,7 +477,7 @@ class ContextAndRoutes(unittest.TestCase):
 
     def test_signed_features_reach_scanner_constructor_and_patrol_consistently(self):
         from instruments.coverage import evaluate
-        from standard.autonomy.context import assemble
+        from context.missions import assemble
         store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()"})
         view = self.view(self.target())
         view["law"]["effective"]["settings"] = {"features": ["mtls"], "values": {"high_value": ["payments.send"]}}
@@ -484,7 +485,7 @@ class ContextAndRoutes(unittest.TestCase):
         tree = Snapshot(store, base)
         packet = json.loads(assemble(ctx, tree, role="build", touched=["surface:endpoint"])[0])["packet"]
         self.assertIn("MSG-SIGN", packet["rule_ids"])
-        from standard.autonomy.candidate import CandidateWorkflow
+        from agent.candidate import CandidateWorkflow
         roles = []
         def ask(prompt, role, **kw):
             roles.append(role)
@@ -501,7 +502,7 @@ class ContextAndRoutes(unittest.TestCase):
         self.assertIn("MSG-SIGN", patrol["rule_ids"])
 
     def test_simplicity_surface_and_model_preserve_scoped_block_contracts(self):
-        from standard.surface.contexts import patrol_packet
+        from surface.views import patrol_packet
         store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()",
                                  "domain/order.py": "from standard_blocks.process import run\nrun(['convert'])",
                                  "other/private.py": "OUTSIDE_CODE = 1"})
@@ -526,8 +527,17 @@ class ContextAndRoutes(unittest.TestCase):
         with self.assertRaises(ResearchError):
             Research(None, store.parent / "notes").act(scoped, {"action": "read", "path": "other/private.py"}, kw["context"])
 
+    def test_catalog_category_debt_has_actual_observation_and_repair_routes(self):
+        target=next(t for t in FLOORS["targets"] if t["id"]=="rules-authorization")
+        view=self.view(target)
+        view["health"]["open"][0]["needs"]=["observe","repair"]
+        tasks=project(view,installed_routes(),lambda needed:None)["tasks"]
+        self.assertEqual({t["need"] for t in tasks},{"observe","repair"})
+        self.assertTrue(all(t["state"]=="AVAILABLE" for t in tasks))
+        self.assertEqual({t["due"] for t in tasks},{10})
+
     def test_target_patrol_and_investigation_keep_the_exact_requirement(self):
-        from standard.autonomy.context import assemble
+        from context.missions import assemble
         target = next(t for t in FLOORS["targets"] if t["id"] == "rules-authorization")
         store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()"})
         view, tree = self.view(target), Snapshot(store, base)
@@ -586,8 +596,8 @@ class ResearchTools(unittest.TestCase):
 
     def test_experiment_never_falls_back_to_the_agent_account(self):
         research, tree, _ = self.setup_research([])
-        with patch('standard.autonomy.sandbox._can_isolate', return_value=False), \
-             patch('standard.autonomy.research.subprocess.run') as run:
+        with patch('agent.sandbox._can_isolate', return_value=False), \
+             patch('agent.research.subprocess.run') as run:
             with self.assertRaises(ResearchError):
                 research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
             run.assert_not_called()
@@ -603,8 +613,8 @@ class ResearchTools(unittest.TestCase):
             seen.append((args, kwargs['env']))
             kwargs['stdout'].write(b'experiment output')
             return type('Done', (), {'returncode': 0})()
-        with patch('standard.autonomy.sandbox._can_isolate', return_value=True), \
-             patch('standard.autonomy.sandbox.subprocess.run', side_effect=run):
+        with patch('agent.sandbox._can_isolate', return_value=True), \
+             patch('agent.sandbox.subprocess.run', side_effect=run):
             result = research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
         self.assertTrue(result.ok)
         args, env = seen[0]
@@ -625,7 +635,7 @@ class ResearchTools(unittest.TestCase):
                 self.size = size
                 return b'approved documentation'
         response = Response()
-        with patch('standard.autonomy.research.urllib.request.build_opener') as opener:
+        with patch('agent.research.urllib.request.build_opener') as opener:
             opener.return_value.open.return_value = response
             self.assertEqual(research.fetch('docs'), 'approved documentation')
             request = opener.return_value.open.call_args.args[0]
@@ -674,7 +684,7 @@ class ResearchTools(unittest.TestCase):
         agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']})
         check = {'ok': True, 'fixed': None, 'tests': 'green'}
         target = {'id': 'custom', 'resource': 'repo:client:custom', 'property': 'result', 'expect': 'verified'}
-        with patch('standard.autonomy.precheck.precheck', return_value=check):
+        with patch('agent.precheck.precheck', return_value=check):
             _, route = agent.craft('custom', base, targets={'custom': target})
         self.assertEqual(route, 'model')
         for path in ('tests/test_app.py', 'standard/rules.json', '.github/workflows/ci.yml', '../keys/a.key'):

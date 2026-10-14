@@ -27,7 +27,7 @@ except ImportError:                                      # the blocks' own depen
     HAVE = False
 
 from instruments import bans  # noqa: E402
-from standard.catalog import load  # noqa: E402
+from catalog import load  # noqa: E402
 
 
 def need(test):
