@@ -10,18 +10,19 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STANDARD = {"kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "tests", "examples", "standard"}
+STANDARD = {"kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "tests", "examples", "standard", "blocks", "standard_blocks"}
 ALLOWED = {
     "kernel": ("kernel",),
     "bt": ("kernel", "bt"),
-    "instruments": ("kernel", "instruments"),
+    "instruments": ("kernel", "instruments", "standard_blocks"),  # existing in-process product probes
     "catalog": ("kernel", "catalog"),
+    "blocks": ("blocks.python.standard_blocks",),
     "context": ("kernel", "instruments", "catalog", "context", "agent.work"),
-    "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent"),
-    "surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "surface"),
+    "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "blocks.python.standard_blocks"),
+    "surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "surface", "blocks.python.standard_blocks"),
     "runtime": ("kernel", "bt", "instruments", "catalog", "runtime"),
-    "tools": ("kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools"),
-    "examples": (),
+    "tools": ("kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "blocks.python.standard_blocks"),
+    "examples": ("standard_blocks",),
 }
 CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
 KERNEL_EFFECT_MODULES = {"os", "pathlib", "time", "socket", "sqlite3", "subprocess", "urllib", "http",

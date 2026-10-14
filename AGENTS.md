@@ -64,6 +64,22 @@ covers are banned elsewhere (`catalog/blocks.toml`); the scanner signs `blocks =
 none. Never copy a block into the product. Values such as `@access`, `@upload_max_bytes` or `@app` are the human's: you
 may draft them, never decide them.
 
+Standard also consumes its own Python blocks directly from `blocks.python.standard_blocks` in this checkout;
+products install the same source as `standard_blocks`. No copy, bootstrap alias or alternate implementation.
+Model calls, configured research fetches and metadata refresh use `outbound.request`, the synchronous entry to
+the existing checked client; named endpoints and limits come from operator configuration (metadata hosts are fixed).
+HTTPS is required, including for a local model; private model hosts require an explicit port. Environment proxies
+and redirects cannot reroute a call. Provider JSON and model proposals use `parse.strict_json`; model replies are
+bounded to 8 MiB/64 levels, research to 1 MB/10 seconds, metadata to 32 MiB/60 seconds.
+Provider keys use `runtime.read_secret` and `Secret`, revealed only in the outgoing authentication headers.
+The console uses strict parsing on all POST bodies and structured logs; parsing never normalizes signed data.
+Block logs go to stderr, keeping CLI result JSON on stdout. The egress audit retains its own content-free format.
+This is scoped adoption, not whole-repository block compliance. The console's HTTP server is not ASGI and its
+current DOM rendering needs a separate migration before the full web/front contracts can hold. Its existing
+headers/host checks remain in place. Repository processes, evidence files and physical cryptography keep their
+specific contracts; K and BT may not import either block package name. Product probes already use the installed
+blocks to exercise the product; this does not make block presence independent proof of every path.
+
 ## Candidate workflow and simplicity
 
 One governed agent identity may have several workers in U. One constructor writes; two reviewers (correctness/security

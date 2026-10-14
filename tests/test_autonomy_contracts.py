@@ -29,7 +29,7 @@ from agent.patrol import run_patrol
 from context.model import ReadModel
 from agent.precheck import precheck, suite as agent_suite
 from agent.work import installed_routes, project
-from agent.research import NoRedirect, Research, ResearchError
+from agent.research import Research, ResearchError
 from agent.sandbox import Result
 from agent.work import WorkEngine
 from catalog.floors import FLOORS
@@ -590,8 +590,6 @@ class ResearchTools(unittest.TestCase):
             with self.assertRaises(ResearchError):
                 research.act(tree, request)
         with self.assertRaises(ResearchError):
-            NoRedirect().redirect_request(None, None, None, None, None, None)
-        with self.assertRaises(ResearchError):
             Research(None, '/tmp/unused', sources={'bad': 'file:///etc/passwd'})
 
     def test_experiment_never_falls_back_to_the_agent_account(self):
@@ -627,23 +625,24 @@ class ResearchTools(unittest.TestCase):
         self.assertIn('--fsize=1048576', args)
 
     def test_fetch_uses_only_the_configured_source_and_bounded_content(self):
+        import httpx
         research = Research(None, '/tmp/unused', sources={'docs': 'https://docs.example/approved'})
-        class Response:
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
-            def read(self, size):
-                self.size = size
-                return b'approved documentation'
-        response = Response()
-        with patch('agent.research.urllib.request.build_opener') as opener:
-            opener.return_value.open.return_value = response
+        seen = []
+        def respond(request):
+            seen.append(str(request.url))
+            return httpx.Response(200, content=b'approved documentation')
+        with patch('blocks.python.standard_blocks.outbound._transport',
+                   return_value=httpx.MockTransport(respond)):
             self.assertEqual(research.fetch('docs'), 'approved documentation')
-            request = opener.return_value.open.call_args.args[0]
-            self.assertEqual(request.full_url, 'https://docs.example/approved')
-            self.assertEqual(response.size, 1000001)
             with self.assertRaises(ResearchError):
                 research.fetch('https://attacker/')
-            self.assertEqual(opener.return_value.open.call_count, 1)
+        self.assertEqual(seen, ['https://docs.example/approved'])
+        for response in (httpx.Response(302, headers={'location': 'https://attacker/'}),
+                         httpx.Response(200, content=b'x' * 1_000_001)):
+            with patch('blocks.python.standard_blocks.outbound._transport',
+                       return_value=httpx.MockTransport(lambda request: response)):
+                with self.assertRaises(ResearchError):
+                    research.fetch('docs')
 
     def test_real_jail_hides_the_host_or_refuses_to_execute(self):
         research, tree, _ = self.setup_research([])

@@ -154,10 +154,10 @@ class Refresh(unittest.TestCase):
             if "osv" in url:
                 return {"vulns": answers[body["version"]]}
             return {"info": {"version": "25.0", "license_expression": "Apache-2.0", "classifiers": []}}
-        refresh_data.get = get
         path = Path(tempfile.mkdtemp()) / "requirements.txt"
         path.write_text("packaging==24.1\n")
-        snap = refresh_data.snapshot(path)
+        with patch.object(refresh_data, "get", side_effect=get):
+            snap = refresh_data.snapshot(path)
         self.assertEqual(snap["advisories"], {"packaging==24.1": [{"id": "GHSA-1", "fix_versions": ["24.2"]}],
                                               "packaging==24.2": []})
 

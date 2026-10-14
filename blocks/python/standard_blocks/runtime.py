@@ -47,16 +47,23 @@ def secret(name: str) -> Secret:
     path = (root / name).resolve()                     # orchestrators link secrets inside the vault: allowed
     if root not in path.parents:
         raise RuntimeRefused(f"secret {name} leads out of the vault")
+    return read_secret(path)
+
+
+def read_secret(path) -> Secret:
+    """Read an operator-named secret file; never a path chosen by an untrusted request or model."""
     try:
-        info = path.stat()
-        if info.st_mode & stat.S_IWOTH or (info.st_mode & stat.S_IWGRP and info.st_uid != os.getuid()):
-            raise RuntimeRefused(f"secret {name} can be written by others")
-        value = path.read_text(encoding="utf-8").strip()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r", encoding="utf-8") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise RuntimeRefused("secret is not a protected regular file")
+            value = source.read(65_537)
     except OSError:
-        raise RuntimeRefused(f"secret {name} is not in the vault") from None
-    if not value:
-        raise RuntimeRefused(f"secret {name} is empty")
-    return Secret(value)
+        raise RuntimeRefused("secret file cannot be read") from None
+    if not value.strip() or len(value) > 65_536:
+        raise RuntimeRefused("secret is empty or too large")
+    return Secret(value.strip())
 
 
 def bounded_queue(maxsize: int | None = None, values: Values | None = None) -> asyncio.Queue:

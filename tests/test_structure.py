@@ -137,6 +137,14 @@ class Structure(unittest.TestCase):
         self.assertTrue(any("second judge" in p and "kernel.judge" in p for p in problems), problems)
         self.assertTrue(any("second judge" in p and "bt.service" in p for p in problems), problems)
 
+    def test_blocks_cannot_reach_authority_and_judges_cannot_import_blocks(self):
+        self.write("kernel/judge.py", "from blocks.python.standard_blocks import crypto\n")
+        self.write("bt/checker.py", "from standard_blocks.crypto import same\n")
+        self.write("blocks/escape.py", "from bt.service import TrustedService\n")
+        problems = violations(self.root)
+        for path in ("kernel/judge.py", "bt/checker.py", "blocks/escape.py"):
+            self.assertTrue(any(p.startswith(path + " imports ") for p in problems), problems)
+
     def test_relative_imports_of_packages_resolve_within_the_correct_role(self):
         path = self.write("agent/__init__.py", "from . import repair\nfrom bt.gateway import GatewayClient\n")
         self.write("agent/repair.py", "")

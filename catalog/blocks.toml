@@ -60,7 +60,7 @@ probes = ["egress"]
 
 [block.outbound.fastapi]
 module = "standard_blocks.outbound"
-use = "await outbound.get('billing', '/invoices', params={'id': iid})"
+use = "await outbound.get('billing', '/invoices', params={'id': iid}) · synchronous: request('GET', 'billing', endpoints=endpoints, values=rules)"
 bans = ["import:requests", "import:urllib.request", "import:urllib3", "import:http.client", "import:aiohttp", "call:httpx.get", "call:httpx.post", "call:httpx.Client", "call:httpx.AsyncClient", "call-kw:*:verify=False"]
 
 [block.crypto]

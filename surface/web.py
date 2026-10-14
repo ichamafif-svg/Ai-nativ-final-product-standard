@@ -25,6 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import tomllib
+from blocks.python.standard_blocks import log
+from blocks.python.standard_blocks.parse import strict_json
 from bt.gateway import GatewayClient
 from context.missions import task_context
 from context.missions import gap_dossiers
@@ -549,7 +551,10 @@ def handler(inst: Installation, allowed_hosts=LOCAL_HOSTS):
             return True
 
         def log_message(self, fmt, *args):
-            sys.stderr.write("web: " + fmt % args + "\n")
+            log.event("console.http", route=self.path.partition("?")[0], outcome="error")
+
+        def log_request(self, code="-", size="-"):
+            log.event("console.request", route=self.path.partition("?")[0], status=code)
 
         def _send(self, status, body: bytes, kind: str):
             self.send_response(status)
@@ -617,18 +622,25 @@ def handler(inst: Installation, allowed_hosts=LOCAL_HOSTS):
                 return self._ok({"error": "not found"}, HTTPStatus.NOT_FOUND)
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self._ok({"error": "application/json only"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-            size = int(self.headers.get("Content-Length") or 0)
+            try:
+                size = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._ok({"error": "bad length"}, HTTPStatus.BAD_REQUEST)
             if not 0 < size <= MAX_BODY:
                 return self._ok({"error": "bad length"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            try:
+                body = strict_json(self.rfile.read(size), max_bytes=MAX_BODY)
+                if not isinstance(body, dict):
+                    raise ValueError("a JSON object is required")
+            except ValueError as exc:
+                return self._ok({"error": str(exc)[:200]}, HTTPStatus.BAD_REQUEST)
             if self.path in ("/api/requests", "/api/rules/draft"):   # D34: store only; D51: draft only
                 try:
-                    body = json.loads(self.rfile.read(size))
                     return self._ok(inst.store_request(body) if self.path == "/api/requests" else inst.draft_rules(body))
                 except (ValueError, OSError) as exc:
                     return self._ok({"error": str(exc)[:300]}, HTTPStatus.BAD_REQUEST)
             try:
-                envelope = json.loads(self.rfile.read(size))
-                return self._ok({"admitted": inst.client.admit(envelope)})
+                return self._ok({"admitted": inst.client.admit(body)})
             except Exception as exc:
                 return self._ok({"refused": getattr(exc, "code", None) or str(exc)[:300]}, HTTPStatus.CONFLICT)
     return Handler

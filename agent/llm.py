@@ -16,35 +16,54 @@ import hashlib
 import json
 import time
 import threading
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+import httpx
+
+from blocks.python.standard_blocks import Values
+from blocks.python.standard_blocks.outbound import request
+from blocks.python.standard_blocks.parse import strict_json
+from blocks.python.standard_blocks.runtime import read_secret
+from blocks.python.standard_blocks.types import Secret
 
 from instruments.probes import SECRETS
 
 REDACTED = "<REDACTED>"
 SYSTEM = "You are a careful maintenance engineer. Answer with one JSON object and nothing else."
+MAX_REPLY = 8 * 1024 * 1024
 
 
 class EgressError(RuntimeError):
     pass
 
 
+def _request(endpoint: str, body: dict, headers: dict):
+    parts = urlsplit(endpoint)
+    destination = f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
+    try:
+        response = request("POST", "model", endpoints={"model": endpoint},
+                           values=Values({"destinations": [destination], "outbound_timeout_s": 120,
+                                          "outbound_max_bytes": MAX_REPLY}), json=body, headers=headers)
+        return strict_json(response.content, max_bytes=MAX_REPLY, max_depth=64)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise EgressError(f"model request refused: {type(exc).__name__}") from None
+
+
 def anthropic(endpoint: str, model: str, key: str, prompt: str) -> str:
     body = {"model": model, "max_tokens": 16000, "system": SYSTEM, "messages": [{"role": "user", "content": prompt}]}
-    req = urllib.request.Request(endpoint or "https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(),
-                                 method="POST", headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                                                         "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return "".join(b.get("text", "") for b in json.loads(r.read())["content"])
+    reply = _request(endpoint or "https://api.anthropic.com/v1/messages", body,
+                     {"x-api-key": key.reveal() if isinstance(key, Secret) else key,
+                      "anthropic-version": "2023-06-01"})
+    return "".join(b.get("text", "") for b in reply["content"])
 
 
 def openai_compatible(endpoint: str, model: str, key: str, prompt: str) -> str:
     body = {"model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]}
-    req = urllib.request.Request(endpoint, data=json.dumps(body).encode(), method="POST",
-                                 headers={"authorization": f"Bearer {key}", "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"]
+    reply = _request(endpoint, body, {"authorization": "Bearer " +
+                                     (key.reveal() if isinstance(key, Secret) else key)})
+    return reply["choices"][0]["message"]["content"]
 
 
 KINDS = {"anthropic": anthropic, "openai": openai_compatible}
@@ -55,8 +74,12 @@ class Provider:
     name: str
     kind: str
     model: str
-    key: str
+    key: Secret
     endpoint: str = ""
+
+    def __post_init__(self):
+        if not isinstance(self.key, Secret):
+            object.__setattr__(self, "key", Secret(self.key))
 
 
 def redact(prompt: str) -> tuple[str, int]:
@@ -82,7 +105,7 @@ class Gate:
     def from_config(cls, section: dict, resolve, log) -> "Gate":
         """[llm.small] / [llm.frontier] = {kind, model, key_file, endpoint?}"""
         tiers = {tier: Provider(spec.get("name", spec["kind"]), spec["kind"], spec["model"],
-                                Path(resolve(spec["key_file"])).read_text().strip(), spec.get("endpoint", ""))
+                                read_secret(resolve(spec["key_file"])), spec.get("endpoint", ""))
                  for tier, spec in section.items() if isinstance(spec, dict)}
         return cls(tiers, log)
 
@@ -97,7 +120,9 @@ class Gate:
                 f.write(json.dumps(line) + "\n")
         text = self.transport(provider, clean)
         try:
-            reply = json.loads(text[text.find("{"):text.rfind("}") + 1])
+            if not isinstance(text, str) or len(text.encode()) > MAX_REPLY:
+                raise ValueError("model reply is not bounded text")
+            reply = strict_json(text[text.find("{"):text.rfind("}") + 1], max_bytes=MAX_REPLY, max_depth=64)
         except ValueError as exc:
             raise EgressError(f"the model did not answer with JSON: {exc}") from exc
         if not isinstance(reply, dict):

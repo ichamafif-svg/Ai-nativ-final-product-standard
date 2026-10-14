@@ -9,25 +9,28 @@ any other bytes.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kernel import canon, digest  # noqa: E402
+from blocks.python.standard_blocks import Values  # noqa: E402
+from blocks.python.standard_blocks.outbound import request  # noqa: E402
+from blocks.python.standard_blocks.parse import strict_json  # noqa: E402
 
 PIN = re.compile(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)")
 
 
 def get(url, body=None):
-    req = urllib.request.Request(url, data=json.dumps(body).encode() if body else None,
-                                 headers={"Content-Type": "application/json", "User-Agent": "standard-refresh"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read())
+    cap = 32 * 1024 * 1024
+    response = request("POST" if body is not None else "GET", "metadata", endpoints={"metadata": url},
+                       values=Values({"destinations": ["api.osv.dev", "pypi.org", "api.github.com"],
+                                      "outbound_timeout_s": 60, "outbound_max_bytes": cap}),
+                       json=body, headers={"User-Agent": "standard-refresh"})
+    return strict_json(response.content, max_bytes=cap, max_depth=64)
 
 
 def advisories(name, version) -> list:

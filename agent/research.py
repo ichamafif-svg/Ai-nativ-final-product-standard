@@ -12,9 +12,13 @@ import tempfile
 import threading
 import time
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from types import MappingProxyType
+
+import httpx
+
+from blocks.python.standard_blocks import Values
+from blocks.python.standard_blocks.outbound import request
 
 from agent.sandbox import Result, Sandbox
 
@@ -44,11 +48,6 @@ def relative_path(path) -> bool:
             and not path.startswith("/") and all(p not in ("", ".", "..", ".git") for p in path.split("/")))
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        raise ResearchError("research source redirect refused; configure its final URL")
-
-
 class Research:
     def __init__(self, gate, notes, *, sources=None, steps=8, timeout=30):
         self.gate, self.notes, self.steps, self.timeout = gate, Path(notes), steps, timeout
@@ -71,12 +70,15 @@ class Research:
     def fetch(self, source):
         if not isinstance(source, str) or source not in self.sources:
             raise ResearchError("source is not configured by the operator")
-        request = urllib.request.Request(self.sources[source], headers={"User-Agent": "standard-research"})
-        with urllib.request.build_opener(NoRedirect()).open(request, timeout=10) as response:
-            data = response.read(1_000_001)
-        if len(data) > 1_000_000:
-            raise ResearchError("source exceeds the research input bound")
-        return data.decode(errors="replace")[:20000]
+        host = urllib.parse.urlsplit(self.sources[source]).hostname
+        try:
+            response = request("GET", source, endpoints=self.sources,
+                               values=Values({"destinations": [host], "outbound_timeout_s": 10,
+                                              "outbound_max_bytes": 1_000_000}),
+                               headers={"User-Agent": "standard-research"})
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ResearchError(f"research source refused: {type(exc).__name__}") from None
+        return response.content.decode(errors="replace")[:20000]
 
     def read(self, tree, path, limit=1000000):
         if not relative_path(path) or path not in tree.paths() or tree.entries[path][0] == "120000":

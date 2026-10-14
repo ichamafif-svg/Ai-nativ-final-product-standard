@@ -18,6 +18,7 @@ import tomllib
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from blocks.python.standard_blocks.runtime import read_secret
 
 from instruments.data import EMPTY, TrustedData
 from bt.gateway import GatewayClient
@@ -69,7 +70,7 @@ def build(config_path):
     except Exception:
         scopes = None
     agent = Agent(store, data=TrustedData.load(resolve(data["path"]), data["digest"]) if data else EMPTY,
-                  api_key=resolve(api).read_text().strip() if api and not llm else None, publish=publish, llm=llm,
+                  api_key=read_secret(resolve(api)) if api and not llm else None, publish=publish, llm=llm,
                   scopes=scopes, research_sources=agent_cfg.get("research_sources"),
                   review=agent_cfg.get("review"), research_steps=agent_cfg.get("research_steps", 8))
     routes = installed_routes(agent.scopes, model=agent.llm is not None, scanner=True)
