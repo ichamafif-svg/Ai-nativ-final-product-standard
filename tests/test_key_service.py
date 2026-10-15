@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -21,7 +22,11 @@ class KeyService(unittest.TestCase):
     def setUp(self):
         from fabric.identity.keys import dev
         self.state = tempfile.mkdtemp()
-        self.bao, self.process = dev(self.state, where("openbao"))
+        # Native dev startup must not need a home directory or store its root token.
+        home = Path(self.state, "no-home")
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            self.bao, self.process = dev(self.state, where("openbao"))
+        self.assertFalse(home.exists())
         self.addCleanup(self.process.wait)
         self.addCleanup(self.process.kill)
         self.bao.create_key("guard")

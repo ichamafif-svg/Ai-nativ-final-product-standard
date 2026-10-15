@@ -612,9 +612,11 @@ class ResearchTools(unittest.TestCase):
                 bundle = args[args.index('--bundle') + 1]
                 seen.append(json.loads(Path(bundle, 'config.json').read_text()))
                 kwargs['stdout'].write(b'experiment output')
-            return type('Done', (), {'returncode': 0})()
+            return type('Done', (), {'returncode': 0, 'wait': lambda self, **kw: 0,
+                                      'poll': lambda self: 0})()
         with patch('fabric.runtime.bac.Bac._unavailable', return_value=None), \
-             patch('fabric.runtime.bac.subprocess.run', side_effect=run):
+             patch('fabric.runtime.bac.subprocess.Popen', side_effect=run), \
+             patch('fabric.runtime.bac.subprocess.run'):
             result = research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
         self.assertTrue(result.ok)
         config = seen[0]

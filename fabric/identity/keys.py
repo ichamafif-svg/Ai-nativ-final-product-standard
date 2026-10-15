@@ -169,7 +169,7 @@ def dev(state, binary: str) -> tuple[OpenBao, subprocess.Popen]:
     """An in-memory development OpenBao with transit and KV ready, its token random and kept by the platform."""
     port, token = _free_port(), base64.urlsafe_b64encode(os.urandom(24)).decode()
     log = open(Path(state) / "openbao.log", "ab")
-    process = subprocess.Popen([binary, "server", "-dev", f"-dev-root-token-id={token}",
+    process = subprocess.Popen([binary, "server", "-dev", "-dev-no-store-token", f"-dev-root-token-id={token}",
                                 f"-dev-listen-address=127.0.0.1:{port}"], stdout=log, stderr=subprocess.STDOUT)
     log.close()
     bao = OpenBao(f"http://127.0.0.1:{port}", token)
@@ -182,6 +182,7 @@ def dev(state, binary: str) -> tuple[OpenBao, subprocess.Popen]:
             time.sleep(0.1)
     else:
         process.kill()
+        process.wait(timeout=10)
         raise KeyServiceError("the development key service did not start")
     bao.enable("transit", "transit")
     return bao, process
