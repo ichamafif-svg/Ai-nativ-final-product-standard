@@ -14,10 +14,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat  # noqa: E402
 
-from catalog.floors import RELEASE, rules  # noqa: E402
-from kernel import Kernel, Refused, apply, canon, digest, empty  # noqa: E402
-from kernel.identity import PAYLOAD_TYPE, keyid, pae, statement  # noqa: E402
-from bt.checker import Checker  # noqa: E402
+from engine.catalog.floors import RELEASE, rules  # noqa: E402
+from fabric.control.kernel import Kernel, Refused, apply, canon, digest, empty  # noqa: E402
+from fabric.control.kernel.identity import PAYLOAD_TYPE, keyid, pae, statement  # noqa: E402
+from fabric.control.bt.checker import Checker  # noqa: E402
 
 CODE = digest({"code": "test-release"})
 HOUR = 3_600_000
@@ -84,7 +84,7 @@ class Ledger:
 
     def measure(self, author, under, resource, prop, status, level="real"):
         """A pinned instrument's measurement (D33): method and coverage from the floors, measured now."""
-        from catalog.floors import INSTRUMENTS
+        from engine.catalog.floors import INSTRUMENTS
         method, coverage, _ = INSTRUMENTS[prop]
         at = self.state["last_at"] + 1
         return self.submit("measurement", author, at=at, under=under, resource=resource, property=prop,

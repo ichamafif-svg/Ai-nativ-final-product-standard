@@ -12,16 +12,16 @@ from pathlib import Path
 from fixture import Ledger, client_law
 from local_sandbox import LocalSandbox
 
-from agent.repair import Agent, Repairer
-from agent.loop import Loop
-from agent.work import Route, WorkEngine
-from bt import Journal, PinStore, Signer, TrustedService
-from bt.adapters import GitRepository
-from bt.transactions import Boundary, ledger_of
-from instruments.data import TrustedData
-from bt.isolation import Isolation  # noqa: E402
-from bt.host import Evidence, Host
-from runtime.operator import Instrument, Instruments, Prover
+from engine.agents.repair import Agent, Repairer
+from engine.agents.loop import Loop
+from engine.agents.work import Route, WorkEngine
+from fabric.control.bt import Journal, PinStore, Signer, TrustedService
+from fabric.control.bt.adapters import GitRepository
+from fabric.control.bt.transactions import Boundary, ledger_of
+from engine.verification.data import TrustedData
+from fabric.control.bt.isolation import Isolation  # noqa: E402
+from fabric.control.bt.host import Evidence, Host
+from fabric.control.runtime.operator import Instrument, Instruments, Prover
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,7 +31,7 @@ def host_for(root: Path, repo, data=None, world=None, stores=None, clock=None, s
     path = None
     if data is not None:
         path = root / "data.json"
-        from kernel.canon import canon
+        from fabric.control.kernel.canon import canon
         path.write_bytes(canon(data.value))
     return Host(ROOT, Evidence(root / "evidence"), repo, data=(path, data.digest) if data is not None else None,
                 world=world, stores=stores, clock=clock, series=series,
@@ -101,7 +101,7 @@ class Stand(unittest.TestCase):
         git_repo = GitRepository(self.repo, self.store)
         self.world = type("World", (), {"protections": lambda _: set()})()
         self.host = host_for(root, self.repo, self.data, self.world, clock=clock)
-        from catalog.floors import CONTRACTS, PROGRAMS
+        from engine.catalog.floors import CONTRACTS, PROGRAMS
         self.boundary = Boundary(self.host.evidence, root / "transactions.jsonl", CONTRACTS, PROGRAMS, clock,
                                  ledger=lambda: ledger_of(self.journal))
         effects = {"remediate": git_repo}
@@ -185,8 +185,8 @@ class Maintenance(Stand):
         self.assertEqual((before["opened"], before["due"]), (after["opened"], after["due"]))
 
     def test_a_change_outside_its_scope_waits_for_the_human(self):
-        from context.moves import queue
-        from agent.candidate import commit_files
+        from interface.context.moves import queue
+        from engine.agents.candidate import commit_files
         self.instruments.measure()
         base = self.main()
         head = commit_files(self.store, base, {"sbom.json": b'{"components": []}\n',

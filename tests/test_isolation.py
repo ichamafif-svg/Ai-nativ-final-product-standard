@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
-from bt.host import Evidence, Host  # noqa: E402
-from bt.isolation import Isolation  # noqa: E402
+from fabric.control.bt.host import Evidence, Host  # noqa: E402
+from fabric.control.bt.isolation import Isolation  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -81,7 +81,7 @@ class Isolated(unittest.TestCase):
         self.assertEqual(facts.get("tests"), "green", out)
 
     def test_unconfined_is_explicit_and_demo_only(self):
-        from runtime.operator import isolation
+        from fabric.control.runtime.operator import isolation
         self.assertFalse(isolation({}, demo=True).may_run_candidates)
         self.assertTrue(isolation({"tests": {"unconfined": True}}, demo=True).may_run_candidates)
         with self.assertRaises(ValueError):

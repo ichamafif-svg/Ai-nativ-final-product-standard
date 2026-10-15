@@ -1,7 +1,7 @@
 """Standard's Python primitives and FastAPI integrations: one module per concern. Install `standard-blocks[web]`
 for web, sessions, access and file integrations. Generic modules can be imported without FastAPI; `Pages.render`
 and `runtime.install` are optional Starlette/FastAPI helpers. Product code may not call what a block covers (the ban list in
-catalog/blocks.toml, checked by Standard's scanner on every change).
+engine/catalog/blocks.toml, checked by Standard's scanner on every change).
 
     web       security headers, cookies, CORS, CSRF, methods, errors, proxies, redirects, rate limits
     session   OpenID Connect sign-in, server-side sessions, re-authentication, token verification

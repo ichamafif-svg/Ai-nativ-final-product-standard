@@ -16,16 +16,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools import ceremony  # noqa: E402
-from kernel.identity import open_envelope, verify  # noqa: E402
+from fabric.control.kernel.identity import open_envelope, verify  # noqa: E402
 from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
 
 def telemetry_fixture(url="http://svc/metrics", slo=0.999, pages=()):
     from types import SimpleNamespace
-    from bt.host import Evidence, Series
-    from runtime.operator import publish_readings
-    from surface.telemetry import Telemetry
+    from fabric.control.bt.host import Evidence, Series
+    from fabric.control.runtime.operator import publish_readings
+    from interface.surface.telemetry import Telemetry
 
     root = Path(tempfile.mkdtemp())
     evidence = Evidence(root / "evidence")
@@ -52,7 +52,7 @@ console.log(JSON.stringify({ env: await envelope(domain, "observation", JSON.par
 
 def node_sign(key_text: str, domain: str, body: dict) -> dict:
     script = Path(tempfile.mkdtemp()) / "sign.mjs"
-    script.write_text(NODE % (ROOT / "surface" / "static" / "sign.js").as_uri())
+    script.write_text(NODE % (ROOT / 'interface/surface' / "static" / "sign.js").as_uri())
     r = subprocess.run(
         ["node", str(script), key_text, domain, json.dumps(body)], capture_output=True, text=True, timeout=60
     )
@@ -64,7 +64,7 @@ def node_sign(key_text: str, domain: str, body: dict) -> dict:
 @unittest.skipUnless(subprocess.run(["which", "node"], capture_output=True).returncode == 0, "node is not installed")
 class BrowserSigning(unittest.TestCase):
     def test_the_browser_signs_the_very_bytes_the_kernel_verifies(self):
-        from bt.signing import envelope
+        from fabric.control.bt.signing import envelope
 
         root = Path(tempfile.mkdtemp())
         signer = ceremony.new_key(root / "h3.key")
@@ -90,10 +90,10 @@ class BrowserSigning(unittest.TestCase):
 
 class Server(unittest.TestCase):
     def test_state_dossier_and_admission_through_the_gateway(self):
-        import runtime.operator as daemon
-        from surface.web import Installation, handler
+        import fabric.control.runtime.operator as daemon
+        from interface.surface.web import Installation, handler
         from http.server import ThreadingHTTPServer
-        from bt.gateway import AdmissionGateway
+        from fabric.control.bt.gateway import AdmissionGateway
 
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, FILES)
@@ -177,8 +177,8 @@ class Server(unittest.TestCase):
             alert = source[0]
             self.assertEqual((alert["kind"], alert["why"]["rule"]), ("source", "source_down"))
             self.assertEqual(alert["severity"], "page")  # D32: page or ticket
-            from surface.human import load_signer
-            from bt.signing import envelope
+            from interface.surface.human import load_signer
+            from fabric.control.bt.signing import envelope
 
             post = lambda path, body: urllib.request.urlopen(
                 urllib.request.Request(
@@ -266,7 +266,7 @@ class Telemetry(unittest.TestCase):
         return "\n".join(out) + "\nsome_other_metric 3\n"
 
     def test_rates_errors_quantiles_budget_and_restarts(self):
-        from surface.telemetry import declared_routes, quantile
+        from interface.surface.telemetry import declared_routes, quantile
 
         pages = iter([self.exposition(0, 0, 0, 0), self.exposition(900, 100, 800, 0), self.exposition(50, 0, 50, 0)])
         t, capture = telemetry_fixture(pages=pages)
@@ -352,7 +352,7 @@ class Components(unittest.TestCase):
 
 class SharedCaptures(unittest.TestCase):
     def test_restart_replays_retained_bt_captures_once_without_network(self):
-        from surface.telemetry import Telemetry as Reading
+        from interface.surface.telemetry import Telemetry as Reading
         from unittest.mock import patch
 
         metrics = Telemetry()
@@ -401,8 +401,8 @@ class SharedCaptures(unittest.TestCase):
         t.db.close()
 
     def test_public_projection_excludes_private_probe_and_runner_evidence(self):
-        from bt.host import Evidence, Series
-        from runtime.operator import publish_readings
+        from fabric.control.bt.host import Evidence, Series
+        from fabric.control.runtime.operator import publish_readings
         from types import SimpleNamespace
 
         root = Path(tempfile.mkdtemp())

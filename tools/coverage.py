@@ -11,13 +11,13 @@ from __future__ import annotations
 import argparse
 import json
 
-from instruments.data import EMPTY
-from instruments.jobs import JOBS
-from instruments.recipes import recipes_for
-from instruments.scope import REPAIR
-from agent.repair import task_of
-from context.model import measurement_for
-from catalog.floors import CONTRACTS, FLOORS
+from engine.verification.data import EMPTY
+from engine.verification.jobs import JOBS
+from engine.verification.recipes import recipes_for
+from engine.verification.scope import REPAIR
+from engine.agents.repair import task_of
+from interface.context.model import measurement_for
+from engine.catalog.floors import CONTRACTS, FLOORS
 
 
 def inventory(targets=None) -> list[dict]:

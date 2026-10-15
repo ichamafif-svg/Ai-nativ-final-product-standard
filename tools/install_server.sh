@@ -44,11 +44,18 @@ git_source() {
 }
 
 unit() {
-  local name="$1" user="$2" command="$3"
+  local name="$1" user="$2" command="$3" stop_control=""
+  if [ "$name" = standard-agent ]; then
+    # The fixed launcher places this process outside the service's initial cgroup.
+    # Signal its main process, then let root kill the complete bounded UID subtree.
+    stop_control="KillMode=process
+ExecStopPost=+/bin/sh -c 'echo 1 > /sys/fs/cgroup/standard-bac/$(id -u standard-agent)/cgroup.kill'"
+  fi
   cat > "/etc/systemd/system/$name.service" <<EOF
 [Unit]
 Description=Standard laboratory $name
-After=network-online.target
+After=network-online.target standard-cgroups.service
+Requires=standard-cgroups.service
 
 [Service]
 User=$user
@@ -56,7 +63,8 @@ Group=$user
 UMask=0027
 Environment=HOME=/home/$user
 WorkingDirectory=$CODE
-ExecStart=$PY $command
+ExecStart=$command
+$stop_control
 Restart=on-failure
 RestartSec=10
 
@@ -77,12 +85,21 @@ install_lab() {
   [ -z "$(git_source status --porcelain --untracked-files=no)" ] || {
     echo "push a clean commit before installing" >&2; exit 1;
   }
+  [ -f /sys/fs/cgroup/cgroup.controllers ] || {
+    echo "the fabric requires a cgroup v2 host with cpu, memory and pids delegation" >&2; exit 1;
+  }
+  for controller in cpu memory pids; do
+    case " $(cat /sys/fs/cgroup/cgroup.controllers) " in
+      *" $controller "*) ;;
+      *) echo "missing cgroup controller: $controller" >&2; exit 1 ;;
+    esac
+  done
   lab_path "$CODE"
   lab_path "$ROOT"
   if [ -f "$CODE/$MARKER" ] && [ -f "$ROOT/$MARKER" ]; then stop_lab; else check_units; fi
 
   apt-get update -q
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip util-linux bubblewrap curl >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip util-linux bubblewrap curl runc sudo >/dev/null
   python3 -c 'import sys; assert sys.version_info >= (3, 11)'
 
   rm -rf -- "$CODE" "$ROOT"
@@ -100,6 +117,23 @@ install_lab() {
   id standard-gate  >/dev/null 2>&1 || useradd -m -s /bin/sh -G standard-guard standard-gate
   id standard-web   >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-web
   id standard-runner >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin standard-runner
+  install -d -m 0755 /usr/local/libexec
+  install -o root -g root -m 0755 "$CODE/tools/cgroup_setup.sh" /usr/local/libexec/standard-cgroups-setup
+  install -o root -g root -m 0755 "$CODE/tools/cgroup_run.sh" /usr/local/libexec/standard-cgroup-run
+  cat > /etc/systemd/system/standard-cgroups.service <<'CGROUP_UNIT'
+[Unit]
+Description=Standard laboratory native cgroup delegation
+Before=standard-agent.service standard-operator.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/standard-cgroups-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+CGROUP_UNIT
+  /usr/local/libexec/standard-cgroups-setup
 
   git -C "$ROOT/seed" init -q -b main
   git -C "$ROOT/seed" -c user.name=Standard -c user.email=lab@localhost \
@@ -126,13 +160,19 @@ EOF
   echo "LABORATORY ONLY: this host holds the human's key too; qualification must fail (T02)."
   echo "Commit: $(cat "$CODE/LAB_COMMIT")"
   "$PY" tools/ceremony.py separate "$ROOT/install" --guard-user standard-guard --agent-user standard-agent
-  printf 'standard-guard ALL=(standard-runner) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/standard-runner
+  printf 'standard-guard ALL=(root) NOPASSWD: /usr/local/libexec/standard-cgroup-run standard-runner *\n' > /etc/sudoers.d/standard-runner
   chmod 440 /etc/sudoers.d/standard-runner
 
-  unit standard-operator standard-guard "-m runtime serve $ROOT/install/standard.toml 30"
-  unit standard-agent standard-agent "-m agent run $ROOT/install/standard.toml 60"
-  unit standard-web standard-web "-m surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
+  for account in standard-agent standard-runner; do
+    /usr/local/libexec/standard-cgroup-run "$account" "$PY" -c \
+      'from fabric.runtime.bac import Bac; b = Bac(); assert b.ready, b.why'
+  done
+
+  unit standard-operator standard-guard "$PY -m fabric.control.runtime serve $ROOT/install/standard.toml 30"
+  unit standard-agent standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent $PY -m engine.agents run $ROOT/install/standard.toml 60"
+  unit standard-web standard-web "$PY -m interface.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
+  systemctl enable --now standard-cgroups
   systemctl enable --now standard-operator
   systemctl enable --now standard-agent standard-web
   local ready=0

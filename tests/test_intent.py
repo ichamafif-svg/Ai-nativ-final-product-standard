@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from instruments.rule_probes import run_http  # noqa: E402
+from engine.verification.rule_probes import run_http  # noqa: E402
 
 
 class Orders(BaseHTTPRequestHandler):

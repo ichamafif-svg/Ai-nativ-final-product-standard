@@ -13,11 +13,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from catalog import effective, load  # noqa: E402
-from enclosure import gateway, identity  # noqa: E402
-from enclosure.bac import Bac  # noqa: E402
-from enclosure.components import where  # noqa: E402
-from enclosure.gate import Gate, Records, Refused, canonical  # noqa: E402
+from engine.catalog import effective, load  # noqa: E402
+from fabric.network import gateway
+from fabric.identity import identity# noqa: E402
+from fabric.runtime.bac import Bac  # noqa: E402
+from fabric.supply_chain.components import where  # noqa: E402
+from fabric.network.gate import Gate, Records, Refused, canonical  # noqa: E402
 from blocks.python.standard_blocks.parse import ParseError  # noqa: E402
 
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -94,7 +95,7 @@ class EnvoyConfiguration(unittest.TestCase):
 class EntryPath(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from enclosure.stack import Stack
+        from fabric.network.stack import Stack
         cls.port = free_port()
         cls.stack = Stack(tempfile.mkdtemp(), VALUES, [sys.executable, "-I", str(FIXTURES / "echo_product.py")],
                           cwd=FIXTURES, port=cls.port, envoy=ENVOY).start()
@@ -143,8 +144,8 @@ class SignIn(unittest.TestCase):
         import http.cookiejar
         sys.path.insert(0, str(FIXTURES))
         from fake_idp import Provider as FakeProvider
-        from enclosure.signin import Provider, secrets
-        from enclosure.stack import Stack
+        from fabric.network.signin import Provider, secrets
+        from fabric.network.stack import Stack
 
         class LocalHttp(http.cookiejar.DefaultCookiePolicy):     # the test has no TLS; Secure cookies still sent
             def return_ok_secure(self, cookie, request):

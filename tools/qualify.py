@@ -21,13 +21,13 @@ from contextlib import closing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from runtime import code_digest  # noqa: E402
-from catalog.floors import RELEASE  # noqa: E402
-from kernel import Kernel, empty  # noqa: E402
-from kernel.canon import parse  # noqa: E402
-from bt.assessment import SignedAssessment  # noqa: E402
-from bt.signing import Signer  # noqa: E402
-from bt.isolation import Isolation  # noqa: E402
+from fabric.control.runtime import code_digest  # noqa: E402
+from engine.catalog.floors import RELEASE  # noqa: E402
+from fabric.control.kernel import Kernel, empty  # noqa: E402
+from fabric.control.kernel.canon import parse  # noqa: E402
+from fabric.control.bt.assessment import SignedAssessment  # noqa: E402
+from fabric.control.bt.signing import Signer  # noqa: E402
+from fabric.control.bt.isolation import Isolation  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
 def probe(name, ok, observed, proves, does_not_prove):
@@ -165,7 +165,7 @@ def qualify(config_path) -> list:
                      "that the configured pin has independent custody or the process loaded these files (verify before import)"))
     repo = c["repository"]
     if repo["kind"] == "github":
-        from bt.adapters import GitHub
+        from fabric.control.bt.adapters import GitHub
         gh = GitHub(repo["name"], resolve(repo["token_file"]).read_text().strip())
         try:
             rules = gh.protections()

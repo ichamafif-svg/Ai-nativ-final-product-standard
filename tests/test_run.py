@@ -18,18 +18,18 @@ from tools import ceremony  # noqa: E402
 from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 
-import agent.__main__ as agent_process  # noqa: E402
-import runtime.operator as daemon  # noqa: E402
-import instruments.production as runtime  # noqa: E402
-from bt.register import Registers  # noqa: E402
+import engine.agents.__main__ as agent_process  # noqa: E402
+import fabric.control.runtime.operator as daemon  # noqa: E402
+import engine.verification.production as runtime  # noqa: E402
+from fabric.control.bt.register import Registers  # noqa: E402
 from fixture import client_law  # noqa: E402
-from kernel import Kernel  # noqa: E402
-from catalog.floors import RELEASE  # noqa: E402
-from agent.loop import tactic  # noqa: E402
-from context.moves import moves  # noqa: E402
-from context.policy import Rules as RulesView, RulesError, change  # noqa: E402
-from instruments.production import component_id, evaluate  # noqa: E402
-from bt.gateway import AdmissionGateway  # noqa: E402
+from fabric.control.kernel import Kernel  # noqa: E402
+from engine.catalog.floors import RELEASE  # noqa: E402
+from engine.agents.loop import tactic  # noqa: E402
+from interface.context.moves import moves  # noqa: E402
+from interface.context.policy import Rules as RulesView, RulesError, change  # noqa: E402
+from engine.verification.production import component_id, evaluate  # noqa: E402
+from fabric.control.bt.gateway import AdmissionGateway  # noqa: E402
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 
@@ -432,8 +432,8 @@ class Production(unittest.TestCase):
             self.assertIn("run-slo", [p["target"] for p in health["proven"]])     # the service itself recovered
 
             # D51: the human keeps deployment (a change of the rules, in force at once), then says yes to one switch.
-            from context.moves import queue
-            from surface.human import decide as yes, load_signer, rules
+            from interface.context.moves import queue
+            from interface.surface.human import decide as yes, load_signer, rules
             human = load_signer("human", install / "keys" / "human.key")
             view = operator.service.view()
             operator.service.admit(rules(view, human, change(view["law"]["client"], routes={"deploy": []}),
@@ -544,7 +544,7 @@ class CanaryEndToEnd(unittest.TestCase):
                     loop.run()
                 operator.tick()
 
-            from surface.human import load_signer, rules
+            from interface.surface.human import load_signer, rules
             human = load_signer("human", install / "keys" / "human.key")
             m0 = git("rev-parse", "main", cwd=repo)
             rounds(2)

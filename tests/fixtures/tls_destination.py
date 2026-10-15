@@ -34,7 +34,8 @@ def serve(port: int, host: str = "127.0.0.2"):
             pass
 
         def do_GET(self):
-            body = json.dumps({"auth": self.headers.get("authorization"), "tls": True}).encode()
+            self.server.seen_auth = self.headers.get("authorization")
+            body = json.dumps({"ok": True, "tls": True}).encode()
             self.send_response(200)
             self.send_header("content-length", str(len(body)))
             self.end_headers()
@@ -42,7 +43,8 @@ def serve(port: int, host: str = "127.0.0.2"):
 
         def do_POST(self):                      # an OpenAI-compatible model: it answers with what it received
             self.rfile.read(int(self.headers.get("content-length") or 0))
-            seen = json.dumps({"auth": self.headers.get("authorization")})
+            self.server.seen_auth = self.headers.get("authorization")
+            seen = json.dumps({"ok": True})
             body = json.dumps({"choices": [{"message": {"content": seen}}]}).encode()
             self.send_response(200)
             self.send_header("content-type", "application/json")

@@ -23,7 +23,7 @@ test("defaults.json mirrors the catalog's defaults", async () => {
   const { execFileSync } = await import("node:child_process");
   const root = new URL("../../../", import.meta.url).pathname;
   const out = execFileSync("python3", ["-c",
-    "import json,tomllib;d=tomllib.load(open('catalog/values.toml','rb'));" +
+    "import json,tomllib;d=tomllib.load(open('engine/catalog/values.toml','rb'));" +
     "print(json.dumps({k:v['default'] for k,v in d.items() if 'default' in v}, sort_keys=True))"], { cwd: root });
   assert.deepEqual(JSON.parse(out), JSON.parse(JSON.stringify(defaults, Object.keys(defaults).sort())));
 });

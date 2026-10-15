@@ -13,10 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from instruments import coverage, surfaces  # noqa: E402
-from instruments.bans import violations  # noqa: E402
-from agent.candidate import explain  # noqa: E402
-from catalog import contracts, effective, implementation, load, render_contracts  # noqa: E402
+from engine.verification import coverage, surfaces  # noqa: E402
+from engine.verification.bans import violations  # noqa: E402
+from engine.agents.candidate import explain  # noqa: E402
+from engine.catalog import contracts, effective, implementation, load, render_contracts  # noqa: E402
 
 NODE = shutil.which("node") is not None
 
@@ -81,7 +81,7 @@ class Blocks(unittest.TestCase):
                 self.assertIn("./" + impl["module"].rsplit("/", 1)[-1], package["exports"], name)
 
     def test_the_release_pins_the_nextjs_blocks(self):
-        from runtime import code_digest
+        from fabric.control.runtime import code_digest
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "repo"
             shutil.copytree(ROOT, dest, ignore=shutil.ignore_patterns(".git", "__pycache__", "node_modules", ".venv"))

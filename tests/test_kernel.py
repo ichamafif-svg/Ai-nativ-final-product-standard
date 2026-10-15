@@ -8,11 +8,11 @@ from fixture import CODE, HOUR, Keys, Ledger, client_law
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from catalog.floors import RELEASE
-from kernel import MECHANISMS, Accountability, Kernel, Refused, apply, digest, empty
-from kernel.accountability import RETIRED, empty as accountability_empty
-from kernel.floor0 import DISPATCH_MS, MAX_AHEAD_MS
-from kernel.identity import canonical_public
+from engine.catalog.floors import RELEASE
+from fabric.control.kernel import MECHANISMS, Accountability, Kernel, Refused, apply, digest, empty
+from fabric.control.kernel.accountability import RETIRED, empty as accountability_empty
+from fabric.control.kernel.floor0 import DISPATCH_MS, MAX_AHEAD_MS
+from fabric.control.kernel.identity import canonical_public
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 GRANT = {"holder": "agent", "actions": ["x"], "resources": ["*"], "conditions": [], "not_after": 10 ** 12}
@@ -353,7 +353,7 @@ class Jcs(unittest.TestCase):
     """K01 within its domain is RFC 8785: digests are recomputable with any JCS library."""
 
     def test_member_order_is_utf16_code_units(self):
-        from kernel.canon import canon, parse
+        from fabric.control.kernel.canon import canon, parse
         # RFC 8785 §3.2.3's example names; U+1F600 (a surrogate pair) sorts before U+FB33 in UTF-16.
         names = ["€", "\r", "דּ", "1", "\U0001F600", "\u0080", "ö"]
         raw = canon({n: i for i, n in enumerate(names)})
@@ -362,7 +362,7 @@ class Jcs(unittest.TestCase):
         self.assertEqual(list(parse(raw)), ["\r", "1", "\u0080", "ö", "€", "\U0001F600", "דּ"])
 
     def test_string_escapes_are_minimal(self):
-        from kernel.canon import canon
+        from fabric.control.kernel.canon import canon
         self.assertEqual(canon("\b\f\n\r\t\x1f\"\\\x7f /"), b'"\\b\\f\\n\\r\\t\\u001f\\"\\\\\x7f\xe2\x80\xa8/"')
 
 
@@ -394,7 +394,7 @@ class Bounds(unittest.TestCase):
     """D35/D36: the routes compare the scanner's numbers with the settings in force, exactly, in both judges."""
 
     def test_the_language_compares_decimals_exactly(self):
-        from kernel.language import LanguageError, compile_program, evaluate
+        from fabric.control.kernel.language import LanguageError, compile_program, evaluate
         atoms = compile_program({"all": [{"compare": ["delta", "le", "0.5", "real"]}]})
         holds = lambda status: evaluate(atoms, request={"resource": "r"}, observations={("r", "delta", status, "real")})
         self.assertTrue(holds("0.5"))

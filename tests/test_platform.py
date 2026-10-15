@@ -14,12 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from catalog import effective, load  # noqa: E402
-from enclosure import identity  # noqa: E402
-from enclosure.bac import Bac  # noqa: E402
-from enclosure.components import where  # noqa: E402
-from enclosure.data import PG, Database, available as database_available  # noqa: E402
-from enclosure.egress import mitmdump  # noqa: E402
+from engine.catalog import effective, load  # noqa: E402
+from fabric.identity import identity# noqa: E402
+from fabric.runtime.bac import Bac  # noqa: E402
+from fabric.supply_chain.components import where  # noqa: E402
+from fabric.data.postgres import PG, Database, available as database_available  # noqa: E402
+from fabric.network.egress import mitmdump  # noqa: E402
 
 FIXTURES = Path(__file__).with_name("fixtures")
 sys.path.insert(0, str(FIXTURES))
@@ -37,7 +37,8 @@ class Destination(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        body = json.dumps({"auth": self.headers.get("authorization")}).encode()
+        self.server.seen_auth = self.headers.get("authorization")
+        body = json.dumps({"ok": True}).encode()
         self.send_response(200)
         self.send_header("content-length", str(len(body)))
         self.end_headers()
@@ -48,8 +49,8 @@ class Destination(BaseHTTPRequestHandler):
 class Egress(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from enclosure.keys import dev
-        from enclosure.stack import Stack
+        from fabric.identity.keys import dev
+        from fabric.network.stack import Stack
         from tls_destination import serve
         cls.plain, cls.tls = free_port(), free_port()
         cls.http = ThreadingHTTPServer(("127.0.0.2", cls.plain), Destination)
@@ -65,7 +66,8 @@ class Egress(unittest.TestCase):
                                     "upload_types": ["text/plain"], "upload_max_bytes": 1000})
         cls.port = free_port()
         cls.stack = Stack(cls.state, values, [sys.executable, "-I", str(FIXTURES / "caller_product.py")], cwd=FIXTURES,
-                          port=cls.port, secrets={"api": ["127.0.0.2"]}, bao=cls.bao, upstream_ca=ca).start()
+                          port=cls.port, secrets={"api": ["127.0.0.2"]}, bao=cls.bao, upstream_ca=ca,
+                          key_capabilities={"product-notes": ["encrypt", "decrypt"]}).start()
 
     @classmethod
     def tearDownClass(cls):
@@ -84,7 +86,11 @@ class Egress(unittest.TestCase):
     def test_a_secret_reaches_its_destination_and_never_the_bac(self):
         for scheme, port in (("http", self.plain), ("https", self.tls)):
             out = self.ask(url=f"{scheme}://127.0.0.2:{port}/", auth="Bearer secret:api")
-            self.assertEqual((out["status"], json.loads(out["body"])["auth"]), (200, "Bearer s3cr3t-value"))
+            self.assertEqual(out["status"], 200)
+            self.assertTrue(json.loads(out["body"])["ok"])
+            server = self.http if scheme == "http" else self.https
+            self.assertEqual(server.seen_auth, "Bearer s3cr3t-value")
+            self.assertNotIn("s3cr3t-value", out["body"])
             self.assertFalse(out["env_has_secret"])
 
     def test_every_other_way_out_is_refused_and_recorded(self):
@@ -118,7 +124,7 @@ class Egress(unittest.TestCase):
         self.ask(url=f"http://127.0.0.2:{self.plain}/", auth="Bearer secret:api", log="1")
         self.stack.capture.close()
         text = Path(self.state, "product.log").read_text()
-        self.assertIn("Bearer [secret]", text)
+        self.assertIn("ok", text)
         self.assertNotIn("s3cr3t-value", text)
 
 
@@ -127,9 +133,9 @@ class AgentEgress(unittest.TestCase):
     """D68 for the agent's own model calls: the platform injects the provider's key; the agent never holds it."""
 
     def test_the_agent_calls_its_model_with_a_key_it_never_holds(self):
-        from agent.llm import Gate
-        from enclosure.egress import Egress
-        from enclosure.keys import dev
+        from engine.agents.llm import Gate
+        from fabric.network.egress import Egress
+        from fabric.identity.keys import dev
         from tls_destination import serve
         state, port = Path(tempfile.mkdtemp()), free_port()
         model, ca = serve(port)
@@ -144,7 +150,8 @@ class AgentEgress(unittest.TestCase):
                                         "endpoint": f"https://127.0.0.2:{port}/v1/chat/completions"}}
                 gate = Gate.from_config(section, Path, state / "egress.log")
                 self.assertEqual(gate.tiers["frontier"].key.reveal(), "secret:model")
-                self.assertEqual(gate.ask("hello"), {"auth": "Bearer provider-key-value"})
+                self.assertEqual(gate.ask("hello"), {"ok": True})
+                self.assertEqual(model.seen_auth, "Bearer provider-key-value")
                 with self.assertRaises(ValueError):            # a raw key next to the platform: refused
                     Gate.from_config({**section, "frontier": {**section["frontier"], "key": "sk-raw"}}, Path,
                                      state / "egress.log")
@@ -162,8 +169,8 @@ class ServiceTls(unittest.TestCase):
     def test_services_on_other_machines_speak_mutual_tls_with_certificates_from_the_key_service(self):
         import subprocess
         from cryptography import x509
-        from enclosure import gateway
-        from enclosure.keys import dev, service_certificates
+        from fabric.network import gateway
+        from fabric.identity.keys import dev, service_certificates
         state = tempfile.mkdtemp()
         bao, process = dev(state, where("openbao"))
         try:
@@ -234,8 +241,8 @@ class SignedInData(unittest.TestCase):
 
     def test_the_identity_signed_at_the_gateway_is_what_the_database_filters_on(self):
         from fake_idp import Provider as FakeProvider
-        from enclosure.signin import Provider, secrets
-        from enclosure.stack import Stack
+        from fabric.network.signin import Provider, secrets
+        from fabric.network.stack import Stack
 
         class LocalHttp(http.cookiejar.DefaultCookiePolicy):
             def return_ok_secure(self, cookie, request):

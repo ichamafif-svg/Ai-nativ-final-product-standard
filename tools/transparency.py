@@ -1,4 +1,4 @@
-"""Publish the journal's head to transparency witnesses (L-04, `bt/transparency.py`).
+"""Publish the journal's head to transparency witnesses (L-04, `fabric/control/bt/transparency.py`).
 
     python -m tools.transparency checkpoint standard.toml          -> the signed note (C2SP tlog-checkpoint)
     python -m tools.transparency prove standard.toml OLD_SIZE      -> the consistency proof from OLD_SIZE (JSON)
@@ -20,12 +20,12 @@ from pathlib import Path
 
 import tomllib
 
-from bt import transparency
-from bt.journal import Journal, PinStore
-from catalog.floors import RELEASE
-from kernel import Kernel, canon
-from runtime import code_digest
-from runtime.operator import key
+from fabric.control.bt import transparency
+from fabric.control.bt.journal import Journal, PinStore
+from engine.catalog.floors import RELEASE
+from fabric.control.kernel import Kernel, canon
+from fabric.control.runtime import code_digest
+from fabric.control.runtime.operator import key
 
 NAME = "standard-clock"
 

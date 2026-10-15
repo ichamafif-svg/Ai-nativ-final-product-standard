@@ -15,12 +15,12 @@ from unittest.mock import AsyncMock, patch
 import httpcore
 import httpx
 
-from agent.llm import EgressError, Gate, Provider, anthropic, openai_compatible
+from engine.agents.llm import EgressError, Gate, Provider, anthropic, openai_compatible
 from blocks.python.standard_blocks import Values
 from blocks.python.standard_blocks.outbound import _CheckedBackend, request
 from blocks.python.standard_blocks.parse import ParseError, strict_json
 from blocks.python.standard_blocks.runtime import RuntimeRefused, read_secret
-from surface.web import handler
+from interface.surface.web import handler
 from tools import refresh_data
 
 

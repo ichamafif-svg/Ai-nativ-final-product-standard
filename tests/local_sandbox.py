@@ -4,7 +4,7 @@ import subprocess
 import sys
 import tempfile
 
-from agent.sandbox import Result, Sandbox
+from engine.agents.sandbox import Result, Sandbox
 
 
 class LocalSandbox(Sandbox):

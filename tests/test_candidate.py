@@ -6,8 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from agent.candidate import JUDGED, CandidateWorkflow, Overlay, explain, record  # noqa: E402
-from catalog import effective, load  # noqa: E402
+from engine.agents.candidate import JUDGED, CandidateWorkflow, Overlay, explain, record  # noqa: E402
+from engine.catalog import effective, load  # noqa: E402
 
 
 class Tree:
@@ -166,7 +166,7 @@ class Candidates(unittest.TestCase):
 
     def test_all_roles_share_catalog_contracts_and_pinned_readable_context(self):
         import json
-        from catalog import definition, targets
+        from engine.catalog import definition, targets
         target = next(t for t in targets() if t["id"] == "rules-authorization")
         ctx = {"basis": {"head": "journal"}, "law_digest": "law", "requirement": target,
                "definition": definition(target), "effective_law": {"conditions": {"client-only": {"all": []}}}}
@@ -205,8 +205,8 @@ class Candidates(unittest.TestCase):
 class Patrol(unittest.TestCase):
     def test_each_round_reads_one_category_of_ai_rules_in_a_fixed_order(self):
         import tempfile
-        from agent.patrol import rotation
-        from catalog import categories, contracts
+        from engine.agents.patrol import rotation
+        from engine.catalog import categories, contracts
         state = Path(tempfile.mkdtemp()) / "rotation.json"
         rounds = [rotation(state) for _ in range(len(categories()) + 2)]
         self.assertEqual(rounds[:-1], ["simplicity", *categories()])
@@ -220,11 +220,11 @@ class Patrol(unittest.TestCase):
         import tempfile
         from types import SimpleNamespace
         from unittest.mock import patch
-        from agent.patrol import Patrol as Scheduled, SIMPLICITY
+        from engine.agents.patrol import Patrol as Scheduled, SIMPLICITY
         root = Path(tempfile.mkdtemp())
         cycle = SimpleNamespace(agent=SimpleNamespace(store=root / "store", llm=object()))
         scheduled = Scheduled(cycle, lambda: "base", clock=lambda: 100, interval_ms=60_000)
-        with patch("agent.patrol.run_patrol", side_effect=ValueError("model unavailable")) as run:
+        with patch("engine.agents.patrol.run_patrol", side_effect=ValueError("model unavailable")) as run:
             self.assertEqual(scheduled.run({}, "base")["state"], "unavailable")
             self.assertEqual(scheduled.run({}, "base")["state"], "waiting")
             self.assertEqual(run.call_count, 1)
@@ -236,13 +236,13 @@ class MeasurementFailures(unittest.TestCase):
         import tempfile
         from types import SimpleNamespace
         from unittest.mock import patch
-        from instruments.coverage import bandit_findings
+        from engine.verification.coverage import bandit_findings
         cases = [(2, b""), (1, b""), (0, b"{}"), (0, b'{"results": [], "errors": ["skipped file"]}'),
                  (1, b'{"results": [], "errors": []}')]
         for status, output in cases:
             with self.subTest(status=status, output=output), tempfile.TemporaryDirectory() as tmp:
-                with patch("instruments.coverage._materialise", return_value=Path(tmp)), patch(
-                        "instruments.coverage.subprocess.run", return_value=SimpleNamespace(returncode=status, stdout=output)):
+                with patch("engine.verification.coverage._materialise", return_value=Path(tmp)), patch(
+                        "engine.verification.coverage.subprocess.run", return_value=SimpleNamespace(returncode=status, stdout=output)):
                     with self.assertRaises(ValueError):
                         bandit_findings(Tree({"app.py": "x = 1"}))
 
@@ -251,11 +251,11 @@ class MeasurementFailures(unittest.TestCase):
         import json
         from types import SimpleNamespace
         from unittest.mock import patch
-        from instruments.coverage import bandit_findings
+        from engine.verification.coverage import bandit_findings
         tree = Tree({"app.py": "x = 1"})
         for metrics in ({}, {"./app.py": {"loc": 1}}):
-            with tempfile.TemporaryDirectory() as tmp, patch("instruments.coverage._materialise", return_value=Path(tmp)), patch(
-                    "instruments.coverage.subprocess.run", return_value=SimpleNamespace(
+            with tempfile.TemporaryDirectory() as tmp, patch("engine.verification.coverage._materialise", return_value=Path(tmp)), patch(
+                    "engine.verification.coverage.subprocess.run", return_value=SimpleNamespace(
                         returncode=0, stdout=json.dumps({"results": [], "errors": [], "metrics": metrics}).encode())):
                 if metrics:
                     self.assertEqual(bandit_findings(tree), {})
@@ -264,7 +264,7 @@ class MeasurementFailures(unittest.TestCase):
                         bandit_findings(tree)
 
     def test_import_only_does_not_prove_block_wiring(self):
-        from instruments.coverage import evaluate
+        from engine.verification.coverage import evaluate
         cat = load()
         tree = Tree({"app.py": "from fastapi import FastAPI\nfrom standard_blocks.web import secure_app\napp = FastAPI()\n"})
         states = evaluate(tree, cat, effective(cat, None), probes={}, bandit={})
@@ -273,16 +273,16 @@ class MeasurementFailures(unittest.TestCase):
 
     def test_broken_bandit_is_unmeasured_in_rule_coverage(self):
         from unittest.mock import patch
-        from instruments.coverage import evaluate
+        from engine.verification.coverage import evaluate
         tree = Tree({"app.py": "from cryptography.fernet import Fernet\nx = Fernet(k)\n"})
-        with patch("instruments.coverage.bandit_findings", side_effect=ValueError("bad report")) as scan:
+        with patch("engine.verification.coverage.bandit_findings", side_effect=ValueError("bad report")) as scan:
             states = evaluate(tree, load(), effective(load(), None), probes={})
         checks = [v[0] for r in states.values() for k, v in r["checks"].items() if k.startswith("bandit:")]
         self.assertIn("unrun:bandit:ValueError", checks)
         self.assertEqual(scan.call_count, 1)
 
     def test_js_alias_destructuring_and_literal_members_cannot_hide_the_banned_call(self):
-        from instruments.bans import uses, blocks_fact
+        from engine.verification.bans import uses, blocks_fact
         patterns = ["js-call:request.json"]
         for source in ("const r = request; r.json();", 'const r = request; r["json"]();',
                        "const {json: read} = request; read();"):
@@ -300,7 +300,7 @@ class MeasurementFailures(unittest.TestCase):
         self.assertTrue(all(r["measurement"] == "REGISTERED" and r["repair"] == "model in scope" for r in rows))
         unknown = {"id": "rules-invented", "resource": "repo:rules:invented", "property": "failing"}
         self.assertEqual(inventory([unknown])[0]["measurement"], "MISSING")
-        from instruments.coverage import category_measure
+        from engine.verification.coverage import category_measure
         with self.assertRaisesRegex(ValueError, "unknown rule category"):
             category_measure({}, load(), "invented")
 
@@ -308,7 +308,7 @@ class MeasurementFailures(unittest.TestCase):
         from importlib.util import find_spec
         if find_spec("bandit") is None:
             self.skipTest("requires the installed scanner (CI installs the pinned dependency)")
-        from instruments.probes import sast
+        from engine.verification.probes import sast
         tree = Tree({"bandit.py": "raise RuntimeError('candidate scanner executed')\n",
                      ".bandit": "[bandit]\nexclude = app.py\n",
                      "app.py": "import subprocess\nsubprocess.run(user_input, shell=True)\n"})
@@ -319,8 +319,8 @@ class CandidateChanges(unittest.TestCase):
     def test_deletion_round_trip_preserves_the_base_and_executable_modes(self):
         import subprocess
         from test_agent import store_with, git
-        from agent.candidate import commit_files
-        from instruments.tree import Snapshot
+        from engine.agents.candidate import commit_files
+        from engine.verification.tree import Snapshot
         store, base = store_with({"keep.py": "x = 1\n", "remove.py": "unused = True\n", "tests/test_x.py": "assert True"})
         head = commit_files(store, base, {"remove.py": None, "added.ts": b"export const x = 1"}, "simplify")
         self.assertNotIn("remove.py", Snapshot(store, head).paths())
@@ -341,9 +341,9 @@ class CandidateChanges(unittest.TestCase):
         self.assertTrue(result.stdout.startswith(b"100755"))
 
     def test_nextjs_sources_are_visible_and_writable_without_opening_reserved_paths(self):
-        from instruments.scope import feature, repair
-        from context.missions import assemble
-        from context.repository import RepoMap
+        from engine.verification.scope import feature, repair
+        from interface.context.missions import assemble
+        from interface.context.repository import RepoMap
         tree = Tree({"app/(shop)/orders/[id]/route.ts": "export const GET = access.route('orders.read', f);"})
         self.assertIn("export const GET", assemble({}, tree, role="build", focus=list(tree.paths()))[0])
         self.assertIn("endpoint GET /orders/:id", RepoMap(tree).render())
@@ -356,7 +356,7 @@ class CandidateChanges(unittest.TestCase):
     def test_review_research_reads_the_draft_and_cannot_experiment_or_write(self):
         import tempfile
         from unittest.mock import patch
-        from agent.research import Research, ResearchError
+        from engine.agents.research import Research, ResearchError
         base = Tree({"a.py": "old"})
         draft = Overlay(base, {"a.py": "new", "gone.py": None})
         research = Research(None, Path(tempfile.mkdtemp()) / "notes")

@@ -6,8 +6,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fixture import Ledger  # noqa: E402
-from instruments.data import TrustedData  # noqa: E402
-from instruments.recipes import vulns  # noqa: E402
+from engine.verification.data import TrustedData  # noqa: E402
+from engine.verification.recipes import vulns  # noqa: E402
 
 
 class Files:
@@ -72,7 +72,7 @@ class HumanDecision(unittest.TestCase):
         self.assertIn(self.L.submit("intent", "agent", **self.intent()), self.L.state["intents"])
 
     def test_the_author_kind_is_a_closed_list(self):
-        from kernel.language import LanguageError, compile_program
+        from fabric.control.kernel.language import LanguageError, compile_program
         with self.assertRaises(LanguageError):
             compile_program({"all": [{"observed": ["decision", "approve", "real", "robot"]}]})
 
@@ -81,8 +81,8 @@ class Violations(unittest.TestCase):
     """Review, medium 9: one escalate-level violation left the verdict ESCALATED forever."""
 
     def fold(self, L):
-        from kernel import Accountability, apply, empty
-        from kernel.accountability import empty as fresh
+        from fabric.control.kernel import Accountability, apply, empty
+        from fabric.control.kernel.accountability import empty as fresh
         acc, a, ks = Accountability(L.kernel), fresh(), empty()
         for entry in L.entries:
             record, delta = L.kernel.decide(ks, entry)
@@ -123,7 +123,7 @@ class OneEncoding(unittest.TestCase):
         alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
         last = sig.rstrip("=")[-1]
         entry["envelope"]["signatures"][0]["sig"] = sig.rstrip("=")[:-1] + alphabet[alphabet.index(last) ^ 1] + "=="
-        from kernel import Refused
+        from fabric.control.kernel import Refused
         with self.assertRaises(Refused) as r:
             L.kernel.decide(L.state, entry)
         self.assertEqual(r.exception.code, "PROV.SIGNATURE")
@@ -136,7 +136,7 @@ class OneEncoding(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        from kernel.identity import P256_N, keyid, verify
+        from fabric.control.kernel.identity import P256_N, keyid, verify
         u = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
         sk = ec.generate_private_key(ec.SECP256R1())
         public = base64.b64encode(sk.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)).decode()
@@ -168,7 +168,7 @@ class SecondJudgeComposition(unittest.TestCase):
 
     def test_a_weakened_floor_halts_even_if_the_kernel_composed_it(self):
         import copy
-        from bt.checker import Disagreement, _floors_kept
+        from fabric.control.bt.checker import Disagreement, _floors_kept
         L = Ledger()
         law, client, floors = L.kernel.law_of(L.state), L.state["law"]["client"], L.kernel.release.floors
         _floors_kept(copy.deepcopy(law.raw), floors, client)                 # the honest composition passes
@@ -193,7 +193,7 @@ class MeasurementOrder(unittest.TestCase):
     """Review, medium 8: an older reading replaced a newer one of the same source."""
 
     def test_an_older_reading_is_refused(self):
-        from catalog.floors import INSTRUMENTS
+        from engine.catalog.floors import INSTRUMENTS
         L = Ledger()
         L.checkpoint()
         sc = L.grant("scanner", ["observe", "certify:real"], ["repo:*"])
@@ -212,7 +212,7 @@ class DurableRegisters(unittest.TestCase):
     def registers(self):
         import json
         import tempfile
-        from bt.register import Registers
+        from fabric.control.bt.register import Registers
         root = Path(tempfile.mkdtemp())
         r = Registers(root / "repo", root / "run")
         (root / "run").mkdir()
@@ -241,7 +241,7 @@ class HealthFold(unittest.TestCase):
 
     def test_concurrent_health_reads_agree(self):
         import threading
-        from bt.service import TrustedService
+        from fabric.control.bt.service import TrustedService
 
         class Journal:
             def __init__(self, L):
@@ -253,7 +253,7 @@ class HealthFold(unittest.TestCase):
         for _ in range(40):
             L.checkpoint()
         service = TrustedService.__new__(TrustedService)
-        from kernel import Accountability
+        from fabric.control.kernel import Accountability
         service.journal, service.accountability = Journal(L), Accountability(L.kernel)
         service._fold_lock = threading.Lock()
         results, errors = [], []
@@ -293,31 +293,31 @@ class Instruments(unittest.TestCase):
 
     def export(self, root):
         import tempfile
-        from instruments.tree import export
+        from engine.verification.tree import export
         return export(root, "main", Path(tempfile.mkdtemp()) / "t")
 
     def test_gitattributes_cannot_hide_a_file_from_the_instruments(self):
-        from instruments import probes
+        from engine.verification import probes
         root = repository({".gitattributes": b"leak.py export-ignore\n",
                            "leak.py": b'token = "ghp_' + b"a" * 36 + b'"\n'})
         self.assertTrue(probes.verdict("none", probes.secrets(self.export(root))).startswith("found:"))
 
     def test_a_symbolic_link_is_declared_never_a_permanent_gap(self):
-        from instruments import probes
+        from engine.verification import probes
         root = repository({"app.py": b"x = 1\n"}, links=[("alias.py", "app.py")])
         m = probes.secrets(self.export(root))
         self.assertEqual(probes.verdict("none", m), "none")
         self.assertIn("alias.py: symbolic link, excluded", m.details)
 
     def test_an_empty_exact_lock_is_measured(self):
-        from instruments import probes
-        from instruments.data import EMPTY
+        from engine.verification import probes
+        from engine.verification.data import EMPTY
         tree = self.export(repository({"requirements.txt": b"# nothing\n"}))
         self.assertEqual(probes.verdict("current", probes.sbom(tree)), "current")
         self.assertEqual(probes.verdict("none", probes.vulns(tree, {"data": EMPTY})), "none")
 
     def test_swapping_one_finding_for_another_is_a_regression(self):
-        from instruments import probes
+        from engine.verification import probes
         key = lambda c: b'token = "ghp_' + bytes([c]) * 36 + b'"\n'
         base = self.export(repository({"a.py": key(97), "b.py": b"x = 1\n"}))
         head = self.export(repository({"a.py": b"x = 1\n", "b.py": key(98)}))
@@ -325,7 +325,7 @@ class Instruments(unittest.TestCase):
         self.assertEqual(status, "found:1", why)
 
     def test_an_uncovered_base_does_not_hide_a_new_finding(self):
-        from instruments import probes
+        from engine.verification import probes
         base = self.export(repository({"a.py": b"x = 1\n", "big.bin": b"0" * (probes.MAX_FILE + 1)}))
         head = self.export(repository({"a.py": b'token = "ghp_' + b"a" * 36 + b'"\n',
                                        "big.bin": b"0" * (probes.MAX_FILE + 1)}))
@@ -334,7 +334,7 @@ class Instruments(unittest.TestCase):
         self.assertEqual(status, "found:1", why)
 
     def test_a_moved_line_is_not_a_new_finding(self):
-        from instruments import probes
+        from engine.verification import probes
         key = b'token = "ghp_' + b"a" * 36 + b'"\n'
         base = self.export(repository({"a.py": key}))
         head = self.export(repository({"a.py": b"# moved\n" + key}))
@@ -345,7 +345,7 @@ class WriteCost(unittest.TestCase):
     """Review, medium 14: every read and write deep-copied every statement (10 ms -> 55 ms per write at 4,000)."""
 
     def test_a_snapshot_shares_immutable_records_and_stays_detached(self):
-        from bt.journal import detached
+        from fabric.control.bt.journal import detached
         L = Ledger()
         for _ in range(5):
             L.checkpoint()
@@ -365,7 +365,7 @@ class ClockConfiguration(unittest.TestCase):
 
     def test_only_the_operator_clock(self):
         import types
-        from runtime.operator import Installation
+        from fabric.control.runtime.operator import Installation
         fake = types.SimpleNamespace(demo=False, config={"ledger": {"genesis": "g"}}, path=Path("/tmp/standard.toml"))
         self.assertTrue(callable(Installation._clock(fake, {"kind": "local"})))
         with self.assertRaises(ValueError):

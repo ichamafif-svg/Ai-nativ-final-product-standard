@@ -6,9 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from catalog.floors import FLOORS  # noqa: E402
-from instruments.production import platform_refusals  # noqa: E402
-from instruments.scope import repair  # noqa: E402
+from engine.catalog.floors import FLOORS  # noqa: E402
+from engine.verification.production import platform_refusals  # noqa: E402
+from engine.verification.scope import repair  # noqa: E402
 
 
 def lines(*records):

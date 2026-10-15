@@ -28,9 +28,9 @@ from pathlib import Path
 import tomllib
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from bt.signing import Signer
-from kernel import canon
-from kernel.identity import PAYLOAD_TYPE, STATEMENT_TYPE, pae
+from fabric.control.bt.signing import Signer
+from fabric.control.kernel import canon
+from fabric.control.kernel.identity import PAYLOAD_TYPE, STATEMENT_TYPE, pae
 
 ROOT = Path(__file__).resolve().parents[1]
 SLSA = "https://slsa.dev/provenance/v1"
@@ -102,8 +102,8 @@ def main(argv=None) -> int:
     a = parser.parse_args(argv)
 
     if a.command == "run":
-        from bt.host import Evidence
-        from runtime.operator import key
+        from fabric.control.bt.host import Evidence
+        from fabric.control.runtime.operator import key
         c = tomllib.loads(a.config.read_text())
         evidence = Evidence(a.config.parent / "evidence")
         statement = run_statement(evidence.get(a.record))
@@ -112,14 +112,14 @@ def main(argv=None) -> int:
         print(json.dumps({"record": a.record, "provenance": digest}))
         return 0
 
-    from bt.release import code_digest
+    from fabric.control.bt.release import code_digest
     commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True,
                             check=True).stdout.strip()
     name = f"standard-{commit[:12]}.tar.gz"
     archive = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar.gz", "--prefix=standard/", commit],
                              capture_output=True, check=True).stdout
-    locks = {p: _sha((ROOT / p).read_bytes()) for p in ("requirements.hashes", "enclosure/components.toml",
-                                                        "enclosure/egress-requirements.txt") if (ROOT / p).exists()}
+    locks = {p: _sha((ROOT / p).read_bytes()) for p in ("requirements.hashes", "fabric/supply_chain/components.toml",
+                                                        "fabric/supply_chain/egress-requirements.txt") if (ROOT / p).exists()}
     with tempfile.TemporaryDirectory() as tree:                 # the core digest of the archived bytes, not this tree
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
             tar.extractall(tree, filter="data")
