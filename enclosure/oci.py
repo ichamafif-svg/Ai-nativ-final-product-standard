@@ -85,11 +85,21 @@ def mounts(cwd, readable=(), writable=()) -> list[dict]:
     return out
 
 
+ADDRESS_SPACE_FLOOR_MB = 8192
+
+
+def address_space_mb(walls, cgroup) -> int:
+    """The per-process address-space ceiling: the memory itself without a group, a wider ceiling under one."""
+    return max(4 * walls.memory_mb, ADDRESS_SPACE_FLOOR_MB) if cgroup else walls.memory_mb
+
+
 def config(walls, args, cwd, *, env: dict, readable=(), writable=(), cgroup: str | None) -> dict:
     """The complete OCI configuration of one run. Same walls, same file, whichever runtime executes it.
 
-    Memory is bounded for the run as a whole by its control group. Without one (`cgroup=None`), each process is
-    bounded by its address space instead, a cruder wall that some runtimes' own start-up cannot live under."""
+    Memory has two nested walls. The control group bounds the run as a whole. Each process is also bounded by its
+    address space: at the run's memory without a control group, and with one at `address_space_mb(walls)`, wide
+    enough for runtimes that reserve address space up front (runc's start-up, V8, WebAssembly) and still a ceiling.
+    No wall is removed when another is added (D69)."""
     uid, gid = os.getuid(), os.getgid()
     no_caps = {k: [] for k in ("bounding", "effective", "inheritable", "permitted", "ambient")}
     return {
@@ -98,8 +108,8 @@ def config(walls, args, cwd, *, env: dict, readable=(), writable=(), cgroup: str
             "terminal": False, "user": {"uid": 0, "gid": 0}, "args": [str(a) for a in args],
             "env": [f"{k}={v}" for k, v in env.items()], "cwd": str(Path(cwd).resolve()),
             "capabilities": no_caps, "noNewPrivileges": True,
-            "rlimits": [*([] if cgroup else [{"type": "RLIMIT_AS", "hard": walls.memory_mb << 20,
-                                                      "soft": walls.memory_mb << 20}]),
+            "rlimits": [{"type": "RLIMIT_AS", "hard": address_space_mb(walls, cgroup) << 20,
+                         "soft": address_space_mb(walls, cgroup) << 20},
                         {"type": "RLIMIT_NPROC", "hard": walls.processes, "soft": walls.processes},
                         {"type": "RLIMIT_FSIZE", "hard": walls.file_bytes, "soft": walls.file_bytes},
                         {"type": "RLIMIT_CORE", "hard": 0, "soft": 0},

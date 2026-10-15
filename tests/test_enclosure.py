@@ -46,6 +46,13 @@ class Configuration(unittest.TestCase):
             self.assertNotIn(call, allowed)
         self.assertIn("read", allowed)
 
+    def test_memory_has_two_walls_the_group_and_the_address_space(self):
+        rlimits = {r["type"]: r["hard"] for r in self.config["process"]["rlimits"]}
+        self.assertEqual(self.config["linux"]["resources"]["memory"]["limit"], 512 << 20)
+        self.assertEqual(rlimits["RLIMIT_AS"], oci.address_space_mb(SMALL, "/g") << 20)
+        alone = oci.config(SMALL, ["run"], self.cwd, env={}, cgroup=None)
+        self.assertEqual({r["type"]: r["hard"] for r in alone["process"]["rlimits"]}["RLIMIT_AS"], 512 << 20)
+
     def test_limits_come_from_the_walls(self):
         rlimits = {r["type"]: r["hard"] for r in self.config["process"]["rlimits"]}
         self.assertEqual(rlimits["RLIMIT_NPROC"], 32)

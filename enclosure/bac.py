@@ -112,7 +112,7 @@ class Bac:
         self.runtime = None
         return "OCI runtime refused the bac: " + "; ".join(refusals)
 
-    def _execute(self, args, cwd, env, readable, writable, timeout) -> Ran:
+    def _execute(self, args, cwd, env, readable, writable, timeout, stdin: bytes | None = None) -> Ran:
         name = uuid.uuid4().hex
         state = Path(tempfile.gettempdir(), f"bac-state-{os.getuid()}")
         state.mkdir(mode=0o700, exist_ok=True)
@@ -130,7 +130,8 @@ class Bac:
             try:
                 try:
                     keep = ["--keep"] if Path(str(self.runtime)).name == "runc" else []
-                    r = subprocess.run([*base, "run", *keep, "--bundle", bundle, name], stdin=subprocess.DEVNULL,
+                    r = subprocess.run([*base, "run", *keep, "--bundle", bundle, name],
+                                       **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}),
                                        stdout=output, stderr=subprocess.STDOUT, timeout=timeout)
                     code, out = r.returncode, None
                 except subprocess.TimeoutExpired:
@@ -147,10 +148,10 @@ class Bac:
                 out = output.read().decode(errors="replace")
             return Ran(code, out, limited)
 
-    def run(self, args, cwd, *, env=None, readable=(), writable=()) -> Ran:
+    def run(self, args, cwd, *, env=None, readable=(), writable=(), stdin: bytes | None = None) -> Ran:
         if not self.ready:
             return Ran(REFUSED, f"execution refused: {self.why}")
-        return self._execute(args, cwd, env, readable, writable, self.walls.timeout_s)
+        return self._execute(args, cwd, {**BASE_ENV, **(env or {})}, readable, writable, self.walls.timeout_s, stdin)
 
 
 def capability_map(walls: Walls = Walls(), *, groups: bool = True) -> dict:
