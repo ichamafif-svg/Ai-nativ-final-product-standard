@@ -18,6 +18,18 @@ from pathlib import Path
 from enclosure.components import digest, home, pins, where
 
 
+def fetch_python(spec: dict, root: Path) -> Path:
+    """A Python component in its own environment, installed only from its hash-locked requirements."""
+    import subprocess
+    venv = root / spec["environment"]
+    subprocess.run([sys.executable, "-m", "venv", "--clear", str(venv)], check=True)
+    locked = Path(__file__).resolve().parents[1] / "enclosure" / spec["requirements"]
+    subprocess.run([str(venv / "bin" / "pip"), "install", "-q", "--require-hashes", "--no-deps", "-r", str(locked)],
+                   check=True)
+    (venv / "standard-pin").write_text(spec["version"])
+    return root / spec["binary"]
+
+
 def fetch(name: str, spec: dict, root: Path) -> Path:
     (root / "bin").mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -54,7 +66,8 @@ def main(argv) -> int:
         if where(name, root):
             print(f"{name} {spec['version']}: already installed")
             continue
-        print(f"{name} {spec['version']}: {fetch(name, spec, root)}")
+        installed = fetch_python(spec, root) if spec.get("kind") == "python" else fetch(name, spec, root)
+        print(f"{name} {spec['version']}: {installed}")
     return 0
 
 

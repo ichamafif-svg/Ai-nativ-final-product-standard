@@ -123,3 +123,20 @@ def config(values: dict, *, port: int, gate: str, oauth2: int | None = None, adm
     if admin:
         bootstrap["admin"] = {"address": {"socket_address": {"address": "127.0.0.1", "port_value": admin}}}
     return bootstrap
+
+
+def mtls_cluster(name: str, host: str, port: int, *, cert: str, key: str, ca: str, server_name: str) -> dict:
+    """A cluster toward a platform service on another machine: TLS 1.3 only, the peer's certificate checked against
+    the platform's authority and name, ours presented (mutual TLS). Paths are files the platform owns."""
+    return {"name": name, "connect_timeout": "2s", "type": "STRICT_DNS",
+            "load_assignment": {"cluster_name": name, "endpoints": [{"lb_endpoints": [
+                {"endpoint": {"address": {"socket_address": {"address": host, "port_value": port}}}}]}]},
+            "transport_socket": {"name": "envoy.transport_sockets.tls", "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+                "sni": server_name,
+                "common_tls_context": {
+                    "tls_params": {"tls_minimum_protocol_version": "TLSv1_3"},
+                    "tls_certificates": [{"certificate_chain": {"filename": cert}, "private_key": {"filename": key}}],
+                    "validation_context": {"trusted_ca": {"filename": ca},
+                                           "match_typed_subject_alt_names": [
+                                               {"san_type": "DNS", "matcher": {"exact": server_name}}]}}}}}

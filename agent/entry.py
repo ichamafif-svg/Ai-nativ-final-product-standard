@@ -13,7 +13,7 @@ import tempfile
 import urllib.error
 import urllib.request
 
-from enclosure.refusals import from_gate
+from enclosure.refusals import from_platform
 
 GET_ROUTE = re.compile(r"GET (/[A-Za-z0-9._~/-]*)")
 
@@ -46,6 +46,6 @@ def lessons(tree, values: dict, *, env=None, readable=(), during: str) -> tuple[
                     urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=values["request_timeout_s"] + 2)
                 except (urllib.error.URLError, OSError):
                     pass                                    # an error answer is still traffic the gate saw
-            return from_gate(stack.read_records(), during=during), None
+            return from_platform(stack.read_records(), during=during), None
     except RuntimeError as exc:
         return [], f"the product did not start behind the gateway: {str(exc)[:300]}"

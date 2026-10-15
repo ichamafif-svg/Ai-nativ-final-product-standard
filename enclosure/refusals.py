@@ -101,8 +101,8 @@ def read(ran: Ran, capabilities: dict, *, during: str, root=None) -> list[dict]:
             for capability in WALLS if capability in found]
 
 
-# What the gate corrected or refused on the product's own traffic (D68 step 2), read as lessons for its code.
-ENTRY = {
+# What the platform corrected or refused on the product's own traffic (D68 steps 2-4), read as lessons for its code.
+PLATFORM = {
     "ingress.headers": "the product sent a banner or a security header weaker than the rules: send nothing (the "
                        "gateway imposes the rules' value) or a stricter one",
     "ingress.cookies": "set Secure, HttpOnly, SameSite and Path on every cookie the product sets",
@@ -111,15 +111,21 @@ ENTRY = {
     "ingress.isolation": "a cross-site request must come from an origin in @origins; draft it if it is legitimate",
     "ingress.time": "answer within @request_timeout_s: make the slow step bounded or asynchronous",
     "ingress.size": "keep request bodies under @body_max_bytes, or draft a higher limit with its reason",
+    "egress.destination": "call only hosts in @destinations; a host the product needs is a value to draft for it",
+    "egress.private": "never call private addresses: the services the product may use are in the capability map",
+    "egress.secret": "use `secret:NAME` only in a header, toward a host the rules allow for that secret",
+    "egress.keys": "use the key service with the product's own keys (product-*) and its five operations",
+    "egress.files": "store files of a type in @upload_types, within @upload_max_bytes and @user_quota_bytes",
 }
 
 
-def from_gate(records: list, *, during: str) -> list[dict]:
-    """Lessons from the gate's records: corrections of the code and refusals. What the platform merely imposed
-    (a header the product did not send) is its job, not a defect of the code, and teaches nothing."""
+def from_platform(records: list, *, during: str) -> list[dict]:
+    """Lessons from the platform's records (gate, egress): corrections of the code and refusals. What the platform
+    merely imposed (a header the product did not send) is its job, not a defect, and teaches nothing; an alarm goes
+    to the hidden control, never to the agent."""
     out, seen = [], set()
     for r in records:
-        if r.get("kind") not in ("correction", "refusal") or r.get("capability") not in ENTRY:
+        if r.get("kind") not in ("correction", "refusal") or r.get("capability") not in PLATFORM:
             continue
         key = (r["capability"], r["route"], r["attempt"])
         if key in seen:
@@ -127,5 +133,5 @@ def from_gate(records: list, *, during: str) -> list[dict]:
         seen.add(key)
         out.append({"kind": "lesson", "during": during, "capability": r["capability"], "held_by": r["held_by"],
                     "attempt": f"{r['route']}: {r['attempt']}", "stack": [], "available": None,
-                    "instead": ENTRY[r["capability"]], "ask": None, "route": r["route"]})
+                    "instead": PLATFORM[r["capability"]], "ask": None, "route": r["route"]})
     return out

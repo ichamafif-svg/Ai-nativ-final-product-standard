@@ -27,8 +27,13 @@ def digest(path: Path) -> str:
 
 
 def where(name: str, root: Path | None = None) -> str | None:
-    """The installed binary of a component, only if its digest is the pinned one."""
+    """The installed binary of a component, only if its digest is the pinned one (a Python component: installed
+    from its hash-locked requirements, and its version is the pinned one)."""
     spec = pins().get(name)
+    if spec and spec.get("kind") == "python":
+        path = (root or home()) / spec["binary"]
+        stamp = (root or home()) / spec["environment"] / "standard-pin"
+        return str(path) if path.is_file() and stamp.is_file() and stamp.read_text() == spec["version"] else None
     path = (root or home()) / "bin" / name
     if spec and path.is_file() and digest(path) == spec["binary_sha256"]:
         return str(path)

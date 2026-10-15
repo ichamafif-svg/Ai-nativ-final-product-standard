@@ -50,12 +50,15 @@ def _listening(port: int) -> bool:
 class Stack:
     def __init__(self, state, values: dict, command: list, *, cwd, port: int, envoy: str | None = None,
                  audience: str = "product", oauth2: int | None = None, walls: Walls = Walls(),
-                 readable=(), env=None, provider=None):
+                 readable=(), env=None, provider=None, egress: bool = True, secrets: dict | None = None,
+                 bao=None, upstream_ca: str | None = None, database: bool = False):
         self.state, self.values, self.command, self.cwd = Path(state), values, list(command), Path(cwd)
         self.port, self.audience, self.oauth2, self.walls = port, audience, oauth2, walls
         self.readable, self.env = tuple(readable), dict(env or {})
         self.envoy_bin = envoy or os.environ.get("STANDARD_ENVOY") or where("envoy")
-        self.provider = provider
+        self.provider, self.with_egress, self.secrets, self.bao = provider, egress, secrets, bao
+        self.egress, self.upstream_ca = None, upstream_ca
+        self.with_database, self.database = database, None
         self.service = self.envoy = self.server = self.signin = None
         self.logs = []
         self.records = self.state / "records.jsonl"
@@ -68,13 +71,35 @@ class Stack:
         door.chmod(0o777)
         self.records.touch()
         (self.state / "values.json").write_text(json.dumps(self.values))
-        signer = identity.LocalSigner(self.state / "identity.key")
+        if self.bao is not None:
+            from enclosure.keys import KeyServiceError, OpenBaoSigner
+            try:
+                self.bao.create_key("identity")
+            except KeyServiceError:
+                pass                                        # already there
+            signer = OpenBaoSigner(self.bao, "identity")    # the identity key never leaves the key service
+        else:
+            signer = identity.LocalSigner(self.state / "identity.key")
         (self.state / "identity.pub").write_text(signer.public_pem())
         bac = Bac(self.walls)
         socket_in_bac = str(door / "http.sock")
-        self.service = Service(bac, [bac.python, "-I", str(DOOR), socket_in_bac, str(PRODUCT_PORT), "--",
-                                     *self.command], self.cwd, readable=(DOOR.parent, *self.readable),
-                               writable=(door,), env=self.env, log=self._log("product.log"))
+        out, env, readable = [], dict(self.env), [DOOR.parent, *self.readable]
+        if self.with_egress:
+            from enclosure.egress import Egress, bac_env, mitmdump
+            if mitmdump():
+                self.egress = Egress(self.state, self.values, secrets=self.secrets, bao=self.bao,
+                                     upstream_ca=self.upstream_ca).start()
+                out = ["--egress", str(self.egress.mount / "egress.sock")]
+                env = {**bac_env(str(self.egress.mount / "ca.pem")), **env}
+                readable.append(self.egress.mount)
+        if self.with_database:
+            from enclosure.data import Database
+            self.database = Database(self.state).start(audience=self.audience, public_pem=signer.public_pem())
+            readable.append(self.database.socket)
+            env = {**self.database.bac_env(str(self.database.socket)), **env}
+        self.service = Service(bac, [bac.python, "-I", str(DOOR), socket_in_bac, str(PRODUCT_PORT), *out, "--",
+                                     *self.command], self.cwd, readable=tuple(readable),
+                               writable=(door,), env=env, log=self._capture(signer))
         if not wait_for(lambda: os.path.exists(socket_in_bac)):
             self.stop()
             raise RuntimeError("the product's door did not open: " + (self.state / "product.log").read_text()[-500:])
@@ -103,13 +128,28 @@ class Stack:
             raise RuntimeError("Envoy did not listen: " + (self.state / "envoy.log").read_text()[-500:])
         return self
 
+    def _capture(self, signer):
+        """The product's output, redacted of every secret the platform knows (D68: logs)."""
+        from enclosure.logs import Capture
+        known = []
+        if self.bao is not None:
+            for name in (self.secrets or {}):
+                try:
+                    known.append(self.bao.secret(name))
+                except Exception:
+                    pass
+        self.capture = Capture(self.state / "product.log", release=self.audience, secrets=known)
+        return self.capture
+
     def _log(self, name: str):
         handle = open(self.state / name, "ab")
         self.logs.append(handle)
         return handle
 
     def read_records(self) -> list:
-        return [json.loads(line) for line in self.records.read_text().splitlines() if line.strip()]
+        """The gate's records and the egress proxy's, in one list: both are the platform's observations."""
+        own = [json.loads(line) for line in self.records.read_text().splitlines() if line.strip()]
+        return own + (self.egress.read_records() if self.egress else [])
 
     def stop(self) -> None:
         for process in (self.signin,):
@@ -130,6 +170,12 @@ class Stack:
             self.server.server_close()
         if self.service:
             self.service.stop()
+        if getattr(self, "capture", None):
+            self.capture.close()
+        if self.egress:
+            self.egress.stop()
+        if self.database:
+            self.database.stop()
         for handle in self.logs:
             handle.close()
 

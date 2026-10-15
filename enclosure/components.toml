@@ -25,3 +25,11 @@ archive_sha256 = "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e22
 binary = "bao"
 binary_sha256 = "535cf827b13753046757f5ec8b97ae0ef21f10a40ffe673f0d5e75616170f5ea"
 role = "key service and secret broker"
+
+[mitmproxy]
+version = "12.2.3"
+kind = "python"
+requirements = "egress-requirements.txt"
+environment = "egress"
+binary = "egress/bin/mitmdump"
+role = "egress proxy: TLS termination, destination policy, secret injection"

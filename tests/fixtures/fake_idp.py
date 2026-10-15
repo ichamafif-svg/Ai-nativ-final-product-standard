@@ -1,4 +1,4 @@
-"""A fake OpenID Connect provider for tests: it signs in whoever asks, as `alice` in group `admin`.
+"""A fake OpenID Connect provider for tests: it signs in whoever asks, as `provider.user` (alice by default).
 
 /authorize redirects straight back with a code; /token answers an RS256 id_token for that code; /jwks publishes the
 key. It checks the PKCE verifier against the challenge, so a sign-in without PKCE fails here too."""
@@ -24,6 +24,7 @@ def b64int(n: int) -> str:
 class Provider:
     def __init__(self, port: int, client_id: str = "shop"):
         self.port, self.client_id, self.codes = port, client_id, {}
+        self.user, self.groups = "alice", ["admin"]                  # who the next sign-in is
         self.issuer = f"http://127.0.0.1:{port}"
 
     def serve(self):
@@ -46,7 +47,8 @@ class Provider:
                 q = dict(urllib.parse.parse_qsl(url.query))
                 if url.path == "/authorize":
                     code = base64.urlsafe_b64encode(hashlib.sha256(q["state"].encode()).digest()).decode()[:20]
-                    provider.codes[code] = {"challenge": q.get("code_challenge"), "nonce": q.get("nonce")}
+                    provider.codes[code] = {"challenge": q.get("code_challenge"), "nonce": q.get("nonce"),
+                                            "user": provider.user, "groups": list(provider.groups)}
                     target = f"{q['redirect_uri']}?code={code}&state={urllib.parse.quote(q['state'])}"
                     self.send_response(302)
                     self.send_header("location", target)
@@ -70,8 +72,9 @@ class Provider:
                     self.end_headers()
                     return
                 now = int(time.time())
-                claims = {"iss": provider.issuer, "aud": provider.client_id, "sub": "alice", "email": "alice@example.com",
-                          "email_verified": True, "groups": ["admin"], "iat": now, "exp": now + 300}
+                claims = {"iss": provider.issuer, "aud": provider.client_id, "sub": grant["user"],
+                          "email": f"{grant['user']}@example.com", "email_verified": True, "groups": grant["groups"],
+                          "iat": now, "exp": now + 300}
                 if grant["nonce"]:
                     claims["nonce"] = grant["nonce"]
                 token = jwt.encode(claims, KEY, algorithm="RS256", headers={"kid": "k1"})
