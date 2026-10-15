@@ -130,6 +130,13 @@ try:
 except OSError:
     r["network"] = True
 r["processes"] = len([p for p in pathlib.Path("/proc").iterdir() if p.name.isdigit()]) < 16
+for name, path, value in (("ceiling_protected", "/sys/fs/cgroup/standard-bac/"+str(os.getuid())+"/memory.max", "max"),
+                          ("parent_migration_refused", "/sys/fs/cgroup/cgroup.procs", str(os.getpid()))):
+    try:
+        pathlib.Path(path).write_text(value)
+        r[name] = False
+    except OSError:
+        r[name] = True
 state = pathlib.Path({str(self.config.parent / 'agent')!r})
 (state / "working").write_text("agent-owned")
 r["work"] = (state / "working").read_text() == "agent-owned"
@@ -144,7 +151,7 @@ print(json.dumps(r))
         ran = self.enclosed(script)
         self.assertEqual(ran.returncode, 0, ran.stderr[-3000:])
         facts = json.loads(ran.stdout.strip().splitlines()[-1])
-        for name in ("hidden", "source_readonly", "environment", "network", "processes", "work", "nested_ready"):
+        for name in ("hidden", "source_readonly", "environment", "network", "processes", "work", "nested_ready", "ceiling_protected", "parent_migration_refused"):
             self.assertTrue(facts[name], (name, facts))
         self.assertEqual(facts["nested_code"], 0, facts)
         self.assertEqual(source.read_text(), "known")

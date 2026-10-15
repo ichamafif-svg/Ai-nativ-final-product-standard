@@ -84,6 +84,10 @@ def delegation(uid: int) -> Path:
     subtree = Path("/sys/fs/cgroup", GROUP, str(uid))
     if not (subtree / "launcher").is_dir():
         raise AgentEnclosureError("bounded UID cgroup delegation unavailable")
+    for parent in (subtree.parent, subtree.parent.parent):
+        info = parent.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise AgentEnclosureError("delegation ancestors must remain root-owned and non-writable")
     for name in ("memory.max", "pids.max", "cpu.max"):
         path = subtree / name
         try:
@@ -106,7 +110,7 @@ def command(config, *, code=None, program=None) -> list[str]:
     uid, gid = os.getuid(), os.getgid()
     if uid == 0:
         raise AgentEnclosureError("agent must run under its dedicated unprivileged account")
-    subtree = delegation(uid)
+    delegation(uid)
     args = [binary, "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
             "--unshare-net", "--unshare-ipc", "--unshare-uts", "--uid", str(uid), "--gid", str(gid),
             "--cap-drop", "ALL", "--clearenv", "--ro-bind", "/usr", "/usr"]
@@ -120,7 +124,10 @@ def command(config, *, code=None, program=None) -> list[str]:
         if Path(name).exists():
             args += ["--ro-bind", name, name]
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/run",
-             "--ro-bind", "/sys/fs/cgroup", "/sys/fs/cgroup", "--bind", str(subtree), str(subtree),
+             # One native cgroup mount: runc intentionally refuses submount crossings.
+             # DAC and the host-owned finite parent ceilings bound authority;
+             # the unprivileged account can write only its delegated descendants.
+             "--bind", "/sys/fs/cgroup", "/sys/fs/cgroup",
              "--ro-bind", str(code), str(code)]
     # The interpreter's environment may be installed outside /usr and the code directory.
     runtime = Path(sys.prefix).resolve()
