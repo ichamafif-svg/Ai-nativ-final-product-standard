@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from enclosure import oci
+from enclosure import capabilities, oci
 
 BASE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp", "PYTHONDONTWRITEBYTECODE": "1",
             "LANG": "C.UTF-8"}
@@ -151,3 +151,9 @@ class Bac:
         if not self.ready:
             return Ran(REFUSED, f"execution refused: {self.why}")
         return self._execute(args, cwd, env, readable, writable, self.walls.timeout_s)
+
+
+def capability_map(walls: Walls = Walls(), *, groups: bool = True) -> dict:
+    """The map of the bac these walls define, computed from its OCI configuration (D69). Runs nothing."""
+    config = oci.config(walls, ["<your command>"], "/work", env=BASE_ENV, cgroup=f"/{GROUP}/map" if groups else None)
+    return capabilities.describe(config, timeout_s=walls.timeout_s)

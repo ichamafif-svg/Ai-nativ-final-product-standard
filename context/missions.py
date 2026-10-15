@@ -162,6 +162,7 @@ def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=()
     from instruments.surfaces import scan
     from catalog import contracts, declared_features, effective, load, render, render_contracts
     from context.repository import RepoMap
+    from enclosure import capability_map
 
     cat = load()
     law = context.get("effective_law", {})
@@ -209,6 +210,7 @@ def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=()
     names = set(re.findall(r"@([a-z_]+)", json.dumps(context.get("law_trace", context.get("operation", {})))))
     for name in sorted(names & cat["policy"]["parameter"].keys()):
         add(f"policy/{name}", sources[f"policy/{name}"])
+    add("capabilities", capability_map())                 # D69: what the bac gives, before designing
     add("technical", render_contracts(technical))
     for name in ("review", "mission", "findings", "facts", "known_gaps", "weak_spots"):
         if context.get(name):

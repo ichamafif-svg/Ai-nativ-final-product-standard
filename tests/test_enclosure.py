@@ -64,6 +64,14 @@ class Configuration(unittest.TestCase):
                 (place / "memory.events").write_text("low 0\nmax 0\noom_kill 1\n")
                 self.assertEqual(bac_module._limited("x"), ("memory", "processes"))
 
+    def test_the_capability_map_is_read_from_the_bac_never_written_beside_it(self):
+        from enclosure import capability_map
+        walls = Walls(timeout_s=7, memory_mb=256, processes=9, file_bytes=4096, cpu_percent=50)
+        limits = capability_map(walls)["limits"]
+        self.assertEqual(limits, {"time_s": 7, "memory_mb": 256, "processes": 9, "file_bytes": 4096,
+                                  "cpu_percent": 50})
+        self.assertEqual(capability_map(walls)["network"]["outbound"], "none: no host is reachable")
+
     def test_the_agent_sandbox_is_this_bac(self):
         box = Sandbox(timeout=30, memory_mb=512, file_limit=1_048_576)
         self.assertIsInstance(box.bac, Bac)

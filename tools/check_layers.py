@@ -18,7 +18,7 @@ ALLOWED = {
     "catalog": ("kernel", "catalog"),
     "blocks": ("blocks.python.standard_blocks",),
     "enclosure": ("enclosure",),
-    "context": ("kernel", "instruments", "catalog", "context", "agent.work"),
+    "context": ("kernel", "instruments", "catalog", "context", "agent.work", "enclosure"),
     "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "enclosure", "blocks.python.standard_blocks"),
     "surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "surface", "blocks.python.standard_blocks"),
     "runtime": ("kernel", "bt", "instruments", "catalog", "runtime", "enclosure"),
