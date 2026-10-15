@@ -57,6 +57,17 @@ class Policy(unittest.TestCase):
             self.assertIn(str(config.parent / "agent"), mounts)
             self.assertIn(str(config.parent / "admission"), mounts)
 
+    def test_interface_uses_the_same_public_projection_for_findings_and_retained_metrics(self):
+        from interface.surface.web import Installation
+        with tempfile.TemporaryDirectory() as root:
+            config = fixture(Path(root))
+            with config.open("a") as output:
+                output.write(f'\n[grants]\nhuman = "human"\n[run]\nstore = "{Path(root) / "view.db"}"\n')
+            view = Installation(config)
+            public = config.parent / "public"
+            self.assertEqual(view.findings, public / "findings.json")
+            self.assertEqual(view.telemetry.readings, public / "readings")
+
     def test_old_broad_socket_directory_remote_git_and_provider_key_files_fail_closed(self):
         changes = [('public_context = "public"\n', ''), ('path = "admission/gateway.sock"', 'path = "gateway.sock"'),
                    ('kind = "git"', 'kind = "github"'),

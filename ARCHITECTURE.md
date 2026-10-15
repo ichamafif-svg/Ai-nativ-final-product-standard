@@ -234,6 +234,27 @@ La CLI directe `engine.agents run` reste une exécution non enfermée ; elle n'e
 Le parcours Git distant n'est pas ouvert dans cette enclosure. Les autorités sur l'hôte restent partagées. Le déploiement laboratoire
 conserve un humain auto-évalué sur le même hôte et ne constitue pas une installation de production qualifiée.
 
+### Pouvoirs effectifs dans le laboratoire
+
+| Identité ou domaine | Pouvoirs exposés | Frontière et limite |
+|---|---|---|
+| Agent enfermé | Sa clé, son espace de propositions, lecture du dépôt et du contexte public, admission signée | Aucun endpoint de commande privilégiée ; K juge la portée et la révocation |
+| Candidat imbriqué | Fichiers explicitement montés et budgets de son bac | Pas de réseau direct ni de clé de contrôle ; reste dépendant du noyau Linux |
+| Contrôle / guard | Journal, clés de services, vérification et promotion des artefacts | Compte distinct de l'agent ; les deux juges partagent encore un processus |
+| Runner de vérification | Exécution des candidats pour les instruments | Compte distinct et lanceur fixe ; aucune clé de contrôle |
+| Proxy de modèles | Destinations autorisées et jeton OpenBao délégué | L'agent voit le socket public et la CA ; la séparation administrative du proxy reste à déployer |
+| Preuves et reconstruction | Conservation et octets connus hors de la racine agent | Protégés de l'agent dans les tests ; aucune indépendance face au root commun n'est revendiquée |
+
+Révoquer une capacité K bloque ses futures admissions. Cela ne retire pas rétroactivement des données déjà lues,
+ne restaure pas un espace compromis et n'interrompt pas à lui seul les appels réseau en cours. Le confinement
+opérationnel doit aussi arrêter le service et révoquer les accès externes concernés. Le chemin de reconstruction
+ne réactive aucune capacité révoquée et ne restitue pas les données ou les clés client.
+
+Le prérequis `unshare -Urn` est vérifié avant le remplacement du laboratoire. Son succès ne suffit pas : la CI
+exécute aussi le candidat OCI depuis l'enclosure réelle. Un workspace cloud peut refuser les user namespaces ;
+aucun privilège supplémentaire ni assouplissement LSM n'est automatiquement appliqué pour contourner ce refus.
+Un déploiement qui ne permet pas cette imbrication nécessite un exécuteur orchestré séparément, non fourni ici.
+
 ## 9. Intégrité, distribution et récupération
 
 L'empreinte d'installation couvre le tissu, le contrôle, le catalogue, les blocs et les configurations de sécurité

@@ -79,7 +79,7 @@ class Installation:
         run = c.get("run", {})
         from interface.surface.telemetry import Telemetry
         self.telemetry = Telemetry(Path(run.get("store", Path.home() / ".standard" / "telemetry.db")).expanduser(),
-                                   base / "readings", slo=float(run.get("slo", 99.9)) / 100,
+                                   self.findings.parent / "readings", slo=float(run.get("slo", 99.9)) / 100,
                                    interval=float(run.get("interval", 15)))
         self.rollback = bool(c.get("deploy")) and "agent" in c["grants"]     # D30: can act in production
         self.slo_db = base / "slo.db"
