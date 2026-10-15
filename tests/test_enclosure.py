@@ -188,6 +188,11 @@ class Measured(unittest.TestCase):
                 config["linux"]["namespaces"] = [n for n in config["linux"]["namespaces"] if n["type"] != "network"]
                 return config
 
+            def _base(self):
+                # gVisor has an independent network mode in addition to the OCI
+                # namespace. Remove both protections for this deliberately leaky fixture.
+                return ["--network=host" if arg == "--network=none" else arg for arg in super()._base()]
+
         self.assertEqual(measure(SMALL, kind=Leaky)["host_loopback"], "broken")
 
     def test_a_bac_without_its_filter_is_measured_broken(self):
