@@ -143,6 +143,23 @@ class WholeLaw(unittest.TestCase):
         self.assertEqual(check["tests"], "green")
 
 
+    def test_green_tests_on_code_that_hit_the_wall_are_not_a_pass(self):
+        head = self.candidate({"app.py": "import os\nimport socket\nAPI = os.environ.get('API', '')\n\n\n"
+                                         "def add(a, b):\n    try:\n"
+                                         "        socket.create_connection(('203.0.113.7', 443), 1)\n"
+                                         "    except OSError as exc:\n        print('telemetry failed:', exc)\n"
+                                         "    return a + b\n"})
+        check = precheck(self.store, self.base, head, "secrets", TARGETS, EMPTY, self.box)
+        self.assertEqual(check["tests"], "green")
+        self.assertFalse(check["ok"])
+        self.assertTrue(any("touched the bac's walls" in p for p in check["problems"]), check["problems"])
+        lesson = next(r for r in check["refusals"] if r["capability"] == "network.outbound")
+        self.assertEqual(lesson["held_by"], "platform:egress")
+        self.assertIn("SSRF", lesson["rules"])
+        for word in ("seccomp", "namespace", "netns", "cgroup"):
+            self.assertNotIn(word, json.dumps(lesson))
+
+
 class Model(unittest.TestCase):
     """A model that is wrong first: the agent learns from its own checks before proposing anything."""
 

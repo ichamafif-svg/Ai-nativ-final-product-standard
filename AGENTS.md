@@ -73,7 +73,8 @@ secrets, keys, data filtering, resources, logs, files) move to the execution pla
 and `front` stay blocks. Each rule declares `held_by`; a `platform:*` holder is planned until its D68 step ships.
 Do not extend the blocks it absorbs.
 D69 (§4.11): the mission's `autonomy` entry carries the capability map of the bac your code runs in and who
-holds each selected rule. Refusal records (what capability is missing, which interface serves the need) come later. Adapt the design, or draft the value
+holds each selected rule. Your precheck reads every collision with the bac as a lesson (`refusals`: capability,
+holder, rules, what to do instead); green tests on code that hit a wall are not a pass. Adapt the design, or draft the value
 for the human to sign; never work around a wall.
 
 Standard also consumes its own Python blocks directly from `blocks.python.standard_blocks` in this checkout;

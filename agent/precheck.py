@@ -3,8 +3,9 @@
 A repair of one target must not open another gap. Before any proposal the agent measures base and candidate with every
 floor probe it can run (the same library the judge uses, on its own reading of its own store), runs main's suite
 against the candidate's code in the sandbox, and lints and type-checks the files it changed. A candidate that fixes
-nothing, regresses a target no recipe repairs, breaks a test or adds a lint or type error is not proposed: it goes
-back to the agent as feedback. A regression a recipe closes on the next pass (a bumped pin makes the SBOM stale) is a
+nothing, regresses a target no recipe repairs, breaks a test, adds a lint or type error, or makes the tests touch a
+wall of the bac that base's code did not touch (D69: green tests on code that hit the wall are not a pass) is not
+proposed: it goes back to the agent as feedback, each collision as a lesson read against the capability map. A regression a recipe closes on the next pass (a bumped pin makes the SBOM stale) is a
 follow-up, not a reason to hold back a fix.
 
 This is the agent being careful, not the agent being judged: the instruments still measure the exact commit.
@@ -22,6 +23,8 @@ from instruments.recipes import recipes_for
 from instruments.suite import contract_path, report_measure
 
 from agent.sandbox import Sandbox
+from enclosure import capability_map
+from enclosure.refusals import read as read_refusals
 
 LOCAL = probes.LOCAL_PROBES
 _worse = probes._worse
@@ -91,8 +94,23 @@ def environment(sandbox: Sandbox, requirements: Path, cache) -> str:
     return str(python)
 
 
-def suite(sandbox: Sandbox, store, base: str, head: str, cache=None) -> tuple[str, list]:
-    """Main's tests against the candidate's code, in the sandbox: (green|red|uncovered, failures)."""
+def _capabilities(sandbox) -> dict:
+    bac = getattr(sandbox, "bac", None)
+    return capability_map(bac.walls, groups=bac.groups) if bac is not None else capability_map()
+
+
+def _with_rules(lessons: list) -> list:
+    """Each lesson names the catalog rules its part of the platform holds (`held_by`), the text seen before coding."""
+    from catalog import load
+    rules = load()["rules"]
+    return [{**lesson, "rules": sorted(r["id"] for r in rules if r["held_by"] == lesson["held_by"])}
+            for lesson in lessons]
+
+
+def suite(sandbox: Sandbox, store, base: str, head: str, cache=None, *, refusals: list | None = None) -> tuple[str, list]:
+    """Main's tests against the candidate's code, in the sandbox: (green|red|uncovered, failures).
+
+    With `refusals`, the lessons of the run (D69) are appended to it."""
     with sandbox.checkout(store, base) as main_tree, sandbox.checkout(store, head) as code:
         if not (main_tree / "tests").is_dir():
             return "uncovered", ["main has no tests/"]
@@ -103,8 +121,10 @@ def suite(sandbox: Sandbox, store, base: str, head: str, cache=None) -> tuple[st
         report = Path(tempfile.mkdtemp()) / "report.xml"
         (report.parent / "pytest.ini").write_text("[pytest]\n")
         result = sandbox.run([python, "-m", "pytest", "-c", report.parent / "pytest.ini", "--rootdir", code, "-p",
-                     "no:cacheprovider", "-q", f"--junitxml={report}", main_tree / "tests"], code, pythonpath=code,
+                     "no:cacheprovider", "-q", "-rA", f"--junitxml={report}", main_tree / "tests"], code, pythonpath=code,
                              readable=(main_tree, *([Path(cache)] if cache else [])), writable=(report.parent,))
+        if refusals is not None:
+            refusals += read_refusals(result, _capabilities(sandbox), during="main's tests")
         if not report.exists():
             return "uncovered", ["the suite produced no report"]
         try:
@@ -187,7 +207,23 @@ def precheck(
                 accepted = f"uncovered:{type(exc).__name__}"
             if accepted != "green":
                 problems.append(f"the contract does not pass yet ({accepted}):\n{result.out[-3000:]}")
-    status, failures = suite(sandbox, store, base, head, cache)
+            lessons = read_refusals(result, _capabilities(sandbox), during="the acceptance contract")
+    else:
+        lessons = []
+    status, failures = suite(sandbox, store, base, head, cache, refusals=lessons)
+    if lessons:
+        # Only a collision base's code does not have is the candidate's; an older one stays a lesson, not a block.
+        before_lessons: list = []
+        suite(sandbox, store, base, base, cache, refusals=before_lessons)
+        known = {lesson["capability"] for lesson in before_lessons}
+        new = sorted({lesson["capability"] for lesson in lessons} - known)
+        if new:
+            told = "\n".join(f"- {lesson['capability']} (held by {lesson['held_by']}): tried `{lesson['attempt']}`; "
+                             f"available: {lesson['available']}; instead: {lesson['instead']}"
+                             for lesson in lessons if lesson["capability"] in new)
+            problems.append("the candidate's code touched the bac's walls, even if its tests pass. Change the design, "
+                            f"or draft the value for the human to sign:\n{told}")
+    lessons = _with_rules(lessons)
     if target_id == "ci":
         fixed = status == "green"
     if status != "green":
@@ -204,4 +240,5 @@ def precheck(
         "lint": lint,
         "isolation": sandbox.isolation,
         "changed": changed,
+        "refusals": lessons,
     }
