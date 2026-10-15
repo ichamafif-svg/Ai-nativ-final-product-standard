@@ -114,9 +114,9 @@ remaining = ["Client data and key restoration require native backup procedures",
 [[guarantee]]
 id = "agent-enclosure"
 property = "The installed agent service sees only its workspace, read-only source, configuration and selected Unix sockets, without direct host network."
-enforcer = "fabric/runtime/agent.py; engine/agents/enclosed.py; native bubblewrap and UID cgroups"
+enforcer = "fabric/runtime/agent.py; engine/agents/enclosed.py; tools/cgroup_setup.sh"
 domains = ["agent", "control", "verification"]
-assumptions = ["Trusted host kernel and bubblewrap", "Root-owned finite UID ceilings", "Protected launch configuration and immutable code", "Local Git source"]
+assumptions = ["Trusted host kernel and bubblewrap", "Root-owned finite UID ceilings", "Protected launch configuration and immutable code", "Local Git source", "Native cgroup DAC denies writes outside the delegated UID subtree"]
 bypass = ["Direct unconfined agent CLI", "Host administrator compromise", "Compromised allowed provider"]
 tests = ["tests/test_agent_enclosure.py"]
 remaining = ["Native nested-runtime qualification required for each deployed host", "No physical separation from the host administrator", "Remote Git transport not exposed", "Recovery here reconstructs artifacts, not client data or keys"]

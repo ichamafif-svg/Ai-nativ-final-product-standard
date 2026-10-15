@@ -292,3 +292,58 @@ print(json.dumps(r))
         report = json.loads(ran.stdout.strip().splitlines()[-1])
         self.assertNotIn("blocked", report)
         self.assertIn("played", report)
+
+    def test_enclosed_model_and_research_reach_only_the_external_credential_proxy(self):
+        import socket
+        from engine.catalog import effective, load
+        from fabric.identity.keys import dev
+        from fabric.network.egress import Egress
+        from fabric.supply_chain.components import where
+        sys.path.insert(0, str(CODE / "tests" / "fixtures"))
+        from tls_destination import serve
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        model, ca = serve(port)
+        self.addCleanup(model.server_close)
+        self.addCleanup(model.shutdown)
+        bao, process = dev(self.root, where("openbao"))
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        bao.put_secret("model", "external-provider-fixture-key")
+        values = effective(load(), {"destinations": [f"127.0.0.2:{port}"]})
+        proxy = Egress(self.root / "proxy", values, secrets={"model": ["127.0.0.2"]}, bao=bao, upstream_ca=ca).start()
+        self.addCleanup(proxy.stop)
+        with self.config.open("a") as output:
+            output.write(f'''
+[llm]
+egress = "http://127.0.0.1:3128"
+egress_ca = "{proxy.mount / 'ca.pem'}"
+egress_socket = "{proxy.mount / 'egress.sock'}"
+[llm.frontier]
+kind = "openai"
+model = "fixture"
+key = "secret:model"
+endpoint = "https://127.0.0.2:{port}/v1/chat/completions"
+''')
+        script = f'''
+import json, pathlib, tomllib
+from engine.agents.enclosed import start_relay
+from engine.agents.llm import Gate
+from engine.agents.research import Research
+config=pathlib.Path({str(self.config)!r})
+start_relay(config)
+c=tomllib.loads(config.read_text())
+gate=Gate.from_config(c["llm"],pathlib.Path,config.parent/"agent"/"egress.log")
+assert gate.tiers["frontier"].key.reveal()=="secret:model"
+assert gate.ask("fixture mission")=={{"ok":True}}
+research=Research(gate,config.parent/"agent"/"research.jsonl",sources={{"docs":"https://127.0.0.2:{port}/docs"}})
+assert json.loads(research.fetch("docs"))["tls"] is True
+print(json.dumps({{"model":True,"research":True}}))
+'''
+        ran = self.enclosed(script)
+        self.assertEqual(ran.returncode, 0, (ran.stdout[-2000:], ran.stderr[-3000:]))
+        self.assertEqual(json.loads(ran.stdout.strip().splitlines()[-1]), {"model": True, "research": True})
+        self.assertEqual([auth for method, path, auth in model.auth_requests if method == "POST"],
+                         ["Bearer external-provider-fixture-key"])

@@ -1,11 +1,30 @@
 """Run the agent loop inside the fixed native enclosure, with an optional egress relay."""
 import os
 import sys
+import socket
+import time
 import threading
 import tomllib
 from pathlib import Path
 
 from fabric.runtime.agent import command
+
+
+def start_relay(config):
+    spec = tomllib.loads(Path(config).read_text())
+    if not spec.get("llm"):
+        return
+    from fabric.network.door import relay_out
+    socket_path = str((Path(config).parent / spec["llm"]["egress_socket"]).resolve())
+    threading.Thread(target=relay_out, args=(socket_path,), daemon=True).start()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", 3128), timeout=0.1):
+                return
+        except OSError:
+            time.sleep(0.02)
+    raise RuntimeError("private egress relay unavailable")
 
 
 def main(argv=None):
@@ -19,11 +38,7 @@ def main(argv=None):
         os.execv(args[0], args)
     # No security claim derives from this marker or from calling 'inside' directly.
     # The launch command and native namespaces are the enforcement points.
-    spec = tomllib.loads(Path(config).read_text())
-    if spec.get("llm"):
-        from fabric.network.door import relay_out
-        socket_path = str((Path(config).parent / spec["llm"]["egress_socket"]).resolve())
-        threading.Thread(target=relay_out, args=(socket_path,), daemon=True).start()
+    start_relay(config)
     from engine.agents.__main__ import main as agent_main
     return agent_main(["run", config, *interval])
 

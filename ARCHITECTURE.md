@@ -226,6 +226,9 @@ Le service agent du laboratoire passe par `engine.agents.enclosed` : bubblewrap 
 limitée, des namespaces PID/réseau/IPC/UTS et retire les capacités. Seuls l'état agent en écriture, le dépôt
 local en lecture, la configuration et le répertoire du socket d'admission sont exposés. Les plafonds UID
 finis restent sous propriété root ; les bacs OCI imbriqués conservent leur propre isolation.
+Le montage cgroupfs reste unique pour respecter les accès sécurisés de runc ; les permissions natives
+limitent les écritures au sous-arbre délégué. Les tentatives de modifier le plafond parent ou de migrer
+hors de ce domaine sont testées. Cela dépend du DAC de l'hôte, sans indépendance face à root.
 Les appels de modèles utilisent un relais loopback vers le socket public du proxy, sans clé fournisseur.
 La CLI directe `engine.agents run` reste une exécution non enfermée ; elle n'est pas le service installé.
 Le parcours Git distant n'est pas ouvert dans cette enclosure. Les autorités sur l'hôte restent partagées. Le déploiement laboratoire

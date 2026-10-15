@@ -103,6 +103,15 @@ install_lab() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip util-linux bubblewrap curl runc sudo >/dev/null
   python3 -c 'import sys; assert sys.version_info >= (3, 11)'
 
+  id standard-guard >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-guard
+  id standard-agent >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-agent
+  usermod -a -G standard-guard standard-agent
+  # Check the host prerequisite before replacing even a disposable existing installation.
+  # Never grant extra capabilities or disable host LSM policy to get past this refusal.
+  runuser -u standard-agent -- unshare -Urn /usr/bin/true || {
+    echo "user/network namespaces unavailable; use a qualified orchestrator or host" >&2; exit 1;
+  }
+
   rm -rf -- "$CODE" "$ROOT"
   install -d -m 0755 "$CODE" "$ROOT" "$ROOT/seed" "$ROOT/hosting"
   touch "$CODE/$MARKER" "$ROOT/$MARKER"
@@ -113,8 +122,6 @@ install_lab() {
   chown -R root:root "$CODE"
   chmod -R a+rX,go-w "$CODE"
 
-  id standard-guard >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-guard
-  id standard-agent >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-agent
   id standard-gate  >/dev/null 2>&1 || useradd -m -s /bin/sh -G standard-guard standard-gate
   id standard-web   >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-web
   id standard-runner >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin standard-runner
