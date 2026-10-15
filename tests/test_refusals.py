@@ -6,9 +6,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from enclosure import Bac, Ran, Walls, capability_map  # noqa: E402
-from enclosure.refusals import read  # noqa: E402
+from fabric.runtime.bac import Bac, Ran, Walls, capability_map# noqa: E402
+from fabric.runtime.refusals import read  # noqa: E402
 
 MAP = capability_map()
 

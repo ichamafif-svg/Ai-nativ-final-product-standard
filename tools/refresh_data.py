@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kernel import canon, digest  # noqa: E402
+from fabric.control.kernel import canon, digest  # noqa: E402
 from blocks.python.standard_blocks import Values  # noqa: E402
 from blocks.python.standard_blocks.outbound import request  # noqa: E402
 from blocks.python.standard_blocks.parse import strict_json  # noqa: E402

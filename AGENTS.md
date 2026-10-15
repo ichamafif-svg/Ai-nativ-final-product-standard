@@ -1,31 +1,31 @@
 # Agents
 
-The repository is Standard. `kernel/` judges; `bt/` owns physical trust mechanisms; `instruments/` computes pinned
-measures; `catalog/` defines product requirements and compiles the socle. `context/` derives the shared reading for
-humans and agents. `agent/` proposes and schedules work; `surface/` presents it and forwards signed human gestures.
-`runtime/` assembles the operator and runs product releases. `tools/` installs and audits; `examples/` is demonstration.
+The repository is Standard. `fabric/control/kernel/` judges; `fabric/control/bt/` owns physical trust mechanisms; `engine/verification/` computes pinned
+measures; `engine/catalog/` defines product requirements and compiles the socle. `interface/context/` derives the shared reading for
+humans and agents. `engine/agents/` proposes and schedules work; `interface/surface/` presents it and forwards signed human gestures.
+`fabric/control/runtime/` assembles the operator and runs product releases. `tools/` installs and audits; `examples/` is demonstration.
 Run `make layers` for dependency checks. Location does not remove code from its release pin or effective trust role.
 
 ## The game
 
-One human, one agent (ARCHITECTURE.md §4.8, D51–D53). The socle (`catalog/floors.py`) declares every move (an op on an
+One human, one agent (ARCHITECTURE.md, Authority). The socle (`engine/catalog/floors.py`) declares every move (an op on an
 exact resource) and its routes. The rules of the game are one client document the human signs, in force at once: which
 autonomous routes stay on, the thresholds those routes compare with (never looser than the socle), and what production
 is judged against. The human has three gestures: **yes** (`decision = approve` on the exact resource), **no** (a freeze),
 **rules** (sign new rules). The agent never signs rules and holds one capability.
 
 A move is `ready` when an autonomous route holds on facts the scanner measured, `decided` when the human said yes,
-`yours` when only the human's decision opens it. `python -m surface moves` shows every move and its status,
-`python -m surface queue` what waits for the human.
+`yours` when only the human's decision opens it. `python -m interface.surface moves` shows every move and its status,
+`python -m interface.surface queue` what waits for the human.
 
 ## Reading
 
-From the repository root, `python -m surface tasks` shows the work the law asks for, then
-`python -m surface context TASK_ID` one task: its debt, its requirement, its routes and the facts each needs.
-`python -m surface law SECTION/ID` shows one declaration of the effective law.
-`python -m surface drift [TARGET] --findings findings.json` shows the drift dossier for born gaps;
-`python -m surface patrol [FOCUS] --findings findings.json` builds an exploratory patrol context.
-`context/model.py` is the shared, derived reading graph behind all of these. Neither this graph nor a
+From the repository root, `python -m interface.surface tasks` shows the work the law asks for, then
+`python -m interface.surface context TASK_ID` one task: its debt, its requirement, its routes and the facts each needs.
+`python -m interface.surface law SECTION/ID` shows one declaration of the effective law.
+`python -m interface.surface drift [TARGET] --findings findings.json` shows the drift dossier for born gaps;
+`python -m interface.surface patrol [FOCUS] --findings findings.json` builds an exploratory patrol context.
+`interface/context/model.py` is the shared, derived reading graph behind all of these. Neither this graph nor a
 diagnostic finding is authority; K and the independent checker never import it. Findings from another main commit or
 law digest are stale, not current evidence.
 
@@ -37,14 +37,14 @@ and the second judge decides again. If Standard is unreachable or unqualified, n
 `catalog` is the release's common definition of product requirements. `maintenance.toml` declares the
 maintenance targets and repair instructions; `policy.toml` defines signed policy parameters, their editor types,
 floors and recommended values; `rules/*.toml` details the technical requirements; `values.toml` and `blocks.toml`
-define their parameters and minimum implementation contracts. `catalog/floors.py` compiles these declarations into
+define their parameters and minimum implementation contracts. `engine/catalog/floors.py` compiles these declarations into
 the existing law language and defines governed moves. The human's signed choices instantiate the effective law.
 Model providers, budgets and schedules in `standard.toml` are execution configuration, never product policy.
 
 Selection uses product features and touched surfaces/constructs, including the draft's new features and declared
 features. `declared_features()` derives these from signed settings, including `@high_value`; scanner inputs and
 model missions use the same projection. `contracts()` supplies the same rule/block/parameter/check reading to construction, review, exploration
-and the interface. `python -m surface rule RULE-ID` prints that contract; `coverage` shows measured state.
+and the interface. `python -m interface.surface rule RULE-ID` prints that contract; `coverage` shows measured state.
 `absorb` describes the intended division of work: it never proves correct block adoption or complete path coverage.
 A rule without a check, a missing parameter or an unknown client mapping stays visible; no opinion becomes proof.
 
@@ -65,20 +65,22 @@ value is really sent), `for_user(session, user)` for every database session of a
 passed to a process, `Text[n]`/`Id`/`Email` in input models. To narrow access, add `also=` predicates; to add a guard
 check, pass `refuse=`: both can only refuse. What the blocks guarantee beyond the standards is in
 `blocks/HARDENING.md`. The APIs a block
-covers are banned elsewhere (`catalog/blocks.toml`); the scanner signs `blocks = clean` only when a change adds
+covers are banned elsewhere (`engine/catalog/blocks.toml`); the scanner signs `blocks = clean` only when a change adds
 none. Never copy a block into the product. Values such as `@access`, `@upload_max_bytes` or `@app` are the human's: you
 may draft them, never decide them.
-D68 (ARCHITECTURE.md §4.10) is decided, not yet implemented: transversal properties (ingress, identity, egress,
-secrets, keys, data filtering, resources, logs, files) move to the execution platform; only `access`, `render`
-and `front` stay blocks. Each rule declares `held_by`; a `platform:*` holder is planned until its D68 step ships.
-Do not extend the blocks it absorbs.
+The reference architecture is ARCHITECTURE.md. Platform controls exist, but deployment qualification is separate.
+Never infer enforcement from `held_by`, a module import or the feedback matrix. The matrix lists available
+verification sources; deployment is explicitly unmeasured. `fabric/guarantees.toml` is the engineering inventory,
+not an authorization engine. Its `guarantee/<id>` entries are available in mission research context.
+Retain the existing blocks until each equivalent platform guarantee, assumption and bypass path is verified.
+Do not add a second IAM, policy engine, cryptographic format or general security proxy.
 D69 (§4.11): the mission's `autonomy` entry carries the capability map of the bac your code runs in and who
 holds each selected rule. Your precheck reads every collision with the bac as a lesson (`refusals`: capability,
 holder, rules, what to do instead); green tests on code that hit a wall are not a pass. Adapt the design, or draft the value
 for the human to sign; never work around a wall.
 D70 (§4.12): every feedback (wall, tests, lint, SAST, scanner, probes) reaches you through one dossier, ordered
 and tied to catalog rules; read it in order. No source of a rule is removed unless a source at least as strong
-replaces it (`catalog/feedback_floor.json`).
+replaces it (`engine/catalog/feedback_floor.json`).
 
 Standard also consumes its own Python blocks directly from `blocks.python.standard_blocks` in this checkout;
 products install the same source as `standard_blocks`. No copy, bootstrap alias or alternate implementation.
@@ -135,7 +137,7 @@ Without a repository snapshot, a human context leaves applicability unavailable 
 Automatic rounds rotate questions and repository/subsystem scopes, each category keeping its own scope cursor.
 They run after ordinary moves, by default at most once per hour; `[agent] patrol_interval_ms` is
 60000..86400000. Schedule state survives failures and restarts. Manual use:
-`python -m agent patrol standard.toml simplicity:app`; inspect proposals with `patrol-results`.
+`python -m engine.agents patrol standard.toml simplicity:app`; inspect proposals with `patrol-results`.
 Results retain main, law digest and scope, become stale when main or law changes, and remain proposals. Serve an
 existing debt within its scope, or propose a human-contracted BUILD request for a transversal refactor.
 
@@ -154,7 +156,7 @@ are also unmeasured. Such a candidate cannot obtain `blocks = clean` on an auton
 
 A repair lands alone only by the `reproduced` route (a recipe the scanner recomputes) or the `scoped` route (tests
 green, no regression, every changed path inside the target's write scope, measured by the scanner from
-`instruments/scope.py`, and no banned API added: `blocks = clean`). A request lands alone only when its contract is accepted, inside its own scope. Everything
+`engine/verification/scope.py`, and no banned API added: `blocks = clean`). A request lands alone only when its contract is accepted, inside its own scope. Everything
 else waits for the human's yes.
 
 In maintained client repositories, never write under `tests/` (a request's acceptance tests are its contract, measured byte for byte), `.github/` (except

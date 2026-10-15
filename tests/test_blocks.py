@@ -1,5 +1,5 @@
 """The building blocks (blocks/python/standard_blocks): each holds its rules whatever the route does, and the scanner's
-ban list catches product code that goes around them (instruments/bans.py, fact `blocks`)."""
+ban list catches product code that goes around them (engine/verification/bans.py, fact `blocks`)."""
 import asyncio
 import base64
 import io
@@ -26,8 +26,8 @@ try:
 except ImportError:                                      # the blocks' own dependencies are not Standard's
     HAVE = False
 
-from instruments import bans  # noqa: E402
-from catalog import load  # noqa: E402
+from engine.verification import bans  # noqa: E402
+from engine.catalog import load  # noqa: E402
 
 
 def need(test):

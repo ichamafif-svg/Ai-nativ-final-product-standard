@@ -1,4 +1,4 @@
-"""Coverage of the rule catalog (instruments/coverage.py, rule_probes.py): Standard's own probes start the product's
+"""Coverage of the rule catalog (engine/verification/coverage.py, rule_probes.py): Standard's own probes start the product's
 app and tell a product built on the blocks from the same product written the usual way; each category of rules is a
 socle target whose debt is the failing and unmeasured rules; a change that breaks a rule is a regression."""
 import sys
@@ -9,10 +9,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from instruments import coverage, probes  # noqa: E402
-from instruments.tree import verdict  # noqa: E402
-from catalog import compact, effective, load  # noqa: E402
-from catalog.floors import FLOORS  # noqa: E402
+from engine.verification import coverage, probes  # noqa: E402
+from engine.verification.tree import verdict  # noqa: E402
+from engine.catalog import compact, effective, load  # noqa: E402
+from engine.catalog.floors import FLOORS  # noqa: E402
 
 try:
     import fastapi  # noqa: F401

@@ -10,22 +10,39 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STANDARD = {"kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "tests", "examples", "standard", "blocks", "standard_blocks", "enclosure"}
+STANDARD = {"fabric", "engine", "interface", "tools", "tests", "examples", "standard", "blocks", "standard_blocks",
+            "kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "enclosure"}
+K = "fabric.control.kernel"
+BT = "fabric.control.bt"
+PLATFORM = ("fabric.runtime", "fabric.network", "fabric.identity", "fabric.data", "fabric.evidence", "fabric.supply_chain")
 ALLOWED = {
-    "kernel": ("kernel",),
-    "bt": ("kernel", "bt", "enclosure"),      # T06 runs candidate code in the bac (D68): the enclosure is in the TCB
-    "instruments": ("kernel", "instruments", "standard_blocks", "enclosure"),  # existing in-process product probes
-    "catalog": ("kernel", "catalog"),
+    "fabric/__init__.py": (),
+    "fabric/control/__init__.py": (),
+    "engine/__init__.py": (),
+    "interface/__init__.py": (),
+    "fabric/control/kernel": (K,),
+    "fabric/control/bt": (K, BT, "fabric.runtime"),
+    "fabric/control/runtime": (K, BT, "engine.verification", "engine.catalog", "fabric.control.runtime", *PLATFORM),
+    "fabric/runtime": ("fabric.runtime",),
+    "fabric/network": (*PLATFORM, "blocks.python.standard_blocks"),
+    "fabric/identity": ("fabric.identity",),
+    "fabric/data": ("fabric.data", "fabric.identity"),
+    "fabric/evidence": ("fabric.evidence",),
+    "fabric/recovery": ("fabric.recovery",),
+    "fabric/supply_chain": ("fabric.supply_chain",),
+    "engine/verification": (K, "engine.verification", "standard_blocks", *PLATFORM),
+    "engine/catalog": (K, "engine.catalog"),
+    "engine/agents": (K, "engine.verification", BT + ".signing", BT + ".gateway", "engine.catalog",
+                      "interface.context", "engine.agents", "=fabric", *PLATFORM, "blocks.python.standard_blocks"),
+    "interface/context": (K, "engine.verification", "engine.catalog", "interface.context", "engine.agents.work",
+                          "=fabric", *PLATFORM),
+    "interface/surface": (K, "engine.verification", BT + ".signing", BT + ".gateway", "engine.catalog",
+                          "interface.context", "engine.agents", "interface.surface", "blocks.python.standard_blocks"),
     "blocks": ("blocks.python.standard_blocks",),
-    "enclosure": ("enclosure", "blocks.python.standard_blocks"),   # the platform owns the policy the blocks held
-    "context": ("kernel", "instruments", "catalog", "context", "agent.work", "enclosure"),
-    "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "enclosure", "blocks.python.standard_blocks"),
-    "surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "surface", "blocks.python.standard_blocks"),
-    "runtime": ("kernel", "bt", "instruments", "catalog", "runtime", "enclosure"),
-    "tools": ("kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "enclosure", "blocks.python.standard_blocks"),
+    "tools": (K, BT, "fabric.control.runtime", "fabric.recovery", *PLATFORM, "engine", "interface", "tools", "blocks.python.standard_blocks"),
     "examples": ("standard_blocks",),
 }
-CHECKER_ALLOWED = {"kernel.canon", "kernel.floor0"}
+CHECKER_ALLOWED = {"fabric.control.kernel.canon", "fabric.control.kernel.floor0"}
 KERNEL_EFFECT_MODULES = {"os", "pathlib", "time", "socket", "sqlite3", "subprocess", "urllib", "http",
                          "threading", "asyncio", "multiprocessing", "io", "random", "secrets", "importlib",
                          "runpy", "pickle", "marshal", "ctypes", "builtins"}
@@ -45,17 +62,21 @@ def imports(path: Path, root: Path = ROOT) -> set[str]:
                 base = ".".join((*package[:len(package) - node.level + 1], *filter(None, [node.module])))
             else:
                 base = node.module or ""
-            found.add(base)
+            resolved = False
             for alias in node.names:
                 module = f"{base}.{alias.name}"
                 local = root.joinpath(*module.split("."))
                 if local.with_suffix(".py").is_file() or (local / "__init__.py").is_file():
                     found.add(module)
+                    resolved = True
+            if not resolved:
+                found.add(base)
     return found
 
 
 def _within(name: str, allowed) -> bool:
-    return any(name == prefix or name.startswith(prefix + ".") for prefix in allowed)
+    return any(name == prefix[1:] if prefix.startswith("=") else name == prefix or name.startswith(prefix + ".")
+               for prefix in allowed)
 
 
 def violations(root: Path = ROOT) -> list[str]:
@@ -75,11 +96,13 @@ def violations(root: Path = ROOT) -> list[str]:
                 continue
             for name in sorted(names):
                 top = name.split(".")[0]
+                if layer in ("fabric/__init__.py", "fabric/control/__init__.py", "engine/__init__.py", "interface/__init__.py"):
+                    problems.append(f"{rel} imports {name}: namespace root must remain inert")
                 if top in STANDARD and not _within(name, allowed):
                     problems.append(f"{rel} imports {name}: outside {layer}'s boundary")
-                if layer == "kernel" and top in KERNEL_EFFECT_MODULES:
+                if layer == "fabric/control/kernel" and top in KERNEL_EFFECT_MODULES:
                     problems.append(f"{rel} imports {name}: kernel must not perform or observe physical effects")
-                if rel == "bt/checker.py" and ((top == "kernel" and name not in CHECKER_ALLOWED) or top == "bt"):
+                if rel == "fabric/control/bt/checker.py" and (((name == K or name.startswith(K + ".")) and name not in CHECKER_ALLOWED) or (name == BT or name.startswith(BT + "."))):
                     problems.append(f"{rel} imports {name}: second judge must remain independent")
     # Removed package paths must not silently reintroduce a second implementation.
     if any((root / "standard").rglob("*.py")):

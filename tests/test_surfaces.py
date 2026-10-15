@@ -1,4 +1,4 @@
-"""Detection (instruments/surfaces.py): what a product has and what a change touches, read without running anything,
+"""Detection (engine/verification/surfaces.py): what a product has and what a change touches, read without running anything,
 the same answer every time; every term of the catalog's vocabulary has a detector."""
 import sys
 import unittest
@@ -7,8 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from instruments import surfaces  # noqa: E402
-from catalog import load, select  # noqa: E402
+from engine.verification import surfaces  # noqa: E402
+from engine.catalog import load, select  # noqa: E402
 
 
 class Tree:

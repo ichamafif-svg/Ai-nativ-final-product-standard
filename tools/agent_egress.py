@@ -19,9 +19,9 @@ import sys
 import tomllib
 from pathlib import Path
 
-from catalog import effective, load
-from enclosure.egress import Egress
-from enclosure.keys import OpenBao
+from engine.catalog import effective, load
+from fabric.network.egress import Egress
+from fabric.identity.keys import OpenBao
 
 
 def main(argv=None) -> int:

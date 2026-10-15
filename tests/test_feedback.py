@@ -6,8 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from catalog import load  # noqa: E402
-from context.feedback import STRENGTH, item, matrix, render, route  # noqa: E402
+from engine.catalog import load  # noqa: E402
+from interface.context.feedback import STRENGTH, item, matrix, render, route  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,14 +26,14 @@ class Matrix(unittest.TestCase):
             self.assertIn(rid, self.m["review_only"])
         self.assertEqual(self.m["rules"]["DATA-MIN"]["strength"], "measured")   # declared (@field_uses), so probed
 
-    def test_only_a_measured_wall_that_enforces_the_rule_gives_strength(self):
-        from instruments.platform_walls import COVERS, HOLDS, WALLS
+    def test_fixture_coverage_never_claims_the_deployment_is_measured(self):
+        from engine.verification.platform_walls import COVERS, HOLDS, WALLS
         ssrf = self.m["rules"]["SSRF"]
         self.assertIn("wall", ssrf["sources"]["build"])               # it teaches in the precheck
-        self.assertEqual(ssrf["sources"]["run"], ["wall"])            # and holds where the product runs
+        self.assertEqual(ssrf["sources"]["run"], ["wall (implemented, unmeasured)"])  # coverage is not deployment evidence
         self.assertEqual(self.m["rules"]["CANON"]["strength"], "wall")
         scan = self.m["rules"]["AV-SCAN"]                             # the file store runs, but scans nothing
-        self.assertEqual(scan["sources"]["run"], ["wall (running, unmeasured)"])
+        self.assertEqual(scan["sources"]["run"], ["wall (implemented, unmeasured)"])
         self.assertNotEqual(scan["strength"], "wall")
         session = self.m["rules"]["SESSION-TOKEN"]                    # no instrument signs in yet
         self.assertEqual(session["sources"]["run"], ["wall (planned)"])
@@ -41,7 +41,7 @@ class Matrix(unittest.TestCase):
         self.assertTrue(all(set(walls) <= measured for walls in (*COVERS.values(), *HOLDS.values())))
 
     def test_no_rule_loses_its_strongest_source(self):
-        floor = json.loads((ROOT / "catalog" / "feedback_floor.json").read_text())
+        floor = json.loads((ROOT / 'engine/catalog' / "feedback_floor.json").read_text())
         self.assertEqual(set(floor), set(self.m["rules"]), "every rule has a floor; a new rule adds its own")
         weaker = [rid for rid, r in self.m["rules"].items() if STRENGTH[r["strength"]] < STRENGTH[floor[rid]]]
         self.assertEqual(weaker, [], "a source may only be removed when one at least as strong replaces it")
@@ -105,7 +105,7 @@ class BeforeCoding(unittest.TestCase):
                                           "    assert charge(1) == 1\n"})
 
     def test_touched_definitions_come_with_their_tests_callers_and_neighbours(self):
-        from context.repository import RepoMap
+        from interface.context.repository import RepoMap
         reading = RepoMap(self.TREE).reading(["app/billing.py"])["app/billing.py"]
         charge = reading["definitions"]["def charge(a)"]
         self.assertEqual(charge, {"tests": ["tests/test_billing.py"], "code": ["app/api.py"]})
@@ -114,7 +114,7 @@ class BeforeCoding(unittest.TestCase):
         self.assertNotIn("tests/test_billing.py", reading["reuse"])
 
     def test_the_mission_carries_it_before_coding(self):
-        from context.missions import assemble
+        from interface.context.missions import assemble
         packet = json.loads(assemble({}, self.TREE, role="build", focus=["app/billing.py"])[0])["packet"]
         self.assertIn("app/billing.py", packet["before_coding"])
 
@@ -122,8 +122,8 @@ class BeforeCoding(unittest.TestCase):
 class Views(unittest.TestCase):
     def test_the_matrix_and_the_first_pass_rate_are_shown_to_people(self):
         import tempfile
-        from agent.attempts import first_pass, record
-        from surface.cli import matrix_text
+        from engine.agents.attempts import first_pass, record
+        from interface.surface.cli import matrix_text
         with tempfile.TemporaryDirectory() as d:
             path = Path(d, "attempts.jsonl")
             record(path, "repair", "secrets", 1, True)
@@ -138,7 +138,7 @@ class Views(unittest.TestCase):
 
 class Admission(unittest.TestCase):
     def test_a_refutation_reaches_the_agent_as_facts_tied_to_rules(self):
-        from agent.repair import admission_feedback
+        from engine.agents.repair import admission_feedback
         resource = "repo:code:x/b/h"
         findings = {f"{resource}|blocks": {"details": ["SSRF: app.py:3:call:requests.get"]},
                     f"{resource}|tests": {"details": ["test_app::test_add failed"]}}

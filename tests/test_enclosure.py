@@ -8,10 +8,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agent.sandbox import Sandbox  # noqa: E402
-from enclosure import Bac, Walls, bac as bac_module  # noqa: E402
-from enclosure import oci  # noqa: E402
-from instruments.walls import WALLS, measure  # noqa: E402
+from engine.agents.sandbox import Sandbox  # noqa: E402
+from fabric.runtime.bac import Bac, Walls
+from fabric.runtime import bac as bac_module# noqa: E402
+from fabric.runtime import oci# noqa: E402
+from engine.verification.walls import WALLS, measure  # noqa: E402
 
 SMALL = Walls(timeout_s=30, memory_mb=512, processes=32, file_bytes=1_048_576)
 BAC = Bac(SMALL)
@@ -60,19 +61,33 @@ class Configuration(unittest.TestCase):
         self.assertEqual(self.config["linux"]["resources"]["pids"]["limit"], 32)
         self.assertEqual(self.config["process"]["args"], ["run"])
 
+    def test_runtime_accounts_receive_distinct_cgroup_subtrees(self):
+        with patch.object(Bac, "_unavailable", return_value=None):
+            own = Bac(SMALL)
+            runner = Bac(SMALL)
+            runner.ids = (12345, 12345)
+            own_path = own.config(["true"], self.cwd)["linux"]["cgroupsPath"]
+            other_path = runner.config(["true"], self.cwd)["linux"]["cgroupsPath"]
+        self.assertNotEqual(own_path, other_path)
+        self.assertIn("/12345/", other_path)
+
     def test_the_kernels_counters_say_which_limits_were_enforced(self):
         with tempfile.TemporaryDirectory() as root:
-            place = Path(root, bac_module.GROUP, "x")
+            place = Path(root, bac_module.GROUP, str(os.getuid()), "x")
             place.mkdir(parents=True)
             (place / "pids.events").write_text("max 0\n")
+            (place / "memory.events").write_text("max 0\noom_kill 0\n")
             with patch.object(bac_module, "CGROUP_ROOT", Path(root)):
+                self.assertIsNone(bac_module._limited("unreadable-or-absent"))
                 self.assertEqual(bac_module._limited("x"), ())
+                (place / "memory.events").unlink()
+                self.assertIsNone(bac_module._limited("x"), "partial counters are not a clean observation")
                 (place / "pids.events").write_text("max 3\n")
                 (place / "memory.events").write_text("low 0\nmax 0\noom_kill 1\n")
                 self.assertEqual(bac_module._limited("x"), ("memory", "processes"))
 
     def test_the_capability_map_is_read_from_the_bac_never_written_beside_it(self):
-        from enclosure import capability_map
+        from fabric.runtime.bac import capability_map
         walls = Walls(timeout_s=7, memory_mb=256, processes=9, file_bytes=4096, cpu_percent=50)
         limits = capability_map(walls)["limits"]
         self.assertEqual(limits, {"time_s": 7, "memory_mb": 256, "processes": 9, "file_bytes": 4096,
@@ -81,7 +96,7 @@ class Configuration(unittest.TestCase):
 
     def test_the_mission_says_in_one_place_what_the_bac_gives_and_who_holds_each_rule(self):
         import json
-        from context.missions import assemble
+        from interface.context.missions import assemble
         packet = json.loads(assemble({"product": {"features": ["web"], "stacks": ["fastapi"]}}, None,
                                      role="build", touched=["surface:endpoint"])[0])["packet"]
         self.assertNotIn("capabilities", packet)

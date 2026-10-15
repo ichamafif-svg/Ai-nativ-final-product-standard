@@ -2,8 +2,8 @@
 import json
 import sys
 
-from catalog import effective, load
-from instruments.platform_walls import measure
+from engine.catalog import effective, load
+from engine.verification.platform_walls import measure
 
 if __name__ == "__main__":
     walls = measure(effective(load(), {}))

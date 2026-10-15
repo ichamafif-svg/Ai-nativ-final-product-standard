@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agent.quality import COMPLEXITY, WINDOW, complexity, duplication, mutants  # noqa: E402
+from engine.agents.quality import COMPLEXITY, WINDOW, complexity, duplication, mutants  # noqa: E402
 
 
 def git(repo, *args):

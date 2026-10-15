@@ -4,7 +4,7 @@
     python tools/ceremony.py init DIR --github OWNER/NAME --token-file F [--pins PATH]
     python tools/ceremony.py separate DIR --guard-user U --agent-user V      (as root, before serving)
 
-`init` writes the keys, the recommended rules (catalog/floors.py RECOMMENDED), the genesis, the clock's first
+`init` writes the keys, the recommended rules (engine/catalog/floors.py RECOMMENDED), the genesis, the clock's first
 checkpoint, the four capabilities (the human's decisions and requests, the agent's moves, the scanner's measures, the
 oracle's proofs), a self-assessment and DIR/standard.toml. Widening takes effect at once: the installation runs as
 soon as `init` returns.
@@ -29,12 +29,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat  # noqa: E402
 
-from catalog.floors import RELEASE, rules  # noqa: E402
-from kernel import Kernel, canon, digest, empty  # noqa: E402
-from bt.assessment import CONTRACTS, PREFIX, SignedAssessment  # noqa: E402
-from bt.journal import Journal, PinStore  # noqa: E402
-from runtime import code_digest  # noqa: E402
-from bt.signing import Signer, entry  # noqa: E402
+from engine.catalog.floors import RELEASE, rules  # noqa: E402
+from fabric.control.kernel import Kernel, canon, digest, empty  # noqa: E402
+from fabric.control.bt.assessment import CONTRACTS, PREFIX, SignedAssessment  # noqa: E402
+from fabric.control.bt.journal import Journal, PinStore  # noqa: E402
+from fabric.control.runtime import code_digest  # noqa: E402
+from fabric.control.bt.signing import Signer, entry  # noqa: E402
 
 IDENTITIES = {"human": "human", "agent": "agent", "guard": "guard", "scanner": "service", "oracle": "oracle",
               "clock": "witness"}
@@ -123,7 +123,7 @@ def init(args) -> None:
     assessor_public = assessor.public
     data_section = ""
     if getattr(args, "data", None):
-        from kernel import parse
+        from fabric.control.kernel import parse
         snapshot = Path(args.data).resolve()
         data_section = f'\n[data]\npath = "{snapshot}"\ndigest = "{digest(parse(snapshot.read_bytes(), max_bytes=64 << 20))}"\n'
     if getattr(args, "unconfined_tests", False):             # functional tests only: candidate code runs as the operator
@@ -198,7 +198,7 @@ def separate(args) -> None:
     if "separation" not in c:
         with open(d / "standard.toml", "a") as f:
             f.write(f'\n[separation]\nguard_user = "{guard.pw_name}"\nagent_user = "{agent.pw_name}"\n')
-    print(f"separated: {guard.pw_name} runs `python -m runtime serve`, {agent.pw_name} runs `python -m agent run`")
+    print(f"separated: {guard.pw_name} runs `python -m fabric.control.runtime serve`, {agent.pw_name} runs `python -m engine.agents run`")
 
 
 def main() -> int:

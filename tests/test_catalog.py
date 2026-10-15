@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from catalog import (CatalogError, applicable, check_value, effective, load, render,  # noqa: E402
+from engine.catalog import (CatalogError, applicable, check_value, effective, load, render,  # noqa: E402
                               select, validate)
 
 
@@ -97,9 +97,9 @@ class Catalog(unittest.TestCase):
                 check_value(self.cat, name, bad)
 
     def test_catalog_compiles_the_same_targets_and_policy_used_by_the_law_and_editor(self):
-        from catalog import targets, policy_values, instruction, definition
-        from catalog.floors import FLOORS, RECOMMENDED
-        from context.policy import SCHEMA, change
+        from engine.catalog import targets, policy_values, instruction, definition
+        from engine.catalog.floors import FLOORS, RECOMMENDED
+        from interface.context.policy import SCHEMA, change
         self.assertEqual(targets(self.cat), FLOORS["targets"])
         self.assertEqual(policy_values("floor"), FLOORS["settings"])
         self.assertEqual(SCHEMA.keys(), self.cat["policy"]["parameter"].keys())
@@ -114,7 +114,7 @@ class Catalog(unittest.TestCase):
             change({}, settings={"research_steps": 10})
 
     def test_contracts_preserve_exact_policy_and_separate_absorption_from_evidence(self):
-        from catalog import contracts, render_contracts
+        from engine.catalog import contracts, render_contracts
         values = effective(self.cat, {"access": {"orders.read": ["buyer"]}})
         packet = contracts(self.cat, ["api"], values, ids={"AUTHZ"}, stacks=["nextjs"])
         text = render_contracts(packet)
@@ -129,12 +129,12 @@ class Catalog(unittest.TestCase):
 
     def test_python_primitives_and_framework_integrations_have_one_resolved_contract(self):
         import tomllib
-        from catalog import compact, contracts, implementation, render_contracts
-        from instruments.coverage import adoptable, evaluate
-        from instruments.surfaces import scan
+        from engine.catalog import compact, contracts, implementation, render_contracts
+        from engine.verification.coverage import adoptable, evaluate
+        from engine.verification.surfaces import scan
         from test_surfaces import Tree
 
-        declared = tomllib.loads((ROOT / "catalog/blocks.toml").read_text())["block"]
+        declared = tomllib.loads((ROOT / "engine/catalog/blocks.toml").read_text())["block"]
         generic = {"crypto", "outbound", "parse", "process", "input", "data", "render", "log", "runtime"}
         for name in generic:
             self.assertIn("python", declared[name])
@@ -147,7 +147,7 @@ class Catalog(unittest.TestCase):
             self.assertIsNone(implementation(self.cat, name, "python"))
             self.assertIsNotNone(implementation(self.cat, name, "fastapi"))
 
-        tree = Tree({"agent.py": "from standard_blocks.outbound import request\n"
+        tree = Tree({"engine.agents.py": "from standard_blocks.outbound import request\n"
                                 "request('GET', 'docs', endpoints=endpoints, values=values)\n"})
         product = scan(tree)
         self.assertEqual(product["stacks"], ["python"])
@@ -155,13 +155,13 @@ class Catalog(unittest.TestCase):
                                          ids={"RUN-TIMEOUTS"}, stacks=product["stacks"]))
         self.assertIn("python: standard_blocks.outbound", text)
         self.assertNotIn("fastapi:", text)
-        for source, stack in ((tree.read("agent.py"), "python"),
-                              (b"from fastapi import FastAPI\n" + tree.read("agent.py"), "fastapi")):
-            candidate = Tree({"agent.py": source})
+        for source, stack in ((tree.read("engine.agents.py"), "python"),
+                              (b"from fastapi import FastAPI\n" + tree.read("engine.agents.py"), "fastapi")):
+            candidate = Tree({"engine.agents.py": source})
             self.assertEqual(scan(candidate)["stacks"], [stack])
             states = evaluate(candidate, compact(self.cat), effective(self.cat, {}), probes={}, bandit={})
             self.assertEqual(states["RUN-TIMEOUTS"]["checks"]["blocks"][0], "pass")
-            bare = Tree({"agent.py": ("from fastapi import FastAPI\n" if stack == "fastapi" else "") +
+            bare = Tree({"engine.agents.py": ("from fastapi import FastAPI\n" if stack == "fastapi" else "") +
                                     "import httpx\nhttpx.get(url)\n"})
             self.assertEqual(evaluate(bare, compact(self.cat), effective(self.cat, {}), probes={}, bandit={})
                              ["RUN-TIMEOUTS"]["checks"]["blocks"][0], "fail")
@@ -177,20 +177,23 @@ class Catalog(unittest.TestCase):
                 validate(cat)
 
     def test_the_catalog_is_part_of_the_release(self):
-        from runtime import CATALOG_DATA, code_digest
+        from fabric.control.runtime import CATALOG_DATA, code_digest
         import tempfile, shutil
         root = Path(tempfile.mkdtemp())
-        for part in ("kernel", "bt", "runtime", "catalog", "blocks", "enclosure"):
+        for part in ("fabric", "engine", "blocks"):
             shutil.copytree(ROOT / part, root / part, ignore=shutil.ignore_patterns("__pycache__"))
+        (root / "tools").mkdir()
+        for name in ("cgroup_run.sh", "cgroup_setup.sh", "install_server.sh"):
+            shutil.copy2(ROOT / "tools" / name, root / "tools" / name)
         shutil.copy(ROOT / "requirements.hashes", root / "requirements.hashes")
         before = code_digest(root)
-        rule = root / "catalog" / "rules" / "injection.toml"
+        rule = root / 'engine/catalog' / "rules" / "injection.toml"
         rule.write_text(rule.read_text().replace("bound parameter", "parameter"))
         self.assertNotEqual(code_digest(root), before)
         self.assertIn("values.toml", CATALOG_DATA)
         for name in ("maintenance.toml", "policy.toml"):
             self.assertIn(name, CATALOG_DATA)
-            source = root / "catalog" / name
+            source = root / 'engine/catalog' / name
             baseline = code_digest(root)
             source.write_text(source.read_text() + "\n# pin check\n")
             self.assertNotEqual(code_digest(root), baseline)

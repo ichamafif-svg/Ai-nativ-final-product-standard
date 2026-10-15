@@ -7,9 +7,9 @@ import unittest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fixture import Ledger
 
-from bt import transparency as t
-from bt.signing import Signer
-from kernel import canon
+from fabric.control.bt import transparency as t
+from fabric.control.bt.signing import Signer
+from fabric.control.kernel import canon
 
 
 class Note(unittest.TestCase):

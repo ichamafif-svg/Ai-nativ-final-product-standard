@@ -19,14 +19,14 @@ from test_install import Clock  # noqa: E402
 from test_maintenance import FILES, demo_repository  # noqa: E402
 from local_sandbox import LocalSandbox  # noqa: E402
 
-import agent.__main__ as agent_process  # noqa: E402
-import runtime.operator as daemon  # noqa: E402
-from agent.candidate import AgentError
-from agent.build import Builder, in_scope  # noqa: E402
-from agent.llm import Gate, Provider  # noqa: E402
-from surface.human import load_signer  # noqa: E402
-from bt.gateway import AdmissionGateway  # noqa: E402
-from bt.signing import envelope  # noqa: E402
+import engine.agents.__main__ as agent_process  # noqa: E402
+import fabric.control.runtime.operator as daemon  # noqa: E402
+from engine.agents.candidate import AgentError
+from engine.agents.build import Builder, in_scope  # noqa: E402
+from engine.agents.llm import Gate, Provider  # noqa: E402
+from interface.surface.human import load_signer  # noqa: E402
+from fabric.control.bt.gateway import AdmissionGateway  # noqa: E402
+from fabric.control.bt.signing import envelope  # noqa: E402
 
 CONTRACT = b"from app import mul\n\n\ndef test_mul():\n    assert mul(2, 3) == 6\n\n\ndef test_mul_zero():\n    assert mul(7, 0) == 0\n"
 ALREADY = b"from app import add\n\n\ndef test_add_again():\n    assert add(1, 1) == 2\n"

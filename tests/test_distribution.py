@@ -12,9 +12,9 @@ from pathlib import Path
 import fixture  # noqa: F401  (the repository on the path)
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from bt.signing import Signer
-from kernel import parse
-from kernel.identity import pae
+from fabric.control.bt.signing import Signer
+from fabric.control.kernel import parse
+from fabric.control.kernel.identity import pae
 from tools import provenance
 
 try:

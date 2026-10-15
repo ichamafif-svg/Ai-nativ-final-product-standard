@@ -11,15 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: E402
 
-from bt.signing import KeyServiceSigner, envelope  # noqa: E402
-from enclosure.components import where  # noqa: E402
-from kernel.identity import pae  # noqa: E402
+from fabric.control.bt.signing import KeyServiceSigner, envelope  # noqa: E402
+from fabric.supply_chain.components import where  # noqa: E402
+from fabric.control.kernel.identity import pae  # noqa: E402
 
 
 @unittest.skipUnless(where("openbao"), "needs OpenBao: python -m tools.components fetch")
 class KeyService(unittest.TestCase):
     def setUp(self):
-        from enclosure.keys import dev
+        from fabric.identity.keys import dev
         self.state = tempfile.mkdtemp()
         self.bao, self.process = dev(self.state, where("openbao"))
         self.addCleanup(self.process.wait)
@@ -35,8 +35,34 @@ class KeyService(unittest.TestCase):
         self.assertEqual(sig["keyid"], signer.keyid)
         self.assertFalse(any("private" in k for k in vars(signer)))
 
+    def test_native_egress_token_cannot_reach_another_products_keys_or_secrets(self):
+        from fabric.identity.keys import KeyServiceError
+        self.bao.put_secret("allowed", "known-only-to-the-proxy")
+        self.bao.put_secret("other", "other-product")
+        self.bao.create_key("product-a", "aes256-gcm96")
+        self.bao.create_key("product-b", "aes256-gcm96")
+        child = self.bao.restrict(["allowed"], {"product-a": ["encrypt"]})
+        self.assertNotEqual(child.token, self.bao.token)
+        self.assertEqual(child.secret("allowed"), "known-only-to-the-proxy")
+        sealed = child.product_operation("encrypt", "product-a", {"plaintext": "aGk="},
+                                         capabilities={"product-a": ["encrypt"]})
+        self.assertIn("ciphertext", sealed)
+        # Call native endpoints directly: bypassing the Python adapter still cannot widen the token.
+        for method, path, body in [
+            ("GET", "secret/data/other", None),
+            ("POST", "transit/encrypt/product-b", {"plaintext": "aGk="}),
+            ("POST", "transit/decrypt/product-a", {"ciphertext": sealed["ciphertext"]}),
+            ("POST", "transit/sign/guard", {"input": "aGk="}),
+            ("POST", "auth/token/create", {}),
+        ]:
+            with self.subTest(path=path), self.assertRaises(KeyServiceError):
+                child.call(method, path, body)
+        child.revoke()
+        with self.assertRaises(KeyServiceError):
+            child.secret("allowed")
+
     def test_the_operator_reads_a_service_key_and_refuses_a_readable_token(self):
-        from runtime.operator import key
+        from fabric.control.runtime.operator import key
         keys = Path(self.state, "keys")
         keys.mkdir()
         token = keys / "guard.token"

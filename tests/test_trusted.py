@@ -12,12 +12,12 @@ from fixture import CODE, Ledger
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from catalog.floors import RELEASE
-from kernel import Kernel, Refused, canon, digest
-from bt import (AdmissionGateway, Checker, Disagreement, EffectPort, GatewayClient, Halted, Journal, PinStore,
+from engine.catalog.floors import RELEASE
+from fabric.control.kernel import Kernel, Refused, canon, digest
+from fabric.control.bt import (AdmissionGateway, Checker, Disagreement, EffectPort, GatewayClient, Halted, Journal, PinStore,
                 SignedAssessment, Signer, TrustUnavailable, TrustedService, required_for)
-from bt.assessment import BASE, PREFIX as ASSESSMENT_PREFIX
-from bt.gateway import answer
+from fabric.control.bt.assessment import BASE, PREFIX as ASSESSMENT_PREFIX
+from fabric.control.bt.gateway import answer
 
 
 def raw_public(sk):
@@ -132,7 +132,7 @@ class Effects(unittest.TestCase):
         return body["id"]
 
     def guard(self, adapter):
-        from bt import Guard
+        from fabric.control.bt import Guard
         return Guard(self.J, self.signer, EffectPort({"inventory-refresh": adapter}), self.now)
 
     def test_one_departure_under_both_judges(self):

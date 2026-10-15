@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from enclosure.alarms import Watcher  # noqa: E402
-from enclosure.bac import Bac  # noqa: E402
+from fabric.evidence.alarms import Watcher  # noqa: E402
+from fabric.runtime.bac import Bac  # noqa: E402
 
 
 def kernel_log_readable() -> bool:

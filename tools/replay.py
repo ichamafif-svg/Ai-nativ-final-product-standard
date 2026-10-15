@@ -2,7 +2,7 @@
 
     python tools/replay.py standard.toml [--limit N] [RECORD ...]
 
-A measurement in the ledger names its method (`programs@<digest>/<contract>`: the pinned programs, instruments/) and
+A measurement in the ledger names its method (`programs@<digest>/<contract>`: the pinned programs, engine/verification/) and
 its artifact (the OBSERVE boundary transaction, D38, which names the run record: job, inputs by digest, answer). This tool opens the ledger read-only, takes the records the
 latest measurements name (or the ones given), runs each job again with the same programs on the same recorded inputs,
 in its own isolated runner, and compares the facts. It holds no key and signs nothing: anyone with a copy of the
@@ -26,12 +26,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from catalog.floors import RELEASE  # noqa: E402
-from kernel import Kernel  # noqa: E402
-from bt.host import Evidence, Host  # noqa: E402
-from bt.journal import Journal, PinStore  # noqa: E402
-from runtime import code_digest  # noqa: E402
-from runtime.operator import isolation  # noqa: E402
+from engine.catalog.floors import RELEASE  # noqa: E402
+from fabric.control.kernel import Kernel  # noqa: E402
+from fabric.control.bt.host import Evidence, Host  # noqa: E402
+from fabric.control.bt.journal import Journal, PinStore  # noqa: E402
+from fabric.control.runtime import code_digest  # noqa: E402
+from fabric.control.runtime.operator import isolation  # noqa: E402
 
 
 def facts(output: dict) -> set:

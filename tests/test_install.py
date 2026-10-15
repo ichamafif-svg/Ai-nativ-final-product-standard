@@ -15,9 +15,9 @@ from local_sandbox import LocalSandbox
 
 from tools import ceremony  # noqa: E402
 
-import agent.__main__ as agent_process  # noqa: E402
-import runtime.operator as daemon  # noqa: E402
-from bt.gateway import AdmissionGateway  # noqa: E402
+import engine.agents.__main__ as agent_process  # noqa: E402
+import fabric.control.runtime.operator as daemon  # noqa: E402
+from fabric.control.bt.gateway import AdmissionGateway  # noqa: E402
 
 
 class Clock:
@@ -43,7 +43,7 @@ class Installation(unittest.TestCase):
         gateway = AdmissionGateway(operator.socket, operator.service)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         try:
-            with patch("agent.sandbox.Sandbox", LocalSandbox):
+            with patch("engine.agents.sandbox.Sandbox", LocalSandbox):
                 loop, repairer, _, refresh = agent_process.build(root / "install" / "standard.toml")
             loop.clock, loop.backoff_ms, repairer.clock = clock, 0, clock
             for _ in range(3):
@@ -79,7 +79,7 @@ class Installation(unittest.TestCase):
 
 class GitHubAdapter(unittest.TestCase):
     def github(self, replies):
-        from bt.adapters import GitHub
+        from fabric.control.bt.adapters import GitHub
         calls = []
 
         def transport(method, url, token, body=None):
@@ -105,7 +105,7 @@ class GitHubAdapter(unittest.TestCase):
         self.assertEqual(gh.remediate("r", args, "k"), "failed")             # nothing was sent
 
     def test_the_git_route_is_the_same_compare_and_swap(self):
-        from bt.adapters import GitHub
+        from fabric.control.bt.adapters import GitHub
         root = Path(tempfile.mkdtemp())
         origin = demo_repository(root, FILES)
         git = lambda *a: __import__("subprocess").run(["git", *a], check=True, capture_output=True, text=True).stdout.strip()
@@ -131,9 +131,9 @@ class GitHubAdapter(unittest.TestCase):
         def spy(args, *a, **k):
             seen.append((list(args), dict(k.get("env") or {})))
             return real(["true"], capture_output=True, text=True)
-        from bt.adapters import GitHub
+        from fabric.control.bt.adapters import GitHub
         gh = GitHub("acme/app", "s3cr3t-token", push_from="/nonexistent")
-        with patch("bt.adapters.subprocess.run", spy):
+        with patch("fabric.control.bt.adapters.subprocess.run", spy):
             gh.remediate("r", {"base": "a" * 40, "head": "b" * 40}, "k")
         argv, env = seen[0]
         self.assertFalse(any("s3cr3t" in a or "Authorization" in a for a in argv))

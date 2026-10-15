@@ -5,13 +5,13 @@ import unittest
 import shutil
 from pathlib import Path
 
-from bt.release import code_digest as core_digest
-from runtime import SOURCES, code_digest as installation_digest
+from fabric.control.bt.release import code_digest as core_digest
+from fabric.control.runtime import SOURCES, code_digest as installation_digest
 from tools.check_layers import ALLOWED, imports, violations
 from tools.coverage import inventory
-from context.model import human_target, work_role
-from catalog.floors import FLOORS
-from agent.work import WorkEngine
+from interface.context.model import human_target, work_role
+from engine.catalog.floors import FLOORS
+from engine.agents.work import WorkEngine
 from tomllib import loads as parse_toml
 
 
@@ -117,38 +117,38 @@ class Structure(unittest.TestCase):
         return path
 
     def test_product_cannot_reach_the_privileged_runtime_or_guard(self):
-        self.write("agent/repair.py", "from runtime import operator\nfrom bt import Guard\n")
+        self.write("engine/agents/repair.py", "from fabric.control.runtime import operator\nfrom bt import Guard\n")
         problems = violations(self.root)
         self.assertTrue(any("runtime" in p for p in problems), problems)
         self.assertTrue(any("imports bt:" in p for p in problems), problems)
 
     def test_kernel_and_programs_cannot_import_physical_effects(self):
-        self.write("kernel/judge.py", "import socket\n")
-        self.write("instruments/jobs.py", "from bt.signing import Signer\n")
+        self.write("fabric/control/kernel/judge.py", "import socket\n")
+        self.write("engine/verification/jobs.py", "from fabric.control.bt.signing import Signer\n")
         problems = violations(self.root)
-        self.assertTrue(any("kernel/judge.py imports socket" in p for p in problems), problems)
-        self.assertTrue(any("instruments/jobs.py imports bt.signing" in p for p in problems), problems)
+        self.assertTrue(any("fabric/control/kernel/judge.py imports socket" in p for p in problems), problems)
+        self.assertTrue(any("engine/verification/jobs.py imports fabric.control.bt.signing" in p for p in problems), problems)
 
     def test_second_judge_cannot_reuse_the_first_or_reach_it_indirectly(self):
-        self.write("kernel/judge.py", "")
-        self.write("bt/service.py", "")
-        self.write("bt/checker.py", "from kernel import judge\nfrom . import service\n")
+        self.write("fabric/control/kernel/judge.py", "")
+        self.write("fabric/control/bt/service.py", "")
+        self.write("fabric/control/bt/checker.py", "from fabric.control.kernel import judge\nfrom . import service\n")
         problems = violations(self.root)
-        self.assertTrue(any("second judge" in p and "kernel.judge" in p for p in problems), problems)
-        self.assertTrue(any("second judge" in p and "bt.service" in p for p in problems), problems)
+        self.assertTrue(any("second judge" in p and "fabric.control.kernel.judge" in p for p in problems), problems)
+        self.assertTrue(any("second judge" in p and "fabric.control.bt.service" in p for p in problems), problems)
 
     def test_blocks_cannot_reach_authority_and_judges_cannot_import_blocks(self):
-        self.write("kernel/judge.py", "from blocks.python.standard_blocks import crypto\n")
-        self.write("bt/checker.py", "from standard_blocks.crypto import same\n")
-        self.write("blocks/escape.py", "from bt.service import TrustedService\n")
+        self.write("fabric/control/kernel/judge.py", "from blocks.python.standard_blocks import crypto\n")
+        self.write("fabric/control/bt/checker.py", "from standard_blocks.crypto import same\n")
+        self.write("blocks/escape.py", "from fabric.control.bt.service import TrustedService\n")
         problems = violations(self.root)
-        for path in ("kernel/judge.py", "bt/checker.py", "blocks/escape.py"):
+        for path in ("fabric/control/kernel/judge.py", "fabric/control/bt/checker.py", "blocks/escape.py"):
             self.assertTrue(any(p.startswith(path + " imports ") for p in problems), problems)
 
     def test_relative_imports_of_packages_resolve_within_the_correct_role(self):
-        path = self.write("agent/__init__.py", "from . import repair\nfrom bt.gateway import GatewayClient\n")
-        self.write("agent/repair.py", "")
-        self.assertIn("agent.repair", imports(path, self.root))
+        path = self.write("engine/agents/__init__.py", "from . import repair\nfrom fabric.control.bt.gateway import GatewayClient\n")
+        self.write("engine/agents/repair.py", "")
+        self.assertIn("engine.agents.repair", imports(path, self.root))
         self.assertEqual(violations(self.root), [])
 
     def test_privileged_product_code_stays_bound_to_the_installation(self):
@@ -160,19 +160,19 @@ class Structure(unittest.TestCase):
             else:
                 path.mkdir(parents=True, exist_ok=True)
                 (path / "__init__.py").touch()
-        from runtime import CATALOG_DATA
+        from fabric.control.runtime import CATALOG_DATA
 
-        (self.root / "catalog/rules").mkdir(parents=True, exist_ok=True)
+        (self.root / "engine/catalog/rules").mkdir(parents=True, exist_ok=True)
         for name in CATALOG_DATA:
-            (self.root / "catalog" / name).touch()
+            (self.root / 'engine/catalog' / name).touch()
         core, installed = core_digest(self.root), installation_digest(self.root)
-        runtime = self.write("runtime/operator.py", "VERSION = 1\n")
+        runtime = self.write("fabric/control/runtime/operator.py", "VERSION = 1\n")
         self.assertEqual(core_digest(self.root), core)
         self.assertNotEqual(installation_digest(self.root), installed)
         bound = installation_digest(self.root)
         runtime.write_text("VERSION = 2\n")
         self.assertNotEqual(installation_digest(self.root), bound)
-        (self.root / "catalog/floors.py").unlink()
+        (self.root / "engine/catalog/floors.py").unlink()
         with self.assertRaises(FileNotFoundError):
             installation_digest(self.root)
 
@@ -195,12 +195,39 @@ class Structure(unittest.TestCase):
                 self.assertNotEqual(installation_digest(self.root), original, file)
                 file.write_text(previous)
 
+    def test_core_and_program_pins_include_executable_ancestor_packages_and_runtime_profiles(self):
+        from fabric.control.bt.release import CORE
+        from fabric.control.bt.host import programs_digest
+        for source in CORE:
+            source_path = Path(__file__).resolve().parents[1] / source
+            target = self.root / source
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source_path.is_file():
+                shutil.copy2(source_path, target)
+            else:
+                shutil.copytree(source_path, target, dirs_exist_ok=True)
+        core = core_digest(self.root)
+        for name in ("fabric/control/__init__.py", "fabric/runtime/__init__.py", "fabric/runtime/profiles.py"):
+            path = self.root / name
+            before = path.read_text()
+            path.write_text(before + "\nMUTATION = True\n")
+            self.assertNotEqual(core_digest(self.root), core, name)
+            path.write_text(before)
+        programs = programs_digest(self.root)
+        parent = self.root / "engine/__init__.py"
+        parent.write_text("MUTATION = True\n")
+        self.assertNotEqual(programs_digest(self.root), programs)
+
+    def test_namespace_roots_cannot_reintroduce_runtime_into_the_kernel_import_path(self):
+        self.write("fabric/__init__.py", "import os\n")
+        self.assertTrue(any("namespace root must remain inert" in p for p in violations(self.root)))
+
 
 class WorkMigration(unittest.TestCase):
     def test_old_partitions_collapse_without_losing_deadlines_attempts_or_leases(self):
         import json
         import sqlite3
-        from agent.work import WorkError
+        from engine.agents.work import WorkError
 
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "work.db"

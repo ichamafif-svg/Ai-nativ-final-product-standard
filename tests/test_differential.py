@@ -13,8 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fixture import HOUR, Ledger  # noqa: E402
-from kernel import Refused  # noqa: E402
-from bt.checker import Disagreement  # noqa: E402
+from fabric.control.kernel import Refused  # noqa: E402
+from fabric.control.bt.checker import Disagreement  # noqa: E402
 
 RUNS = int(os.environ.get("STANDARD_DIFFERENTIAL", "12"))
 STEPS = 60
@@ -54,7 +54,7 @@ def proposal(rng, L, caps):
                        client_law(settings={"burn_fast": "20"}), client_law(settings={"burn_fast": "1"})])
         return "law", pick(("h1", "agent")), None, {"at": at, "client": client}
     if choice == 4:
-        from catalog.floors import INSTRUMENTS
+        from engine.catalog.floors import INSTRUMENTS
         good = {"tests": "green", "reproduced": "yes", "regressions": "none", "scoped": "yes", "blocks": "clean", "candidate": "yes",
                 "window": "open", "budget_pct": "50"}
         prop = pick(sorted(good))
@@ -84,7 +84,7 @@ def proposal(rng, L, caps):
         return "intent", "agent", None, fields
     if choice == 7 and intents:
         it = s["intents"][pick(intents)]
-        from kernel import digest
+        from fabric.control.kernel import digest
         signers = ["guard"]
         return "token", "guard", signers, {"at": at, "intent": it["id"], "args_digest": digest(it["args"])}
     if choice == 8 and tokens:
@@ -144,7 +144,7 @@ class Differential(unittest.TestCase):
                         missed.append((kind, name))
                     except Disagreement:
                         pass
-                from kernel import apply
+                from fabric.control.kernel import apply
                 apply(L.state, delta)
                 L.entries.append(entry)
                 admitted += 1

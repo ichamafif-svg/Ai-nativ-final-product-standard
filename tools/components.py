@@ -1,4 +1,4 @@
-"""Fetch and verify the platform's pinned components (D68): `enclosure/components.toml`.
+"""Fetch and verify the platform's pinned components (D68): `fabric/supply_chain/components.toml`.
 
     python -m tools.components fetch [DIR]     download, check both digests, install into DIR/bin
     python -m tools.components where NAME      the installed path of one component, or nothing
@@ -15,7 +15,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from enclosure.components import digest, home, pins, where
+from fabric.supply_chain.components import digest, home, pins, where
 
 
 def fetch_python(spec: dict, root: Path) -> Path:
@@ -23,7 +23,7 @@ def fetch_python(spec: dict, root: Path) -> Path:
     import subprocess
     venv = root / spec["environment"]
     subprocess.run([sys.executable, "-m", "venv", "--clear", str(venv)], check=True)
-    locked = Path(__file__).resolve().parents[1] / "enclosure" / spec["requirements"]
+    locked = Path(__file__).resolve().parents[1] / "fabric/supply_chain" / spec["requirements"]
     subprocess.run([str(venv / "bin" / "pip"), "install", "-q", "--require-hashes", "--no-deps", "-r", str(locked)],
                    check=True)
     (venv / "standard-pin").write_text(spec["version"])

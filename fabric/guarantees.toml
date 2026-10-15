@@ -1,0 +1,112 @@
+# Engineering inventory. This is neither authorization policy nor deployment evidence.
+# Tests name reproducible checks. A listed check has not necessarily run on this host.
+
+[[guarantee]]
+id = "candidate-isolation"
+property = "Candidate code runs without control keys, inherited environment or direct network."
+enforcer = "fabric/runtime/bac.py; fabric/control/bt/isolation.py"
+domains = ["agent", "build", "control"]
+assumptions = ["Trusted host kernel and OCI runtime", "Distinct runner account and protected control files"]
+bypass = ["Unconfined demo executor", "Host administrator compromise", "Overbroad readable mounts"]
+tests = ["tests/test_isolation.py", "tests/test_enclosure.py"]
+remaining = ["The agent's own host process is not yet enclosed", "Physical host qualification required"]
+
+[[guarantee]]
+id = "bounded-authority"
+property = "An agent cannot extend its grants, weaken floors or reuse approval for another resource."
+enforcer = "fabric/control/kernel; fabric/control/bt/checker.py; fabric/control/bt/guard.py"
+domains = ["agent", "control"]
+assumptions = ["Human key custody", "Privileged effect paths are exclusive"]
+bypass = ["Compromised human signing key", "External write credential bypassing the guard"]
+tests = ["tests/test_kernel.py", "tests/test_review.py", "tests/test_trusted.py", "tests/test_differential.py"]
+remaining = ["Native IAM must restrict external operators and pipelines too", "No claim that approval prevents deception"]
+
+[[guarantee]]
+id = "network-mediation"
+property = "An enclosed product can leave only through the configured egress path and its destination policy."
+enforcer = "fabric/runtime/oci.py; fabric/network/egress_addon.py"
+domains = ["product", "control"]
+assumptions = ["No additional network or IPC path mounted", "Egress process and its configuration remain trusted"]
+bypass = ["Compromised egress authority", "An explicitly authorized destination misuses submitted data"]
+tests = ["tests/test_platform.py", "tests/test_gateway.py", "tests/test_fabric_adversarial.py"]
+remaining = ["Egress request deadline is not independently imposed", "Ingress prototype requires upstream TLS"]
+
+[[guarantee]]
+id = "secret-custody"
+property = "Credentials are injected outside the bac; exact reflections in response bodies and headers are refused."
+enforcer = "fabric/network/egress_addon.py; fabric/identity/keys.py"
+domains = ["product", "control"]
+assumptions = ["Authorized providers are trusted with credentials", "Responses are buffered before inspection"]
+bypass = ["Encoded or transformed credential reflection", "Provider compromise", "Compromised provisioning process"]
+tests = ["tests/test_fabric_adversarial.py", "tests/test_fabric_proxy.py", "tests/test_platform.py", "tests/test_key_service.py"]
+remaining = ["Not a universal non-disclosure guarantee", "Native delegated tokens expire after one hour and fail closed"]
+
+[[guarantee]]
+id = "key-scope"
+property = "Each proxy instance can invoke only explicitly declared key-operation pairs."
+enforcer = "fabric/identity/keys.py; fabric/network/egress_addon.py"
+domains = ["product", "client", "control"]
+assumptions = ["Control provisions disjoint per-product key capabilities", "Native OpenBao policy is enforced"]
+bypass = ["Shared bootstrap authority", "Wrong capabilities granted by control"]
+tests = ["tests/test_fabric_adversarial.py", "tests/test_key_service.py", "tests/test_platform.py"]
+remaining = ["Provisioning and runtime administrative separation must be deployed"]
+
+[[guarantee]]
+id = "shared-file-budget"
+property = "Quota check and publication share a cross-process file lock; duplicate bytes are charged once."
+enforcer = "fabric/network/egress_addon.py"
+domains = ["product", "client"]
+assumptions = ["Local filesystem with working flock", "Only this store implementation writes the directory"]
+bypass = ["Another writable store", "Administrative writes outside the lock"]
+tests = ["tests/test_fabric_adversarial.py"]
+remaining = ["Quota is per product store, not per authenticated user", "No distributed quota guarantee"]
+
+[[guarantee]]
+id = "data-boundaries"
+property = "Protected tables enforce signed subjects through PostgreSQL RLS and separate table ownership."
+enforcer = "fabric/data/postgres.py; blocks/python/standard_blocks/access.py"
+domains = ["product", "client", "control"]
+assumptions = ["Owner or tenant columns exist", "Runtime role cannot bypass RLS", "Product validates business authorization"]
+bypass = ["Unprotected tables", "Privileged database role", "Stolen valid subject token"]
+tests = ["tests/test_platform.py", "tests/test_blocks.py"]
+remaining = ["No blanket tenant guarantee from owner-only fixture tests", "PostgreSQL integration requires a qualified host"]
+
+[[guarantee]]
+id = "artifact-integrity"
+property = "Installation digests bind privileged source and configuration; TUF verifies distributed release targets."
+enforcer = "fabric/control/runtime/__init__.py; tools/distribute.py"
+domains = ["build", "product", "control"]
+assumptions = ["Trusted TUF bootstrap root", "Digest checked before privileged code executes"]
+bypass = ["Already-compromised loader", "Shared release signing authority"]
+tests = ["tests/test_structure.py", "tests/test_distribution.py"]
+remaining = ["Current digest calculation is not pre-import verification", "Provenance export alone is not admission"]
+
+[[guarantee]]
+id = "evidence-integrity"
+property = "Stored measurements are content-addressed; journal transitions are replayed by two logical judges."
+enforcer = "fabric/control/bt/host.py; fabric/control/bt/journal.py; fabric/control/bt/transparency.py"
+domains = ["verification", "control"]
+assumptions = ["Evidence bytes remain available", "Independent retention and checkpoints are deployed"]
+bypass = ["Operator can replace or erase all local stores", "Both judges share a compromised process"]
+tests = ["tests/test_boundary.py", "tests/test_transparency.py", "tests/test_differential.py"]
+remaining = ["Judges currently share a process", "Local pins are not independent of host administration"]
+
+[[guarantee]]
+id = "pedagogy"
+property = "Mission context and feedback expose configured capabilities without granting authority or treating inventory as deployment proof."
+enforcer = "interface/context; fabric/runtime/refusals.py"
+domains = ["agent", "verification"]
+assumptions = ["Disclosure policy and record origins remain trustworthy"]
+bypass = ["Sensitive content in arbitrary diagnostic strings", "Stale configuration presented as current"]
+tests = ["tests/test_feedback.py", "tests/test_refusals.py", "tests/test_autonomy_contracts.py"]
+remaining = ["Full live capability projection is not yet available", "Alarms need independently administered retention"]
+
+[[guarantee]]
+id = "recovery"
+property = "Verified release bytes can be reconstructed in a fresh directory without overriding the current deployment."
+enforcer = "fabric/recovery/artifacts.py; tools/distribute.py"
+domains = ["recovery", "control", "product"]
+assumptions = ["Expected digest comes from a trusted current release record", "Recovery parent directory is controlled"]
+bypass = ["Untrusted expected digest", "Lost bootstrap root", "Compromised recovery operator"]
+tests = ["tests/test_fabric_recovery.py", "tests/test_distribution.py"]
+remaining = ["Client data and key restoration require native backup procedures", "No independent recovery authority deployed by this checkout"]

@@ -1,5 +1,5 @@
 name: bac
-# D68: the bac's walls measured on a pure cgroup v2 host, as an ordinary user (rootless runtime, per-process limits)
+# The bac's walls measured on a pure cgroup v2 host, as an ordinary user with delegated cgroups
 # and as root (control groups). The local development host mixes cgroup v1 and v2; this is where v2 is qualified.
 # `gvisor` installs runsc, which the bac then takes first: the same walls, measured under gVisor's user-space kernel.
 on: [push, pull_request]
@@ -32,28 +32,36 @@ jobs:
       - run: test -f /sys/fs/cgroup/cgroup.controllers   # a pure cgroup v2 host, or this job is not qualifying anything
       # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; a rootless runtime needs them.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: delegate a bounded cgroup subtree to the ordinary runtime user
+        if: matrix.as == 'user'
+        run: |
+          sudo useradd -M -s /usr/sbin/nologin standard-guard
+          sudo useradd -M -s /usr/sbin/nologin standard-agent
+          sudo useradd -M -s /usr/sbin/nologin standard-runner
+          sudo install -D -o root -g root -m 0755 tools/cgroup_run.sh /usr/local/libexec/standard-cgroup-run
+          sudo bash tools/cgroup_setup.sh
       - run: pip install --require-hashes -r requirements.hashes
       - run: python -m tools.components fetch                 # Envoy, oauth2-proxy, OpenBao, checked against their pins
       - name: walls and bac tests as an ordinary user
         if: matrix.as == 'user'
         run: |
-          python -m instruments.walls | tee walls.json
-          python -m unittest discover -s tests -p 'test_enclosure.py' -v
-          python -m unittest discover -s tests -p 'test_refusals.py' -v
-          python -m unittest discover -s tests -p 'test_gateway.py' -v
-          python -m unittest discover -s tests -p 'test_platform.py' -v
+          sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m engine.verification.walls | tee walls.json
+          sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
+          sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m unittest discover -s tests -p 'test_refusals.py' -v
+          sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m unittest discover -s tests -p 'test_gateway.py' -v
+          sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m unittest discover -s tests -p 'test_platform.py' -v
       - name: walls and bac tests as root, with control groups
         if: matrix.as == 'root'
         run: |
-          sudo -E env "PATH=$PATH" python -m instruments.walls | tee walls.json
+          sudo -E env "PATH=$PATH" python -m engine.verification.walls | tee walls.json
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_refusals.py' -v
           sudo -E env "PATH=$PATH" python -m tools.platform_walls
       - name: walls under gVisor, as root
         if: matrix.as == 'gvisor'
         run: |
-          sudo -E env "PATH=$PATH" python -c "from enclosure.bac import Bac; b = Bac(); print(b.runtime, b.why); assert b.ready and b.runtime.endswith('runsc')"
-          sudo -E env "PATH=$PATH" python -m instruments.walls | tee walls.json
+          sudo -E env "PATH=$PATH" python -c "from fabric.runtime.bac import Bac; b = Bac(); print(b.runtime, b.why); assert b.ready and b.runtime.endswith('runsc')"
+          sudo -E env "PATH=$PATH" python -m engine.verification.walls | tee walls.json
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
       - name: every measured wall holds
         run: |

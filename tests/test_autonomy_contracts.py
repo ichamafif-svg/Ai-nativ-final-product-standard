@@ -9,31 +9,31 @@ from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from instruments import jobs, probes, suite
-from instruments.tree import Measure, Snapshot, export, verdict
-from bt.assessment import TrustUnavailable
-from bt.service import TrustedService
-from runtime.operator import Instruments
-from instruments.scope import repair as in_scope
-from agent.candidate import AgentError
-from agent.repair import Agent
-from agent.build import Builder
-from context.missions import render_context, task_context
-from agent.repair import Repairer
-from context.missions import gap_dossiers
-from agent.patrol import patrol_context
-from agent.patrol import propose_patrol
-from context.model import target_state
-from agent.llm import Gate, Provider
-from agent.patrol import run_patrol
-from context.model import ReadModel
-from agent.precheck import precheck, suite as agent_suite
-from agent.work import installed_routes, project
-from agent.research import Research, ResearchError
-from agent.sandbox import Result
-from agent.work import WorkEngine
-from catalog.floors import FLOORS
-from surface.web import Installation
+from engine.verification import jobs, probes, suite
+from engine.verification.tree import Measure, Snapshot, export, verdict
+from fabric.control.bt.assessment import TrustUnavailable
+from fabric.control.bt.service import TrustedService
+from fabric.control.runtime.operator import Instruments
+from engine.verification.scope import repair as in_scope
+from engine.agents.candidate import AgentError
+from engine.agents.repair import Agent
+from engine.agents.build import Builder
+from interface.context.missions import render_context, task_context
+from engine.agents.repair import Repairer
+from interface.context.missions import gap_dossiers
+from engine.agents.patrol import patrol_context
+from engine.agents.patrol import propose_patrol
+from interface.context.model import target_state
+from engine.agents.llm import Gate, Provider
+from engine.agents.patrol import run_patrol
+from interface.context.model import ReadModel
+from engine.agents.precheck import precheck, suite as agent_suite
+from engine.agents.work import installed_routes, project
+from engine.agents.research import Research, ResearchError
+from engine.agents.sandbox import Result
+from engine.agents.work import WorkEngine
+from engine.catalog.floors import FLOORS
+from interface.surface.web import Installation
 from test_agent import Signer, store_with
 from test_install import Clock
 from test_maintenance import demo_repository, FILES
@@ -80,7 +80,7 @@ class Reports(unittest.TestCase):
 
     def test_skipped_acceptance_cannot_contract_or_deliver(self):
         measure = Measure(frozenset({'a', 'b'}), frozenset({'a'}), ('a',))
-        with patch('instruments.suite._contract', return_value=measure):
+        with patch('engine.verification.suite._contract', return_value=measure):
             self.assertTrue(suite.contract_on(None, 'r', b'contract')[0].startswith('uncovered:'))
             class Head:
                 def paths(self): return {suite.contract_path('r')}
@@ -102,14 +102,14 @@ class Reports(unittest.TestCase):
         self.assertTrue(job['network'])
 
     def test_client_target_identifiers_follow_the_kernel_language_in_proposals(self):
-        from agent.candidate import commit_files
+        from engine.agents.candidate import commit_files
         store, base = store_with(FILES)
         tid = 'Client.Rule/v2'
         head = commit_files(store, base, {'app.py': b'x = 1\n'}, f'Standard-Target: {tid}\n')
         root = Path(tempfile.mkdtemp())
         before, after = export(store, base, root / 'base'), export(store, head, root / 'head')
         target = {'id': tid, 'resource': 'repo:client:custom', 'repair': 'remediate'}
-        with patch('instruments.jobs.suite.tests_report', return_value=('green', [])):
+        with patch('engine.verification.jobs.suite.tests_report', return_value=('green', [])):
             facts = jobs.remediation({'base': {'tree': str(before.path)}, 'head': {'tree': str(after.path)},
                                       'targets': [target]})
         self.assertEqual(facts[0][:3], [f'repo:client:custom/{base}/{head}', 'tests', 'green'])
@@ -187,7 +187,7 @@ class ContextAndRoutes(unittest.TestCase):
             ReadModel(view)
 
     def test_read_model_queries_share_one_basis_across_consumers(self):
-        from surface.views import run
+        from interface.surface.views import run
 
         view = self.view(self.target())
         view['entities'] = {'build:request/r1': {'type': 'request'}}
@@ -350,7 +350,7 @@ class ContextAndRoutes(unittest.TestCase):
         cycle = SimpleNamespace(agent=SimpleNamespace(llm=object(), research=Research_(), store=root / 'store'),
                                 service=SimpleNamespace(view=lambda: view, qualify=lambda contracts: None),
                                 _findings=lambda: {}, routes=installed_routes())
-        with patch('agent.patrol.Snapshot', return_value=Snapshot(*store_with(FILES))):
+        with patch('engine.agents.patrol.Snapshot', return_value=Snapshot(*store_with(FILES))):
             result = run_patrol(cycle, main=lambda: 'main-head')
         self.assertEqual(calls[0][1], ('read', 'search'))
         self.assertEqual(result['suspicions'][0]['authority'], 'proposal_only')
@@ -397,8 +397,8 @@ class ContextAndRoutes(unittest.TestCase):
 
     def test_generic_precheck_does_not_claim_an_unmeasured_target_fixed(self):
         store, base = store_with(FILES)
-        with patch('agent.precheck.suite', return_value=('green', [])), \
-             patch('agent.precheck.tools', return_value={}):
+        with patch('engine.agents.precheck.suite', return_value=('green', [])), \
+             patch('engine.agents.precheck.tools', return_value={}):
             result = precheck(store, base, base, 'client-specific', {'client-specific': self.target()}, None,
                               SimpleNamespace(isolation='test fixture'))
         self.assertIsNone(result['fixed'])
@@ -415,12 +415,12 @@ class ContextAndRoutes(unittest.TestCase):
                                                         'need': 'repair', 'op': 'implement'})
         with patch.object(builder, 'check', return_value=[]):
             builder.craft('r', 'example', b'spec', b'contract', base, {}, context=context)
-        self.assertIn('standard-agent-context/v2', sent[0])
+        self.assertIn('standard-agent-interface/context/v2', sent[0])
         self.assertNotIn('client-custom-name', sent[0])
         self.assertIn('repo:feature:{request}/{base}/{head}', sent[0])
 
     def test_bounded_context_preserves_full_declarations_and_documents_for_reading(self):
-        from context.missions import assemble, write_scope
+        from interface.context.missions import assemble, write_scope
         store, base = store_with({"app.py": "x = 1", "unrelated.py": "PRIVATE_UNRELATED_CODE = 1"})
         view = self.view(self.target())
         view["law"]["effective"]["conditions"]["large-client-condition"] = {"description": "x" * 60000}
@@ -443,7 +443,7 @@ class ContextAndRoutes(unittest.TestCase):
             research.act(Snapshot(store, base), {"action": "read", "ref": "/etc/passwd"}, sources)
 
     def test_scoped_patrol_cannot_read_or_search_outside_its_subsystem(self):
-        from agent.research import ReadScope
+        from engine.agents.research import ReadScope
         store, base = store_with({"app/a.py": "visible = 1", "other/b.py": "OUTSIDE_MARKER = 1"})
         research = Research(None, store.parent / "notes")
         tree = ReadScope(Snapshot(store, base), {"app/a.py"})
@@ -476,8 +476,8 @@ class ContextAndRoutes(unittest.TestCase):
             run_patrol(cycle, main=lambda: base, focus="simplicity:../other")
 
     def test_signed_features_reach_scanner_constructor_and_patrol_consistently(self):
-        from instruments.coverage import evaluate
-        from context.missions import assemble
+        from engine.verification.coverage import evaluate
+        from interface.context.missions import assemble
         store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()"})
         view = self.view(self.target())
         view["law"]["effective"]["settings"] = {"features": ["mtls"], "values": {"high_value": ["payments.send"]}}
@@ -485,7 +485,7 @@ class ContextAndRoutes(unittest.TestCase):
         tree = Snapshot(store, base)
         packet = json.loads(assemble(ctx, tree, role="build", touched=["surface:endpoint"])[0])["packet"]
         self.assertIn("MSG-SIGN", packet["rule_ids"])
-        from agent.candidate import CandidateWorkflow
+        from engine.agents.candidate import CandidateWorkflow
         roles = []
         def ask(prompt, role, **kw):
             roles.append(role)
@@ -502,7 +502,7 @@ class ContextAndRoutes(unittest.TestCase):
         self.assertIn("MSG-SIGN", patrol["rule_ids"])
 
     def test_simplicity_surface_and_model_preserve_scoped_block_contracts(self):
-        from surface.views import patrol_packet
+        from interface.surface.views import patrol_packet
         store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()",
                                  "domain/order.py": "from standard_blocks.process import run\nrun(['convert'])",
                                  "other/private.py": "OUTSIDE_CODE = 1"})
@@ -537,7 +537,7 @@ class ContextAndRoutes(unittest.TestCase):
         self.assertEqual({t["due"] for t in tasks},{10})
 
     def test_target_patrol_and_investigation_keep_the_exact_requirement(self):
-        from context.missions import assemble
+        from interface.context.missions import assemble
         target = next(t for t in FLOORS["targets"] if t["id"] == "rules-authorization")
         store, base = store_with({"app.py": "from fastapi import FastAPI\napp = FastAPI()"})
         view, tree = self.view(target), Snapshot(store, base)
@@ -594,8 +594,8 @@ class ResearchTools(unittest.TestCase):
 
     def test_experiment_never_falls_back_to_the_agent_account(self):
         research, tree, _ = self.setup_research([])
-        with patch('enclosure.bac.Bac._unavailable', return_value='gone'), \
-             patch('agent.research.subprocess.run') as run:
+        with patch('fabric.runtime.bac.Bac._unavailable', return_value='gone'), \
+             patch('engine.agents.research.subprocess.run') as run:
             with self.assertRaises(ResearchError):
                 research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
             run.assert_not_called()
@@ -613,8 +613,8 @@ class ResearchTools(unittest.TestCase):
                 seen.append(json.loads(Path(bundle, 'config.json').read_text()))
                 kwargs['stdout'].write(b'experiment output')
             return type('Done', (), {'returncode': 0})()
-        with patch('enclosure.bac.Bac._unavailable', return_value=None), \
-             patch('enclosure.bac.subprocess.run', side_effect=run):
+        with patch('fabric.runtime.bac.Bac._unavailable', return_value=None), \
+             patch('fabric.runtime.bac.subprocess.run', side_effect=run):
             result = research.experiment(tree, {'check.py': 'print(1)'}, 'check.py')
         self.assertTrue(result.ok)
         config = seen[0]
@@ -686,7 +686,7 @@ class ResearchTools(unittest.TestCase):
         agent = Agent(store, llm=gate, scopes={'custom': ['tools/*.py']})
         check = {'ok': True, 'fixed': None, 'tests': 'green'}
         target = {'id': 'custom', 'resource': 'repo:client:custom', 'property': 'result', 'expect': 'verified'}
-        with patch('agent.precheck.precheck', return_value=check):
+        with patch('engine.agents.precheck.precheck', return_value=check):
             _, route = agent.craft('custom', base, targets={'custom': target})
         self.assertEqual(route, 'model')
         for path in ('tests/test_app.py', 'standard/rules.json', '.github/workflows/ci.yml', '../keys/a.key'):

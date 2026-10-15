@@ -1,4 +1,4 @@
-"""Strict defaults of the named values, copied from catalog/values.toml (a test keeps them equal).
+"""Strict defaults of the named values, copied from engine/catalog/values.toml (a test keeps them equal).
 
 The product receives the values in force from Standard (STANDARD_VALUES, JSON); a value absent there takes its
 default here. A value with no default (retention_days) is absent: the code that needs it refuses to guess."""

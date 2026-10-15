@@ -11,20 +11,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from agent.candidate import AgentError
-from agent.repair import Agent
-from agent.repair import Repairer  # noqa: E402
-from agent.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
-from agent.memory import Memory  # noqa: E402
-from agent.precheck import precheck  # noqa: E402
-from context.repository import RepoMap  # noqa: E402
-from agent.sandbox import Sandbox  # noqa: E402
+from engine.agents.candidate import AgentError
+from engine.agents.repair import Agent
+from engine.agents.repair import Repairer  # noqa: E402
+from engine.agents.llm import REDACTED, EgressError, Gate, Provider  # noqa: E402
+from engine.agents.memory import Memory  # noqa: E402
+from engine.agents.precheck import precheck  # noqa: E402
+from interface.context.repository import RepoMap  # noqa: E402
+from engine.agents.sandbox import Sandbox  # noqa: E402
 from local_sandbox import LocalSandbox  # noqa: E402
-from catalog.floors import FLOORS  # noqa: E402
-from instruments import probes as instruments  # noqa: E402
-from instruments.data import EMPTY  # noqa: E402
-from instruments.suite import tests_report  # noqa: E402
-from instruments.tree import Snapshot, export  # noqa: E402
+from engine.catalog.floors import FLOORS  # noqa: E402
+from engine.verification import probes as instruments  # noqa: E402
+from engine.verification.data import EMPTY  # noqa: E402
+from engine.verification.suite import tests_report  # noqa: E402
+from engine.verification.tree import Snapshot, export  # noqa: E402
 
 TARGETS = {t["id"]: t for t in FLOORS["targets"]}
 KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
@@ -118,7 +118,7 @@ class WholeLaw(unittest.TestCase):
             self.skipTest("candidate jail unavailable on this host")
 
     def candidate(self, files):
-        from agent.candidate import commit_files
+        from engine.agents.candidate import commit_files
         return commit_files(self.store, self.base, {p: c.encode() for p, c in files.items()}, "candidate")
 
     def test_a_fix_that_breaks_main_tests_is_not_proposed(self):
@@ -194,14 +194,14 @@ class BehindTheGateway(unittest.TestCase):
               "if __name__ == '__main__':\n    HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
 
     def test_a_weak_cookie_behind_the_gateway_is_the_candidates_lesson(self):
-        from catalog import effective, load
-        from enclosure.components import where
+        from engine.catalog import effective, load
+        from fabric.supply_chain.components import where
         box = Sandbox()
         if not box.isolated or not where("envoy"):
             self.skipTest("needs the bac and Envoy")
         files = {**FILES, "server.py": self.SERVER.format(cookie="")}
         store, base = store_with(files)
-        from agent.candidate import commit_files
+        from engine.agents.candidate import commit_files
         weak = "        self.send_header('set-cookie', 'cart=1')\n"
         head = commit_files(store, base, {"server.py": self.SERVER.format(cookie=weak).encode()}, "candidate")
         values = effective(load(), {"start": "python3 -I server.py", "request_timeout_s": 5})
@@ -318,7 +318,7 @@ class Memory_(unittest.TestCase):
             def craft(self, *a, **kw):
                 raise AgentError("nothing passes")
 
-        from context.model import ReadModel
+        from interface.context.model import ReadModel
         real = ReadModel.plan
         ReadModel.plan = lambda self, mode="RUN": {"state": "IN_PROGRESS", "tasks": []}
         self.addCleanup(setattr, ReadModel, "plan", real)              # never leak into the next test

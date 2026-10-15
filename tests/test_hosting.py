@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from bt.hosting import HOOK, route  # noqa: E402
+from fabric.control.bt.hosting import HOOK, route  # noqa: E402
 
 CONFIG = {"repositories": {"app": {"canonical": "/c/app.git", "inbox": "/i/app.git",
                                    "readers": ["alice", "bob", "carol"], "writers": ["alice", "bob"]}}}
@@ -59,7 +59,7 @@ class ThroughTheGate(unittest.TestCase):
         for who in ("alice", "bob"):
             script = root / f"ssh-{who}"
             script.write_text(f'#!/bin/sh\nshift\ncd {ROOT}\nSSH_ORIGINAL_COMMAND="$*" '
-                              f'exec {sys.executable} -m bt.hosting {config} {who}\n')
+                              f'exec {sys.executable} -m fabric.control.bt.hosting {config} {who}\n')
             os.chmod(script, 0o755)
             self.ssh[who] = {"GIT_SSH_COMMAND": str(script)}
         self.work = root / "work"
@@ -100,10 +100,10 @@ class Integration(unittest.TestCase):
         from test_install import Clock
         from test_maintenance import FILES, demo_repository
 
-        import agent.__main__ as agent_process
-        import runtime.operator as daemon
-        from surface.human import decide, load_signer
-        from bt.gateway import AdmissionGateway
+        import engine.agents.__main__ as agent_process
+        import fabric.control.runtime.operator as daemon
+        from interface.surface.human import decide, load_signer
+        from fabric.control.bt.gateway import AdmissionGateway
 
         root = Path(tempfile.mkdtemp())
         repo = demo_repository(root, {**FILES, "sbom.json": "{}\n"})
@@ -156,7 +156,7 @@ class Integration(unittest.TestCase):
             approve("bob", red)
             approve("eve", leaky)
             # D33: the human cannot replace a measure by an opinion: `tests` is the scanner's instrument only.
-            from bt.signing import envelope
+            from fabric.control.bt.signing import envelope
             for kind, extra in (("observation", {}), ("measurement", {"method": "main-suite",
                                                                         "coverage": "repo:inventory:all",
                                                                         "measured_at": clock.t + 1,

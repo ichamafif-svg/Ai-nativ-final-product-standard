@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agent.acceptance import HEADER, DraftError, draft, validate  # noqa: E402
+from engine.agents.acceptance import HEADER, DraftError, draft, validate  # noqa: E402
 
 
 class Research:
