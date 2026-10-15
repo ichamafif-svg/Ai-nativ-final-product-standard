@@ -42,7 +42,7 @@ class Reading(unittest.TestCase):
     def test_a_record_never_says_more_than_the_map(self):
         out = "OSError: [Errno 30] Read-only file system: '/work/x'\nMemoryError\nFile too large"
         text = json.dumps(read(Ran(1, out), MAP, during="tests"))
-        for word in ("seccomp", "namespace", "cgroup", "rlimit", "runc", "crun", "RLIMIT"):
+        for word in ("seccomp", "namespace", "cgroup", "rlimit", "runc", "crun", "runsc", "gVisor", "RLIMIT"):
             self.assertNotIn(word, text)
 
 

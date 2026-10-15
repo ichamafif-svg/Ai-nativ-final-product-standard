@@ -128,7 +128,8 @@ def qualify(config_path) -> list:
                      bool(clean and not unconfined and Isolation(runner).candidate_fs_confined),
                      {"runner": runner, "groups": groups, "identity_and_network": bool(clean),
                       "unconfined_demo_executor": unconfined,
-                      "filesystem": "not confined by the trusted suite runner"},
+                      "filesystem": "the bac under the runner account (D68)" if runner and
+                      Isolation(runner).candidate_fs_confined else "the bac does not run under the runner here"},
                      "the code a contribution brings runs without keys, network or access to unrelated files",
                      "that the kernel's namespaces and sudo are themselves sound"))
     try:                                                    # D37: the signed measures replay from their records

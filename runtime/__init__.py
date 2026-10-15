@@ -1,12 +1,12 @@
 """Privileged Standard assembly. Its location does not remove it from the installation's trust base."""
 from pathlib import Path
 
-from bt.release import code_digest as source_digest
+from bt.release import CORE, code_digest as source_digest
 
 # The dependency closure is part of the release: cryptography verifies every signature K and T admit (T01, D49).
 # The rule catalog is too: the scanner measures the product against it, so changing a rule changes the release; and so
 # are the building blocks products install: a block is pinned with the rules it holds.
-SOURCES = ("kernel", "bt", "catalog/floors.py", "runtime", "requirements.hashes",
+SOURCES = (*CORE, "catalog/floors.py", "runtime", "requirements.hashes",
            "catalog", "blocks/python/standard_blocks", "blocks/js/front.mjs")
 CATALOG_DATA = ("asvs.toml", "blocks.toml", "maintenance.toml", "policy.toml", "values.toml", "vocabulary.toml", "LICENSE.md")
 

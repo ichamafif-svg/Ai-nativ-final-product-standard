@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from enclosure.refusals import WALLS
+from instruments.platform_walls import COVERS, HOLDS
 
 MOMENTS = ("before", "build", "admission", "run")
 # Strength of a rule's strongest active source; a planned wall does not count.
@@ -17,10 +18,13 @@ STRENGTH = {"measured": 4, "wall": 3, "static": 2, "review": 1, "none": 0}
 STATIC = ("blocks", "bandit", "semgrep", "mypy")
 MEASURED = ("probe", "test", "fact")
 # The parts of the platform whose walls already teach in the precheck's bac, read from the refusal reader itself.
-# They teach; they do not yet hold the rule where the product runs (an empty network holds every egress rule
-# vacuously in a test). Only a part enforced in production gives a rule the "wall" strength.
+# Teaching is not holding (an empty network holds every egress rule vacuously in a test). Only a part enforced where
+# the product runs (runtime/runner.py: the bac behind the gateway, the egress proxy, the key service and the
+# database) runs; a rule is held there only when a measured wall enforces that very rule (`COVERS`), not because its
+# holder runs: the file store bounds types and sizes, it scans nothing. The identity provider's session
+# (oauth2-proxy) runs too, but no instrument signs in yet: its rules keep their other sources.
 WALLED = frozenset(holder for holder, _, _ in WALLS.values())
-RUNNING: frozenset = frozenset()      # parts of the platform enforced where the product runs (D68 step 2 onwards)
+RUNNING = frozenset(HOLDS) | {"platform:resources"}       # resources: the bac's own walls (instruments/walls.py)
 
 KINDS = {"lesson": "agent", "fact": "kernel", "alarm": "hidden control", "need": "human"}
 TRUST = ("fact", "diagnostic")
@@ -43,7 +47,8 @@ def _sources(rule: dict) -> dict:
     if holder.startswith("platform:"):
         if holder in WALLED:
             out["build"].append("wall")
-        out["run"].append("wall" if holder in RUNNING else "wall (planned)")
+        out["run"].append("wall" if _held(rule) else "wall (running, unmeasured)" if holder in RUNNING
+                          else "wall (planned)")
     out["admission"] += [f"{c} (planned)" for c in rule.get("planned", [])]
     for kind in ("patrol", "human"):
         if kind in checks:
@@ -51,11 +56,16 @@ def _sources(rule: dict) -> dict:
     return out
 
 
+def _held(rule: dict) -> bool:
+    """A running part of the platform enforces this rule, and the walls that show it are measured."""
+    return rule["held_by"] in RUNNING and rule["id"] in COVERS
+
+
 def strength(rule: dict) -> str:
     checks = {c.split(":")[0] for c in rule["check"]}
     if checks & set(MEASURED):
         return "measured"
-    if rule["held_by"] in RUNNING:
+    if _held(rule):
         return "wall"
     if checks & set(STATIC):
         return "static"
@@ -72,7 +82,7 @@ def matrix(cat: dict) -> dict:
     return {"rules": rules, "totals": totals,
             "review_only": sorted(rid for rid, r in rules.items() if r["strength"] in ("review", "none")),
             "planned_walls": sorted(rid for rid, r in rules.items()
-                                    if r["held_by"].startswith("platform:") and r["held_by"] not in RUNNING)}
+                                    if r["held_by"].startswith("platform:") and r["sources"]["run"] != ["wall"])}
 
 
 def item(kind: str, source: str, moment: str, *, rules=(), where: str = "", attempt: str = "", trust="diagnostic",

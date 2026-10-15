@@ -11,7 +11,9 @@ from pathlib import Path
 
 from kernel.canon import digest
 
-CORE = ("kernel", "bt")
+# The bac runs contributors' code for T06 (D68): its definition is trust-bearing, the rest of the platform is not.
+CORE = ("kernel", "bt", "enclosure/__init__.py", "enclosure/bac.py", "enclosure/oci.py", "enclosure/capabilities.py",
+        "enclosure/seccomp.json")
 
 
 def code_digest(root=None, *, sources=CORE) -> str:

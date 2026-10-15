@@ -71,6 +71,12 @@ class Relay:
             threading.Thread(target=pump, args=(upstream, client), daemon=True).start()
 
     def close(self):
+        # Wake the accepting thread before the descriptor is freed: otherwise it may wait on a reused number and
+        # take connections meant for another server of this process.
+        try:
+            self.listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.listener.close()
 
 
@@ -78,7 +84,7 @@ class Egress:
     def __init__(self, state, values: dict, *, secrets: dict | None = None, bao=None, upstream_ca: str | None = None):
         self.state = Path(state) / "egress"
         self.values, self.secrets, self.bao = values, dict(secrets or {}), bao
-        self.process = self.relay = None
+        self.process = self.relay = self.port = None
         self.upstream_ca = upstream_ca                      # tests only: a private authority for a local destination
         self.records = self.state / "records.jsonl"
 
@@ -116,6 +122,7 @@ class Egress:
             time.sleep(0.1)
         (self.state / "mount" / "ca.pem").write_bytes(ca.read_bytes())   # the certificate only, never the key
         self.relay = Relay(str(self.state / "mount" / "egress.sock"), port)
+        self.port = port                                    # the platform's own clients (the agent) on this host
         return self
 
     @property

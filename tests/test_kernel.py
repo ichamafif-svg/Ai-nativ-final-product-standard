@@ -349,6 +349,23 @@ class Determinism(unittest.TestCase):
             self.assertEqual(L.kernel.judge(L.state, junk).verdict, "REJECT")
 
 
+class Jcs(unittest.TestCase):
+    """K01 within its domain is RFC 8785: digests are recomputable with any JCS library."""
+
+    def test_member_order_is_utf16_code_units(self):
+        from kernel.canon import canon, parse
+        # RFC 8785 §3.2.3's example names; U+1F600 (a surrogate pair) sorts before U+FB33 in UTF-16.
+        names = ["€", "\r", "דּ", "1", "\U0001F600", "\u0080", "ö"]
+        raw = canon({n: i for i, n in enumerate(names)})
+        expected = ['"\\r":1', '"1":3', '"\u0080":5', '"ö":6', '"€":0', '"\U0001F600":4', '"דּ":2']
+        self.assertEqual(raw, ("{" + ",".join(expected) + "}").encode())
+        self.assertEqual(list(parse(raw)), ["\r", "1", "\u0080", "ö", "€", "\U0001F600", "דּ"])
+
+    def test_string_escapes_are_minimal(self):
+        from kernel.canon import canon
+        self.assertEqual(canon("\b\f\n\r\t\x1f\"\\\x7f /"), b'"\\b\\f\\n\\r\\t\\u001f\\"\\\\\x7f\xe2\x80\xa8/"')
+
+
 class Debt(unittest.TestCase):
     TARGET = {"id": "uptime", "kind": "property", "coverage": "inventory", "resource": "repo:svc:uptime",
               "property": "status", "expect": "ok", "min_level": "real", "fresh_ms": HOUR, "due_ms": 10 * HOUR,

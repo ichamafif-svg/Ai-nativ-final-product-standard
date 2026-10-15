@@ -152,6 +152,15 @@ class OneEncoding(unittest.TestCase):
                               "webauthn": {"authenticatorData": u(auth), "clientDataJSON": u(client)}}
         self.assertTrue(verify(key, message, sign(low)))
         self.assertFalse(verify(key, message, sign(high)))
+        # As py_webauthn checks: an assertion made inside another site's frame is never a decision.
+        for extra in ({"crossOrigin": True}, {"crossOrigin": False, "topOrigin": "https://evil.example"}):
+            framed = json.dumps({**json.loads(client), **extra}).encode()
+            der = sk.sign(auth + hashlib.sha256(framed).digest(), ec.ECDSA(hashes.SHA256()))
+            r2, s2 = decode_dss_signature(der)
+            self.assertFalse(verify(key, message, {"keyid": key["keyid"],
+                                                   "sig": u(encode_dss_signature(r2, min(s2, P256_N - s2))),
+                                                   "webauthn": {"authenticatorData": u(auth),
+                                                                "clientDataJSON": u(framed)}}))
 
 
 class SecondJudgeComposition(unittest.TestCase):

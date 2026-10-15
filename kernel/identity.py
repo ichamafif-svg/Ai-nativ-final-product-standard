@@ -152,6 +152,8 @@ def _webauthn(key: dict, message: bytes, signature: dict) -> bool:
     client = json.loads(client_json)
     if client.get("type") != "webauthn.get" or client.get("origin") not in key["origins"]:
         return False
+    if client.get("crossOrigin", False) is not False or "topOrigin" in client:
+        return False                                   # signed inside another site's frame: never a decision
     if client.get("challenge") != _b64u_enc(hashlib.sha256(message).digest()):
         return False
     if len(auth) < 37 or auth[:32] != hashlib.sha256(key["rp_id"].encode()).digest() or (auth[32] & 0x05) != 0x05:

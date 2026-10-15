@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STANDARD = {"kernel", "bt", "instruments", "catalog", "context", "agent", "surface", "runtime", "tools", "tests", "examples", "standard", "blocks", "standard_blocks", "enclosure"}
 ALLOWED = {
     "kernel": ("kernel",),
-    "bt": ("kernel", "bt"),
+    "bt": ("kernel", "bt", "enclosure"),      # T06 runs candidate code in the bac (D68): the enclosure is in the TCB
     "instruments": ("kernel", "instruments", "standard_blocks", "enclosure"),  # existing in-process product probes
     "catalog": ("kernel", "catalog"),
     "blocks": ("blocks.python.standard_blocks",),

@@ -1,10 +1,15 @@
 """One bac definition for the agent's precheck, the tests and production (D68).
 
 `Bac.run` writes the OCI configuration of the walls (`enclosure/oci.py`) into a fresh bundle and executes it with an
-OCI runtime, runc by preference (it keeps a finished container until its counters are read) and crun otherwise: every namespace unshared, an empty network, no capability, Docker's allow-list seccomp profile, a read-only
+OCI runtime: gVisor's runsc first when it is installed and runs this definition (a user-space kernel between the
+product and Linux, the OCI seccomp profile still applied inside), then runc (it keeps a finished container until its
+counters are read), then crun: every namespace unshared, an empty network, no capability, Docker's allow-list seccomp profile, a read-only
 system with only the declared paths mounted, rlimits per process and one control group per run bounding processes,
 memory and CPU for the run as a whole. The host bounds wall time and removes the container afterwards, whatever
 it left behind. The environment is exactly what the caller passes on top of a fixed base, never the caller's own.
+
+With `as_user`, the runtime itself runs under another account (`sudo -n -u USER -- /usr/bin/env -i`), with that
+account's ids mapped to root inside: the trust side's candidate runner (T06) is a bac inside a separate account.
 
 Fail closed: nothing runs unless this very definition runs `true`. A host where control groups cannot be used (no
 delegation, or crun's refusal of hybrid v1/v2 hosts) still runs the bac for an ordinary user, with the per-process
@@ -14,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -29,7 +35,7 @@ BASE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp", "PYTHONDONTW
 REFUSED, TIMED_OUT = 126, 124
 OUTPUT_TAIL = 20_000
 GROUP = "standard-bac"
-RUNTIMES = ("runc", "crun")
+RUNTIMES = ("runsc", "runc", "crun")
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 
 
@@ -48,6 +54,7 @@ class Ran:
     code: int
     out: str
     limited: tuple[str, ...] | None = ()      # limits the kernel enforced on the run's group; None: not readable
+    err: str = ""                             # standard error, when asked apart (`split=True`)
 
     @property
     def ok(self) -> bool:
@@ -75,8 +82,12 @@ def _limited(name: str) -> tuple[str, ...]:
 
 
 class Bac:
-    def __init__(self, walls: Walls = Walls(), *, python: str = sys.executable):
-        self.walls, self.python = walls, python
+    def __init__(self, walls: Walls = Walls(), *, python: str = sys.executable, as_user: str | None = None):
+        self.walls, self.python, self.as_user = walls, python, as_user
+        self.ids = None
+        if as_user:
+            entry = pwd.getpwnam(as_user)
+            self.ids = (entry.pw_uid, entry.pw_gid)
         self.runtime: str | None = None
         self.groups = True
         self.why = self._unavailable()
@@ -89,7 +100,7 @@ class Bac:
     def config(self, args, cwd, *, env=None, readable=(), writable=(), name: str = "run") -> dict:
         """The OCI configuration of one run. Pure: it builds, it does not check that the runtime exists."""
         return oci.config(self.walls, args, cwd, env={**BASE_ENV, **(env or {})}, readable=readable,
-                          writable=writable, cgroup=f"/{GROUP}/{name}" if self.groups else None)
+                          writable=writable, cgroup=f"/{GROUP}/{name}" if self.groups else None, ids=self.ids)
 
     def _unavailable(self) -> str | None:
         """Why no runtime can run this very definition, filter and groups included; None once one does."""
@@ -102,8 +113,10 @@ class Bac:
             return f"OCI runtime unavailable ({', '.join(RUNTIMES)})"
         refusals = []
         with tempfile.TemporaryDirectory(prefix="bac-check-") as cwd:
+            os.chmod(cwd, 0o755)                            # a runner account must be able to enter it
             for runtime in found:
-                for groups in ((True,) if os.getuid() == 0 else (True, False)):
+                root = os.getuid() == 0 and not self.as_user
+                for groups in ((True,) if root else (True, False)):
                     self.runtime, self.groups = runtime, groups
                     ran = self._execute(["/usr/bin/true"], cwd, None, (), (), 30)
                     if ran.code == 0:
@@ -113,11 +126,24 @@ class Bac:
         return "OCI runtime refused the bac: " + "; ".join(refusals)
 
     def _base(self) -> list:
-        state = Path(tempfile.gettempdir(), f"bac-state-{os.getuid()}")
-        state.mkdir(mode=0o700, exist_ok=True)
-        base = [str(self.runtime), "--root", str(state)]
+        if self.as_user:
+            # The runtime runs as the runner; it creates its own state directory, which this account cannot touch.
+            state = Path(tempfile.gettempdir(), f"bac-state-{self.as_user}")
+            prefix = ["sudo", "-n", "-u", self.as_user, "--", "/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/bin"]
+        else:
+            state = Path(tempfile.gettempdir(), f"bac-state-{os.getuid()}")
+            state.mkdir(mode=0o700, exist_ok=True)
+            prefix = []
+        base = [*prefix, str(self.runtime), "--root", str(state)]
         if Path(str(self.runtime)).name == "crun":
             base.append(f"--cgroup-manager={'cgroupfs' if self.groups else 'disabled'}")
+        if Path(str(self.runtime)).name == "runsc":
+            # The same walls under gVisor: its own empty network, the OCI seccomp profile applied too (not ignored).
+            base += ["--network=none", "--oci-seccomp"]
+            if os.getuid() != 0 or self.as_user:
+                base.append("--rootless")
+            if not self.groups:
+                base.append("--ignore-cgroups")
         return base
 
     def _bundle(self, bundle, args, cwd, env, readable, writable, name) -> None:
@@ -128,18 +154,25 @@ class Bac:
                 Path(rootfs, path.lstrip("/")).symlink_to(Path(path).readlink())
         config = self.config(args, cwd, env=env, readable=readable, writable=writable, name=name)
         Path(bundle, "config.json").write_text(json.dumps(config))
+        if self.as_user:                    # the runner reads its bundle; its empty root is its own (mount points)
+            Path(bundle).chmod(0o755)
+            Path(bundle, "config.json").chmod(0o644)
+            for path in (rootfs, *rootfs.iterdir()):
+                os.lchown(path, *self.ids)
 
-    def _execute(self, args, cwd, env, readable, writable, timeout, stdin: bytes | None = None) -> Ran:
+    def _execute(self, args, cwd, env, readable, writable, timeout, stdin: bytes | None = None,
+                 split: bool = False) -> Ran:
         name = uuid.uuid4().hex
         base = self._base()
-        with tempfile.TemporaryDirectory(prefix="bac-bundle-") as bundle, tempfile.TemporaryFile() as output:
+        with tempfile.TemporaryDirectory(prefix="bac-bundle-") as bundle, tempfile.TemporaryFile() as output, \
+                tempfile.TemporaryFile() as errors:
             self._bundle(bundle, args, cwd, env, readable, writable, name)
             try:
                 try:
                     keep = ["--keep"] if Path(str(self.runtime)).name == "runc" else []
                     r = subprocess.run([*base, "run", *keep, "--bundle", bundle, name],
                                        **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}),
-                                       stdout=output, stderr=subprocess.STDOUT, timeout=timeout)
+                                       stdout=output, stderr=errors if split else subprocess.STDOUT, timeout=timeout)
                     code, out = r.returncode, None
                 except subprocess.TimeoutExpired:
                     subprocess.run([*base, "kill", name, "KILL"], capture_output=True, timeout=30)
@@ -153,12 +186,16 @@ class Bac:
                 output.seek(0, 2)
                 output.seek(max(0, output.tell() - OUTPUT_TAIL))
                 out = output.read().decode(errors="replace")
-            return Ran(code, out, limited)
+            errors.seek(0, 2)
+            errors.seek(max(0, errors.tell() - OUTPUT_TAIL))
+            return Ran(code, out, limited, errors.read().decode(errors="replace"))
 
-    def run(self, args, cwd, *, env=None, readable=(), writable=(), stdin: bytes | None = None) -> Ran:
+    def run(self, args, cwd, *, env=None, readable=(), writable=(), stdin: bytes | None = None,
+            split: bool = False) -> Ran:
         if not self.ready:
             return Ran(REFUSED, f"execution refused: {self.why}")
-        return self._execute(args, cwd, {**BASE_ENV, **(env or {})}, readable, writable, self.walls.timeout_s, stdin)
+        return self._execute(args, cwd, {**BASE_ENV, **(env or {})}, readable, writable, self.walls.timeout_s, stdin,
+                             split)
 
 
 class Service:

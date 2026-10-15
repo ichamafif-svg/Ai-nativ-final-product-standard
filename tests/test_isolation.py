@@ -25,7 +25,7 @@ class Isolated(unittest.TestCase):
         self.assertIn("-i", cmd)                                         # nothing of the guard's environment
         self.assertNotIn("unshare", Isolation("runner").command(["pip"], {}, network=True))
         self.assertFalse(Isolation().isolated)
-        self.assertFalse(Isolation("runner").candidate_fs_confined)
+        self.assertFalse(Isolation("no-such-account-here").candidate_fs_confined)
 
     def test_candidate_job_fails_closed_before_running_any_code(self):
         root = Path(tempfile.mkdtemp())
@@ -33,7 +33,8 @@ class Isolated(unittest.TestCase):
         repo = demo_repository(root, {**FILES, "tests/test_hostile.py":
                                f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"})
         main = subprocess.run(["git", "-C", str(repo), "rev-parse", "main"], capture_output=True, text=True).stdout.strip()
-        host = Host(ROOT, Evidence(root / "evidence"), repo, isolation=Isolation(RUNNER))
+        # A runner account the bac cannot run under here: no candidate code at all.
+        host = Host(ROOT, Evidence(root / "evidence"), repo, isolation=Isolation("no-such-account-here"))
         out, _ = host.call("contribution", {"base": {"commit": main}, "head": {"commit": main},
                                             "author": {"value": "eve"}, "targets": {"value": []}})
         self.assertEqual(out, {"error": "candidate filesystem isolation unavailable"})
@@ -51,6 +52,33 @@ class Isolated(unittest.TestCase):
                                             "author": {"value": "eve"}, "targets": {"value": []}})
         self.assertEqual(out, {"error": "candidate filesystem isolation unavailable"})
         self.assertFalse(marker.exists())
+
+    def test_a_contribution_runs_in_the_bac_under_the_runner_account_and_reaches_nothing_else(self):
+        """D68: T06 is the bac inside the runner account; the code runs, measured, without keys or network."""
+        import pwd
+        try:
+            pwd.getpwnam(RUNNER)
+        except KeyError:
+            self.skipTest(f"no {RUNNER} account here")
+        isolation = Isolation(RUNNER)
+        if not isolation.candidate_fs_confined:
+            self.skipTest(f"the bac does not run under {RUNNER} here: {isolation.bac and isolation.bac.why}")
+        root = Path(tempfile.mkdtemp())
+        secret = root / "guard.key"
+        secret.write_text("PRIVATE")
+        probe = (f"from pathlib import Path\nimport socket\n"
+                 f"def test_reach():\n"
+                 f"    assert not Path({str(secret)!r}).exists()\n"
+                 f"    try:\n        socket.create_connection(('1.1.1.1', 443), 2)\n        assert False\n"
+                 f"    except OSError:\n        pass\n")
+        repo = demo_repository(root, {**FILES, "tests/test_reach.py": probe})
+        main = subprocess.run(["git", "-C", str(repo), "rev-parse", "main"], capture_output=True, text=True).stdout.strip()
+        host = Host(ROOT, Evidence(root / "evidence"), repo, isolation=isolation)
+        out, _ = host.call("contribution", {"base": {"commit": main}, "head": {"commit": main},
+                                            "author": {"value": "eve"}, "targets": {"value": []}})
+        self.assertNotIn("error", out, out)
+        facts = {f[1]: f[2] for f in out.get("facts", [])}
+        self.assertEqual(facts.get("tests"), "green", out)
 
     def test_unconfined_is_explicit_and_demo_only(self):
         from runtime.operator import isolation

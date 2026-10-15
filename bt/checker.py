@@ -348,6 +348,7 @@ class Checker:
         challenge = base64.urlsafe_b64encode(hashlib.sha256(message).digest()).rstrip(b"=").decode()
         if (client.get("type") != "webauthn.get" or client.get("origin") not in key["origins"]
                 or client.get("challenge") != challenge or len(auth) < 37
+                or client.get("crossOrigin", False) is not False or "topOrigin" in client
                 or auth[:32] != hashlib.sha256(key["rp_id"].encode()).digest() or auth[32] & 0x05 != 0x05):
             _no("a WebAuthn assertion is invalid")
         der = _b64u(sig["sig"])

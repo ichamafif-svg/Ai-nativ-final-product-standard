@@ -1,6 +1,7 @@
 name: bac
 # D68: the bac's walls measured on a pure cgroup v2 host, as an ordinary user (rootless runtime, per-process limits)
 # and as root (control groups). The local development host mixes cgroup v1 and v2; this is where v2 is qualified.
+# `gvisor` installs runsc, which the bac then takes first: the same walls, measured under gVisor's user-space kernel.
 on: [push, pull_request]
 permissions:
   contents: read
@@ -12,13 +13,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        as: [user, root]
+        as: [user, root, gvisor]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: sudo apt-get update -q && sudo apt-get install -y -q runc crun
+      - name: gVisor (runsc) from its signed repository
+        if: matrix.as == 'gvisor'
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -q && sudo apt-get install -y -q runsc
       # The data wall needs PostgreSQL 16 with PL/Python; without it the data tests and walls say so (skipped, unmeasured).
       - run: sudo apt-get install -y -q postgresql-16 postgresql-plpython3-16 || echo "no PL/Python on this runner"
       - run: test -f /sys/fs/cgroup/cgroup.controllers   # a pure cgroup v2 host, or this job is not qualifying anything
@@ -41,6 +49,12 @@ jobs:
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_refusals.py' -v
           sudo -E env "PATH=$PATH" python -m tools.platform_walls
+      - name: walls under gVisor, as root
+        if: matrix.as == 'gvisor'
+        run: |
+          sudo -E env "PATH=$PATH" python -c "from enclosure.bac import Bac; b = Bac(); print(b.runtime, b.why); assert b.ready and b.runtime.endswith('runsc')"
+          sudo -E env "PATH=$PATH" python -m instruments.walls | tee walls.json
+          sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
       - name: every measured wall holds
         run: |
           python - <<'EOF'

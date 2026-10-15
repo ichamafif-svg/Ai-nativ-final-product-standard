@@ -37,9 +37,12 @@ pyyaml==6.0.3
 radon==6.0.1
 rich==15.0.0
 ruff==0.17.0
+securesystemslib==1.5.1
 six==1.17.0
 sqlalchemy==2.1.4
 starlette==1.8.0
 stevedore==5.9.1
+tuf==7.0.1
 typing-extensions==4.16.0
 typing-inspection==0.4.4
+urllib3==2.8.0

@@ -40,6 +40,16 @@ def serve(port: int, host: str = "127.0.0.2"):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_POST(self):                      # an OpenAI-compatible model: it answers with what it received
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            seen = json.dumps({"auth": self.headers.get("authorization")})
+            body = json.dumps({"choices": [{"message": {"content": seen}}]}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
     server = ThreadingHTTPServer((host, port), Echo)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(folder / "cert.pem", folder / "key.pem")

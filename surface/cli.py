@@ -179,7 +179,7 @@ def matrix_text(rule_id=None, attempts=None) -> str:
     lines = [f"156 rules by strongest active source: measured {t['measured']}, wall {t['wall']}, "
              f"static {t['static']}, review only {t['review']}, none {t['none']}",
              f"review only ({len(m['review_only'])}): {', '.join(m['review_only'])}",
-             f"walls planned, not yet in force where the product runs: {len(m['planned_walls'])} rules"]
+             f"platform rules no measured wall holds yet where the product runs: {len(m['planned_walls'])} rules"]
     if attempts:
         from agent.attempts import first_pass
         fp = first_pass(attempts)

@@ -154,7 +154,7 @@ class Structure(unittest.TestCase):
     def test_privileged_product_code_stays_bound_to_the_installation(self):
         for source in SOURCES:
             path = self.root / source
-            if path.suffix == ".py":
+            if path.suffix:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.touch()
             else:

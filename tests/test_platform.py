@@ -122,6 +122,41 @@ class Egress(unittest.TestCase):
         self.assertNotIn("s3cr3t-value", text)
 
 
+@unittest.skipUnless(mitmdump() and where("openbao"), "needs mitmproxy and OpenBao")
+class AgentEgress(unittest.TestCase):
+    """D68 for the agent's own model calls: the platform injects the provider's key; the agent never holds it."""
+
+    def test_the_agent_calls_its_model_with_a_key_it_never_holds(self):
+        from agent.llm import Gate
+        from enclosure.egress import Egress
+        from enclosure.keys import dev
+        from tls_destination import serve
+        state, port = Path(tempfile.mkdtemp()), free_port()
+        model, ca = serve(port)
+        bao, process = dev(state, where("openbao"))
+        try:
+            bao.put_secret("model", "provider-key-value")
+            values = effective(load(), {"destinations": [f"127.0.0.2:{port}"]})
+            egress = Egress(state, values, secrets={"model": ["127.0.0.2"]}, bao=bao, upstream_ca=ca).start()
+            try:
+                section = {"egress": f"http://127.0.0.1:{egress.port}", "egress_ca": str(egress.mount / "ca.pem"),
+                           "frontier": {"kind": "openai", "model": "m", "key": "secret:model",
+                                        "endpoint": f"https://127.0.0.2:{port}/v1/chat/completions"}}
+                gate = Gate.from_config(section, Path, state / "egress.log")
+                self.assertEqual(gate.tiers["frontier"].key.reveal(), "secret:model")
+                self.assertEqual(gate.ask("hello"), {"auth": "Bearer provider-key-value"})
+                with self.assertRaises(ValueError):            # a raw key next to the platform: refused
+                    Gate.from_config({**section, "frontier": {**section["frontier"], "key": "sk-raw"}}, Path,
+                                     state / "egress.log")
+            finally:
+                egress.stop()
+        finally:
+            process.kill()
+            process.wait()
+            model.shutdown()
+            model.server_close()
+
+
 @unittest.skipUnless(where("openbao") and where("envoy"), "needs OpenBao and Envoy")
 class ServiceTls(unittest.TestCase):
     def test_services_on_other_machines_speak_mutual_tls_with_certificates_from_the_key_service(self):

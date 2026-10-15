@@ -26,11 +26,19 @@ class Matrix(unittest.TestCase):
             self.assertIn(rid, self.m["review_only"])
         self.assertEqual(self.m["rules"]["DATA-MIN"]["strength"], "measured")   # declared (@field_uses), so probed
 
-    def test_a_planned_wall_gives_no_strength(self):
+    def test_only_a_measured_wall_that_enforces_the_rule_gives_strength(self):
+        from instruments.platform_walls import COVERS, HOLDS, WALLS
         ssrf = self.m["rules"]["SSRF"]
         self.assertIn("wall", ssrf["sources"]["build"])               # it teaches in the precheck
-        self.assertEqual(ssrf["sources"]["run"], ["wall (planned)"])  # it does not yet hold in production
-        self.assertNotEqual(ssrf["strength"], "wall")
+        self.assertEqual(ssrf["sources"]["run"], ["wall"])            # and holds where the product runs
+        self.assertEqual(self.m["rules"]["CANON"]["strength"], "wall")
+        scan = self.m["rules"]["AV-SCAN"]                             # the file store runs, but scans nothing
+        self.assertEqual(scan["sources"]["run"], ["wall (running, unmeasured)"])
+        self.assertNotEqual(scan["strength"], "wall")
+        session = self.m["rules"]["SESSION-TOKEN"]                    # no instrument signs in yet
+        self.assertEqual(session["sources"]["run"], ["wall (planned)"])
+        measured = set(WALLS)
+        self.assertTrue(all(set(walls) <= measured for walls in (*COVERS.values(), *HOLDS.values())))
 
     def test_no_rule_loses_its_strongest_source(self):
         floor = json.loads((ROOT / "catalog" / "feedback_floor.json").read_text())
@@ -123,7 +131,7 @@ class Views(unittest.TestCase):
             record(path, "build", "r1", 2, False)
             self.assertEqual(first_pass(path), {"tasks": 3, "passed": 2, "first_attempt": 1, "rate": 0.333})
             text = matrix_text(attempts=path)
-        self.assertIn("review only (16)", text)
+        self.assertIn("review only (15)", text)
         self.assertIn("first-attempt passes: 1 of 3", text)
         self.assertIn("held by platform:egress", matrix_text("SSRF"))
 

@@ -2,6 +2,10 @@
 
 Floats, NaN, -0, non-string keys, duplicate keys, invalid Unicode and integers beyond 2**53 do not exist here.
 Every failure is a CanonError; nothing else escapes.
+
+Within that domain the encoding is the JSON Canonicalization Scheme (RFC 8785): members sorted by the UTF-16 code
+units of their names, minimal string escaping, integers in decimal, no insignificant space. Anyone can recompute a
+digest or check a signature with a standard JCS library; this module only adds the refusals above.
 """
 from __future__ import annotations
 
@@ -46,9 +50,22 @@ def _check(value, depth: int = 0) -> None:
     raise CanonError(f"{type(value).__name__} is not canonical JSON")
 
 
+def _utf16(key: str) -> bytes:
+    return key.encode("utf-16-be")
+
+
+def _ordered(value):
+    """RFC 8785 §3.2.3: object members sorted by their names' UTF-16 code units (not code points)."""
+    if isinstance(value, dict):
+        return {k: _ordered(value[k]) for k in sorted(value, key=_utf16)}
+    if isinstance(value, (list, tuple)):
+        return [_ordered(v) for v in value]
+    return value
+
+
 def canon(value) -> bytes:
     _check(value)
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return json.dumps(_ordered(value), separators=(",", ":"), ensure_ascii=False).encode()
 
 
 def digest(value) -> str:

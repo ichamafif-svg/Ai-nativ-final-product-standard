@@ -258,13 +258,20 @@ class Host:
                    **({k: v for k, v in os.environ.items() if k.endswith(("_PROXY", "_proxy", "CA_BUNDLE", "CERT_FILE"))}
                       if network else {})}
             boot = f"import sys; sys.path.insert(0, {str(self.root)!r}); from instruments.jobs import main; main()"
-            r = subprocess.run(self.isolation.command([sys.executable, "-I", "-c", boot], env, network=network),
-                               input=json.dumps({"job": job, "inputs": inputs}).encode(), capture_output=True,
-                               timeout=3600, cwd=work)
+            request = json.dumps({"job": job, "inputs": inputs}).encode()
+            if not network and self.isolation.candidate_fs_confined:
+                # D68: the run's own directory and Standard's pinned programs, read-only but the scratch.
+                _, out, err = self.isolation.run_confined([sys.executable, "-I", "-c", boot], env, cwd=work,
+                                                          stdin=request, readable=(work, self.root),
+                                                          writable=(scratch,))
+            else:
+                r = subprocess.run(self.isolation.command([sys.executable, "-I", "-c", boot], env, network=network),
+                                   input=request, capture_output=True, timeout=3600, cwd=work)
+                out, err = r.stdout, r.stderr
             try:
-                return json.loads(r.stdout.decode().strip().splitlines()[-1])
+                return json.loads(out.decode().strip().splitlines()[-1])
             except (ValueError, IndexError):
-                return {"error": f"no answer: {r.stderr.decode(errors='replace')[-500:]}"}
+                return {"error": f"no answer: {err.decode(errors='replace')[-500:]}"}
         finally:
             if self.isolation.isolated:                     # what the runner wrote, it removes
                 subprocess.run(self.isolation.command(["rm", "-rf", str(work / "scratch")], {"PATH": "/usr/bin:/bin"}),

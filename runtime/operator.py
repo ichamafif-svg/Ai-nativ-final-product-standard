@@ -288,7 +288,17 @@ class Prover:
         return out
 
 
-def key(keys_dir: Path, identity: str) -> Signer:
+def key(keys_dir: Path, identity: str):
+    """The role's signer. `<identity>.service` (JSON: address, token_file, key) names a key held by the key service:
+    the private key then never enters this process. Otherwise `<identity>.key` holds it, readable by its owner only."""
+    service = keys_dir / f"{identity}.service"
+    if service.exists():
+        from bt.signing import KeyServiceSigner
+        spec = json.loads(service.read_text())
+        token = Path(spec["token_file"])
+        if token.stat().st_mode & 0o077:
+            raise PermissionError(f"{token} must be readable by its owner only")
+        return KeyServiceSigner(identity, spec["address"], token.read_text().strip(), spec["key"])
     path = keys_dir / f"{identity}.key"
     if path.stat().st_mode & 0o077:
         raise PermissionError(f"{path} must be readable by its owner only")

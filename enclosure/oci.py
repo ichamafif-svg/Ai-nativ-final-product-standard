@@ -94,14 +94,15 @@ def address_space_mb(walls, cgroup) -> int:
     return max(4 * walls.memory_mb, ADDRESS_SPACE_FLOOR_MB) if cgroup else walls.memory_mb
 
 
-def config(walls, args, cwd, *, env: dict, readable=(), writable=(), cgroup: str | None) -> dict:
+def config(walls, args, cwd, *, env: dict, readable=(), writable=(), cgroup: str | None,
+           ids: tuple[int, int] | None = None) -> dict:
     """The complete OCI configuration of one run. Same walls, same file, whichever runtime executes it.
 
     Memory has two nested walls. The control group bounds the run as a whole. Each process is also bounded by its
     address space: at the run's memory without a control group, and with one at `address_space_mb(walls)`, wide
     enough for runtimes that reserve address space up front (runc's start-up, V8, WebAssembly) and still a ceiling.
     No wall is removed when another is added (D69)."""
-    uid, gid = os.getuid(), os.getgid()
+    uid, gid = ids or (os.getuid(), os.getgid())             # the account the runtime runs as, root inside
     no_caps = {k: [] for k in ("bounding", "effective", "inheritable", "permitted", "ambient")}
     return {
         "ociVersion": "1.0.2",
