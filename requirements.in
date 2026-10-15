@@ -6,6 +6,7 @@ packaging>=23
 pytest>=8
 # instruments (T06) and the agent's own checks (U)
 bandit>=1.7
+radon>=6
 ruff>=0.5
 mypy>=1.10
 # the building blocks products install (blocks/python) and their tests

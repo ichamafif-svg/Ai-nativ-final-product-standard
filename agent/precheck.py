@@ -26,6 +26,7 @@ from agent.sandbox import Sandbox
 from enclosure import capability_map
 from enclosure.refusals import read as read_refusals
 from context.feedback import item, render, route
+from agent.quality import COMPLEXITY
 
 LOCAL = probes.LOCAL_PROBES
 _worse = probes._worse
@@ -93,6 +94,30 @@ def environment(sandbox: Sandbox, requirements: Path, cache) -> str:
             if not probe.ok:
                 raise RuntimeError("candidate Python failed inside jail: " + probe.out[-300:])
     return str(python)
+
+
+def _quality(sandbox, store, base: str, head: str, changed: list, cache, *, tests_green: bool) -> dict:
+    """D70 quality: mutation of the changed lines (only when main's tests are green), complexity, duplication."""
+    from agent.quality import complexity, duplication, mutation
+    out = {"complexity": complexity(store, base, head, changed), "duplication": duplication(store, base, head, changed),
+           "mutation": {"mutants": 0, "killed": 0, "survivors": [], "score": None}}
+    if not tests_green or not any(p.endswith(".py") for p in changed):
+        return out
+    with sandbox.checkout(store, base) as main_tree:
+        if not (main_tree / "tests").is_dir():
+            return out
+
+        def green(tree: Path) -> bool:
+            try:
+                python = environment(sandbox, tree / "requirements.txt", cache)
+            except Exception:
+                return False
+            result = sandbox.run([python, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", main_tree / "tests"],
+                                 tree, pythonpath=tree, readable=(main_tree, *([Path(cache)] if cache else [])))
+            return result.code == 0
+
+        out["mutation"] = mutation(sandbox, store, base, head, changed, green)
+    return out
 
 
 def _observer(scratch: Path) -> Path:
@@ -262,6 +287,19 @@ def precheck(
     problems += [f"{name} reports new errors: {errs[:10]}" for name, errs in lint.items()]
     items += [item("lesson", name, "build", where=str(err).split(":")[0], attempt=str(err))
               for name, errs in lint.items() for err in errs[:10]]
+    quality = _quality(sandbox, store, base, head, changed, cache, tests_green=status == "green")
+    for c in quality["complexity"]:
+        problems.append(f"complexity: {c['where']} {c['function']} is {c['complexity']} (limit {COMPLEXITY}); split it")
+        items.append(item("lesson", "complexity", "build", where=f"{c['where']} {c['function']}",
+                          attempt=f"complexity {c['complexity']}, was {c['before'] or 'new'}",
+                          instead=f"split it into functions of complexity {COMPLEXITY} or less"))
+    for d in quality["duplication"]:
+        problems.append(f"duplication: {d['where']} repeats code of {d['copy_of']}; reuse it instead of copying")
+        items.append(item("lesson", "duplication", "build", where=d["where"], attempt=f"copies {d['copy_of']}",
+                          instead=f"call or extend what {d['copy_of']} already defines"))
+    # Agents may not write tests in a maintained repository: weak tests are for the human who signs contracts.
+    items += [item("need", "mutation", "build", where=s["where"], attempt=f"tests still pass after {s['change']}")
+              for s in quality["mutation"].get("survivors", [])]
     dossier = route(items)
     return {
         "ok": not problems,
@@ -273,6 +311,7 @@ def precheck(
         "isolation": sandbox.isolation,
         "changed": changed,
         "refusals": lessons,
+        "quality": quality,
         "feedback": dossier,
         "feedback_text": render(dossier),
     }

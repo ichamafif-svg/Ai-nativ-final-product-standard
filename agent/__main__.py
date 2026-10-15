@@ -92,10 +92,29 @@ def build(config_path):
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) < 2 or argv[0] not in ("run", "patrol", "patrol-results"):
-        print("usage: python -m agent (run|patrol|patrol-results) standard.toml [interval-seconds|focus]")
+    if len(argv) < 2 or argv[0] not in ("run", "patrol", "patrol-results", "acceptance"):
+        print("usage: python -m agent (run|patrol|patrol-results) standard.toml [interval-seconds|focus]\n"
+              "       python -m agent acceptance standard.toml SPECIFICATION_FILE [DRAFT_OUT]")
         return 2
     loop, repairer, main_, refresh = build(argv[1])
+    if argv[0] == "acceptance":
+        from agent.acceptance import DraftError, draft
+        from instruments.tree import Snapshot
+        if len(argv) < 3:
+            print("usage: python -m agent acceptance standard.toml SPECIFICATION_FILE [DRAFT_OUT]")
+            return 2
+        agent = repairer.agent
+        try:
+            refresh()
+            result = draft(agent.research, open(argv[2], encoding="utf-8").read(), Snapshot(agent.store, main_()))
+        except (DraftError, OSError, ValueError) as exc:
+            print(json.dumps({"error": str(exc)}))
+            return 2
+        if len(argv) > 3:
+            open(argv[3], "w", encoding="utf-8").write(result["tests"])
+            result = {**result, "tests": f"written to {argv[3]}"}
+        print(json.dumps(result))
+        return 0
     if argv[0] == "patrol-results":
         from agent.patrol import patrol_results
         print(json.dumps(patrol_results(repairer, main=main_)))

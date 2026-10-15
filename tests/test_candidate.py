@@ -180,7 +180,8 @@ class Candidates(unittest.TestCase):
             self.assertEqual(packet["basis"]["catalog"], load()["digest"])
             return {"files": {"shop/x.py": "x = 1"}} if role == "build" else {"findings": []}
         CandidateWorkflow().run(ask, BASE, "Task", values=effective(load(), None), scope_ok=lambda p: True, context=ctx)
-        self.assertEqual([role for role, _ in seen], ["build", "correctness", "simplicity"])
+        roles = [role for role, _ in seen]                           # the two reviewers run in parallel
+        self.assertEqual((roles[0], sorted(roles[1:])), ("build", ["correctness", "simplicity"]))
         self.assertEqual(seen[1][1]["basis"], seen[2][1]["basis"])
 
 

@@ -141,6 +141,17 @@ class WholeLaw(unittest.TestCase):
         check = precheck(self.store, self.base, head, "secrets", TARGETS, EMPTY, self.box)
         self.assertTrue(check["ok"], check["problems"])
         self.assertEqual(check["tests"], "green")
+        self.assertEqual(check["quality"]["mutation"]["mutants"], 0)     # no logic changed, nothing to mutate
+
+    def test_untested_new_code_goes_to_the_human_never_refuses_the_candidate(self):
+        head = self.candidate({"app.py": "import os\nAPI = os.environ.get('API', '')\n\n\n"
+                                         "def add(a, b):\n    return a + b\n\n\ndef double(x):\n    return x * 2\n"})
+        check = precheck(self.store, self.base, head, "secrets", TARGETS, EMPTY, self.box)
+        self.assertTrue(check["ok"], check["problems"])
+        mutation = check["quality"]["mutation"]
+        self.assertGreaterEqual(len(mutation["survivors"]), 1)
+        self.assertTrue(check["feedback"]["human"] and not any(e["source"] == "mutation"
+                                                                for e in check["feedback"]["agent"]))
 
 
     def test_green_tests_on_code_that_hit_the_wall_are_not_a_pass(self):

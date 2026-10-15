@@ -47,6 +47,15 @@ def task_of(target_id: str) -> str | None:
     return instruction(target_id)
 
 
+def _strength(m: dict) -> str:
+    """The mutation sample, for the human who signs tests: what main's tests did not notice."""
+    if not m.get("mutants"):
+        return ""
+    lines = "".join(f"\n  - {s['where']}: {s['change']}" for s in m["survivors"][:6])
+    return (f"Tests killed {m['killed']} of {m['mutants']} mutants of the changed lines"
+            + (f"; still passing after:{lines}\n" if lines else ".\n"))
+
+
 def dossier(target: dict, status: str, details: list, files: list, check: dict, title: str, risks: str = "") -> str:
     """The commit message a reviewer reads first: why, what, what was already checked, what may go wrong."""
     where = "\n".join(f"  - {d.splitlines()[0][:200]}" for d in details[:10]) or "  - (no location published)"
@@ -57,6 +66,7 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
             f"Checked by the agent ({check.get('isolation', '?')}): main's tests {check.get('tests', '?')} on this "
             f"commit; no other floor target regressed; no new ruff or mypy error in the changed files.\n"
             f"Target fixed by the agent's measurement: {check.get('fixed', 'unknown')}. "
+            + _strength(check.get("quality", {}).get("mutation", {})) +
             f"These are the agent's own checks: the independent instruments measure this commit again.\n"
             + (f"\nRisks: {risks[:1500]}\n" if risks else "")
             + f"\nStandard-Target: {target['id']}\n")
