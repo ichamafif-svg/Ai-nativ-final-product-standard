@@ -105,9 +105,9 @@ def entry_and_egress(values: dict) -> dict:
 
 def data() -> dict:
     from enclosure import identity
-    from enclosure.data import PG, Database
+    from enclosure.data import Database, available
     out = {w: "unmeasured" for w in DATA}
-    if not (PG / "postgres").exists():
+    if not available():
         return out
     state = Path(tempfile.mkdtemp(prefix="walls-data-"))
     signer = identity.LocalSigner(state / "key")

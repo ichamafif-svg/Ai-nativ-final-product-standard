@@ -18,7 +18,9 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: sudo apt-get update -q && sudo apt-get install -y -q runc crun postgresql-16 postgresql-plpython3-16
+      - run: sudo apt-get update -q && sudo apt-get install -y -q runc crun
+      # The data wall needs PostgreSQL 16 with PL/Python; without it the data tests and walls say so (skipped, unmeasured).
+      - run: sudo apt-get install -y -q postgresql-16 postgresql-plpython3-16 || echo "no PL/Python on this runner"
       - run: test -f /sys/fs/cgroup/cgroup.controllers   # a pure cgroup v2 host, or this job is not qualifying anything
       # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; a rootless runtime needs them.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true

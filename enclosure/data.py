@@ -24,6 +24,12 @@ import time
 from pathlib import Path
 
 PG = Path("/usr/lib/postgresql/16/bin")
+PLPYTHON = Path("/usr/lib/postgresql/16/lib/plpython3.so")
+
+
+def available() -> bool:
+    """PostgreSQL 16 with PL/Python: the database verifies the platform's signature itself, or there is no wall."""
+    return (PG / "postgres").exists() and PLPYTHON.exists()
 
 SETUP = r"""
 CREATE EXTENSION IF NOT EXISTS plpython3u;
@@ -146,7 +152,7 @@ class Database:
         return done.stdout.strip() if done.returncode == 0 else done.stderr.strip()
 
     def start(self, *, audience: str, public_pem: str) -> "Database":
-        if not (PG / "postgres").exists():
+        if not available():
             raise RuntimeError("PostgreSQL 16 with PL/Python is needed for the data wall")
         self.root.parent.chmod(self.root.parent.stat().st_mode | 0o111)    # postgres may traverse, not list
         for path in (self.root, self.socket):

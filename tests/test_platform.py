@@ -18,7 +18,7 @@ from catalog import effective, load  # noqa: E402
 from enclosure import identity  # noqa: E402
 from enclosure.bac import Bac  # noqa: E402
 from enclosure.components import where  # noqa: E402
-from enclosure.data import PG, Database  # noqa: E402
+from enclosure.data import PG, Database, available as database_available  # noqa: E402
 from enclosure.egress import mitmdump  # noqa: E402
 
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -153,7 +153,7 @@ class ServiceTls(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr[-600:])
 
 
-@unittest.skipUnless((PG / "postgres").exists(), "needs PostgreSQL 16 with PL/Python")
+@unittest.skipUnless(database_available(), "needs PostgreSQL 16 with PL/Python")
 class Data(unittest.TestCase):
     def setUp(self):
         self.state = tempfile.mkdtemp()
@@ -193,7 +193,7 @@ class Data(unittest.TestCase):
         self.assertEqual(later.stdout.split(), ["alice", "0"])     # the subject held for its own transaction only
 
 
-@unittest.skipUnless(READY and where("oauth2-proxy") and (PG / "postgres").exists(), "needs the whole platform")
+@unittest.skipUnless(READY and where("oauth2-proxy") and database_available(), "needs the whole platform")
 class SignedInData(unittest.TestCase):
     """End to end: two people sign in; the product passes on the identity the gateway signed; each sees their own."""
 
