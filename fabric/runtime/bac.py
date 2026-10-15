@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,22 +178,53 @@ class Bac:
         name = uuid.uuid4().hex
         base = self._base()
         with tempfile.TemporaryDirectory(prefix="bac-bundle-") as bundle, tempfile.TemporaryFile() as output, \
-                tempfile.TemporaryFile() as errors:
+                tempfile.TemporaryFile() as errors, tempfile.TemporaryFile() as input_file:
             self._bundle(bundle, args, cwd, env, readable, writable, name)
+            process = None
             try:
                 try:
                     keep = ["--keep"] if Path(str(self.runtime)).name == "runc" else []
-                    r = subprocess.run([*base, "run", *keep, "--bundle", bundle, name],
-                                       **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}),
-                                       stdout=output, stderr=errors if split else subprocess.STDOUT, timeout=timeout)
-                    code, out = r.returncode, None
+                    observed = None
+                    deadline = time.monotonic() + timeout
+                    if stdin is not None:
+                        input_file.write(stdin)
+                        input_file.seek(0)
+                    process = subprocess.Popen([*base, "run", *keep, "--bundle", bundle, name],
+                                               stdin=input_file if stdin is not None else subprocess.DEVNULL,
+                                               stdout=output, stderr=errors if split else subprocess.STDOUT)
+                    # Sample while the group exists: runsc removes it before returning.
+                    while True:
+                        sample = _limited(name, uid=self.ids[0] if self.ids else os.getuid()) if self.groups else ()
+                        if sample is not None:
+                            observed = tuple(sorted(set(observed or ()) | set(sample)))
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(process.args, timeout)
+                        try:
+                            process.wait(timeout=min(0.01, remaining))
+                            break
+                        except subprocess.TimeoutExpired:
+                            pass
+                    code, out = process.returncode, None
                 except subprocess.TimeoutExpired:
-                    subprocess.run([*base, "kill", name, "KILL"], capture_output=True, timeout=30)
+                    try:
+                        subprocess.run([*base, "kill", name, "KILL"], capture_output=True, timeout=30)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                        process.wait(timeout=30)
                     code, out = TIMED_OUT, f"timeout after {timeout}s"
-                limited = _limited(name, uid=self.ids[0] if self.ids else os.getuid()) if keep and self.groups else (None if self.groups else ())
+                sample = _limited(name, uid=self.ids[0] if self.ids else os.getuid()) if self.groups else ()
+                limited = tuple(sorted(set(observed or ()) | set(sample or ()))) if observed is not None or sample is not None else None
             except OSError as exc:
                 return Ran(REFUSED, f"execution refused: {exc}")
             finally:
+                if process is not None:
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=30)
                 subprocess.run([*base, "delete", "--force", name], capture_output=True, timeout=30)
             if out is None:
                 output.seek(0, 2)

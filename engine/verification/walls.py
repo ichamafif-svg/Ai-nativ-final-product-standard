@@ -3,7 +3,7 @@
 A wall is measured by trying what it must refuse: reaching the network or the host's loopback, resolving a name,
 seeing a host file, writing where nothing was declared writable, inheriting the caller's environment, holding a
 capability, seeing host processes, making a system call the filter refuses, exceeding memory, file size, process
-count or wall time. `cgroups` holds only when the kernel itself reports having enforced the run's process limit.
+count or wall time. `cgroups` holds only when the kernel itself reports having enforced a tested group limit.
 Each wall is `held`, `broken`, `absent` (the host lacks the mechanism) or `unmeasured` (the bac could not run).
 Nothing here is `held` by declaration: only a refused attempt counts.
 """
@@ -41,22 +41,35 @@ r["capabilities"] = "held" if int(status["CapEff"], 16) == 0 and int(status["Cap
 r["processes"] = "held" if len([p for p in os.listdir("/proc") if p.isdigit()]) < 16 else "broken"
 r["syscalls"] = "held" if status.get("Seccomp", "").strip() == "2" and \
     refused(lambda: os.unshare(os.CLONE_NEWUSER)) == "held" else "broken"
+def big():
+    with open("/tmp/bac-probe", "wb") as f:
+        f.write(b"\0" * (int(file_bytes) + 1))
+r["file_size"] = refused(big)
+print(json.dumps(r))
+"""
+
+MEMORY = r"""
+import os, json, sys
+memory, r = int(sys.argv[1]), {}
+print("attempt:memory", flush=True)
 pid = os.fork()
 if pid == 0:
     try:
-        block = b"\x01" * int(memory)           # touched, not just reserved
+        block = b"\x01" * memory
         os._exit(1)
     except MemoryError:
         os._exit(0)
 _, status = os.waitpid(pid, 0)
 r["memory"] = "held" if os.WIFSIGNALED(status) or os.waitstatus_to_exitcode(status) == 0 else "broken"
-def big():
-    with open("/tmp/bac-probe", "wb") as f:
-        f.write(b"\0" * (int(file_bytes) + 1))
-r["file_size"] = refused(big)
-children, started = [], 0
+print(json.dumps(r))
+"""
+
+PROCESSES = r"""
+import os, json, sys, time
+processes, children, r = int(sys.argv[1]), [], {}
+print("attempt:process_count", flush=True)
 try:
-    for _ in range(int(processes) + 8):
+    for _ in range(processes + 8):
         pid = os.fork()
         if pid == 0:
             time.sleep(5)
@@ -67,14 +80,14 @@ except OSError:
 for pid in children:
     os.kill(pid, 9)
     os.waitpid(pid, 0)
-r["process_count"] = "held" if len(children) <= int(processes) else "broken"
+r["process_count"] = "held" if len(children) <= processes else "broken"
 print(json.dumps(r))
 """
 
 
 def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[Bac] = Bac,
             diagnostics: list | None = None) -> dict[str, str]:
-    """One run inside the bac with these walls, and one deliberately overlong run for the time wall."""
+    """Independent attempts: exhaustion may terminate the entire sandbox, including its reporter."""
     bac = kind(walls, python=python)
     result = {wall: "unmeasured" for wall in WALLS}
     if not bac.ready:
@@ -88,20 +101,37 @@ def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[
         secret.write_text("host")
         ran = bac.run([python, "-I", "-c", INSIDE, str(listener.getsockname()[1]), str(secret),
                        str(walls.memory_mb << 20), str(walls.file_bytes), str(walls.processes), allowed], cwd)
-        try:
-            inside = json.loads(ran.out.strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            inside = {}
-            if diagnostics is not None:
-                diagnostics.append({"runtime": Path(bac.runtime).name, "code": ran.code,
-                                    "probe_error": ran.out[-2000:]})
-        result.update({wall: inside[wall] for wall in inside if wall in result and inside[wall] in ("held", "broken")})
+        def collect(ran):
+            try:
+                inside = json.loads(ran.out.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                inside = {}
+                if diagnostics is not None:
+                    diagnostics.append({"runtime": Path(bac.runtime).name, "code": ran.code,
+                                        "limited": ran.limited, "probe_error": ran.out[-2000:]})
+            result.update({wall: inside[wall] for wall in inside if wall in result and inside[wall] in ("held", "broken")})
+
+        collect(ran)
+        # An exhausted group can kill gVisor's Sentry and every guest process.
+        # Independent runs preserve the other observations. Only native counters,
+        # or the probe's explicit report, establish which limit refused the attempt.
+        limits = []
+        for wall, script, value in (("memory", MEMORY, walls.memory_mb << 20),
+                                    ("process_count", PROCESSES, walls.processes)):
+            attempt = bac.run([python, "-I", "-c", script, str(value)], cwd)
+            collect(attempt)
+            if attempt.limited is not None:
+                limits.extend(attempt.limited)
+                if (result[wall] == "unmeasured" and attempt.code not in (0, TIMED_OUT)
+                        and f"attempt:{wall}" in attempt.out.splitlines()
+                        and {"memory": "memory", "process_count": "processes"}[wall] in attempt.limited):
+                    result[wall] = "held"
         if not bac.groups:
             result["cgroups"] = "absent"
-        elif ran.limited is None:
-            result["cgroups"] = "unmeasured"              # this runtime removes the group before it can be read
-        else:
-            result["cgroups"] = "held" if "processes" in ran.limited else "broken"
+        elif limits:
+            result["cgroups"] = "held"
+        # A per-process rlimit may refuse first; lack of a group event proves
+        # neither a working nor a broken group limit.
         short = kind(Walls(timeout_s=1, memory_mb=walls.memory_mb, processes=walls.processes,
                           file_bytes=walls.file_bytes), python=python)
         result["time"] = "held" if short.run(["/usr/bin/sleep", "5"], cwd).code == TIMED_OUT else "broken"

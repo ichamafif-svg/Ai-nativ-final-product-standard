@@ -112,6 +112,60 @@ class Configuration(unittest.TestCase):
         self.assertEqual(box.isolated, box.bac.ready)
 
 
+class ExhaustionEvidence(unittest.TestCase):
+    def measure_exhaustion(self, event, output, code=137):
+        from fabric.runtime.bac import Ran, TIMED_OUT
+        from engine.verification.walls import MEMORY, PROCESSES
+
+        class Fixture:
+            ready, groups, runtime = True, True, "/usr/bin/fixture"
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, args, cwd):
+                if MEMORY in args:
+                    return Ran(code, output, event)
+                if PROCESSES in args:
+                    return Ran(0, '{"process_count": "held"}', ())
+                if "/usr/bin/sleep" in args:
+                    return Ran(TIMED_OUT, "", ())
+                return Ran(0, "{}", ())
+
+        return measure(SMALL, kind=Fixture)
+
+    def test_timeout_reaps_the_launcher_when_the_native_kill_fails(self):
+        import shlex
+        from fabric.runtime.bac import TIMED_OUT
+        with tempfile.TemporaryDirectory() as root:
+            launcher, pid_file = Path(root, "runtime"), Path(root, "pid")
+            launcher.write_text("#!/bin/sh\nif [ \"$1\" = run ]; then\n"
+                                + "echo $$ > " + shlex.quote(str(pid_file)) + "\nexec sleep 60\nfi\nexit 1\n")
+            launcher.chmod(0o700)
+            with patch.object(Bac, "_unavailable", return_value=None):
+                bac = Bac(SMALL)
+            bac.runtime = str(launcher)
+            with patch.object(bac, "_base", return_value=[str(launcher)]):
+                ran = bac._execute(["true"], root, None, (), (), 0.1)
+            self.assertEqual(ran.code, TIMED_OUT)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), 0)
+
+    def test_killed_reporter_needs_a_matching_native_event_and_attempt_marker(self):
+        self.assertEqual(self.measure_exhaustion(("memory",), "attempt:memory")["memory"], "held")
+        for event, output in ((None, "attempt:memory"), ((), "attempt:memory"),
+                              (("processes",), "attempt:memory"), (("memory",), "")):
+            self.assertEqual(self.measure_exhaustion(event, output)["memory"], "unmeasured")
+        self.assertEqual(self.measure_exhaustion(("memory",), "attempt:memory", code=0)["memory"], "unmeasured")
+
+    def test_counters_do_not_override_an_explicit_failed_probe(self):
+        walls = self.measure_exhaustion(("memory",), 'attempt:memory\n{"memory": "broken"}')
+        self.assertEqual(walls["memory"], "broken")
+
+    def test_no_group_event_does_not_mean_the_group_is_broken(self):
+        self.assertEqual(self.measure_exhaustion((), '{"memory": "held"}', code=0)["cgroups"], "unmeasured")
+
+
 @unittest.skipUnless(BAC.ready, f"bac unavailable: {BAC.why}")
 class Measured(unittest.TestCase):
     def test_every_wall_holds(self):
