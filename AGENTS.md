@@ -76,6 +76,9 @@ D69 (§4.11): the mission's `autonomy` entry carries the capability map of the b
 holds each selected rule. Your precheck reads every collision with the bac as a lesson (`refusals`: capability,
 holder, rules, what to do instead); green tests on code that hit a wall are not a pass. Adapt the design, or draft the value
 for the human to sign; never work around a wall.
+D70 (§4.12): every feedback (wall, tests, lint, SAST, scanner, probes) reaches you through one dossier, ordered
+and tied to catalog rules; read it in order. No source of a rule is removed unless a source at least as strong
+replaces it (`catalog/feedback_floor.json`).
 
 Standard also consumes its own Python blocks directly from `blocks.python.standard_blocks` in this checkout;
 products install the same source as `standard_blocks`. No copy, bootstrap alias or alternate implementation.

@@ -60,9 +60,11 @@ class Builder:
     def check(self, base: str, head: str, rid: str, targets: dict) -> list:
         from agent.precheck import precheck
 
-        return precheck(
+        check = precheck(
             self.store, base, head, None, targets, self.data, self.sandbox, self.store.parent / "venvs", request=rid
-        )["problems"]
+        )
+        # D70: when the precheck fails, the agent reads its one ordered feedback dossier.
+        return [check["feedback_text"] or "\n".join(check["problems"])] if check["problems"] else []
 
     # ---- crafting -------------------------------------------------------------------------------------------------
     def craft(self, rid: str, title: str, spec: bytes, contract: bytes, base: str, targets: dict, *, context=None) -> str:

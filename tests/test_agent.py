@@ -158,6 +158,15 @@ class WholeLaw(unittest.TestCase):
         self.assertIn("SSRF", lesson["rules"])
         for word in ("seccomp", "namespace", "netns", "cgroup"):
             self.assertNotIn(word, json.dumps(lesson))
+        wall = [e for e in check["feedback"]["agent"] if e["source"] == "wall"]
+        self.assertEqual([e["where"] for e in wall], ["network.outbound"])
+        self.assertIn("SSRF", wall[0]["rules"])
+        self.assertIn("instead:", check["feedback_text"])
+
+    def test_red_tests_reach_the_agent_through_the_same_dossier(self):
+        head = self.candidate({"app.py": "import os\nAPI = os.environ['API']\n\n\ndef add(a, b):\n    return a - b\n"})
+        check = precheck(self.store, self.base, head, "secrets", TARGETS, EMPTY, self.box)
+        self.assertTrue(any(e["source"] == "tests" for e in check["feedback"]["agent"]), check["feedback"])
 
 
 class Model(unittest.TestCase):

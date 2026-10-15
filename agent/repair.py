@@ -178,7 +178,7 @@ class Agent:
                 head = self._commit(base, encoded, message)
                 self.publish(head)
                 return head, "model"
-            feedback = "\n".join(check["problems"])[:4000]
+            feedback = (check.get("feedback_text") or "\n".join(check["problems"]))[:4000]
         raise AgentError(f"no candidate for {target_id} passed the agent's precheck: {feedback[:1500]}")
 
 

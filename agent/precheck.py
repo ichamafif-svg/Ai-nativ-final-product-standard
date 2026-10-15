@@ -25,6 +25,7 @@ from instruments.suite import contract_path, report_measure
 from agent.sandbox import Sandbox
 from enclosure import capability_map
 from enclosure.refusals import read as read_refusals
+from context.feedback import item, render, route
 
 LOCAL = probes.LOCAL_PROBES
 _worse = probes._worse
@@ -99,12 +100,14 @@ def _capabilities(sandbox) -> dict:
     return capability_map(bac.walls, groups=bac.groups) if bac is not None else capability_map()
 
 
-def _with_rules(lessons: list) -> list:
-    """Each lesson names the catalog rules its part of the platform holds (`held_by`), the text seen before coding."""
+def _rules_held(holder: str) -> list:
+    """The catalog rules a part of the platform holds (`held_by`): the text the agent saw before coding."""
     from catalog import load
-    rules = load()["rules"]
-    return [{**lesson, "rules": sorted(r["id"] for r in rules if r["held_by"] == lesson["held_by"])}
-            for lesson in lessons]
+    return sorted(r["id"] for r in load()["rules"] if r["held_by"] == holder)
+
+
+def _with_rules(lessons: list) -> list:
+    return [{**lesson, "rules": _rules_held(lesson["held_by"])} for lesson in lessons]
 
 
 def suite(sandbox: Sandbox, store, base: str, head: str, cache=None, *, refusals: list | None = None) -> tuple[str, list]:
@@ -183,10 +186,16 @@ def precheck(
         for tid in worse
         if target_id is None or tid not in autonomous
     ]
+    # D70: every problem is also one item of the one feedback dossier the agent reads.
+    items = [item("lesson", f"probe:{tid}", "build", where=tid,
+                  attempt=f"{before[tid][0]} -> {after[tid][0]} {after[tid][1][:5]}")
+             for tid in worse if target_id is None or tid not in autonomous]
     follow_ups = [tid for tid in worse if tid in autonomous]
     fixed = after[target_id][0] == targets[target_id]["expect"] if target_id in after else None
     if fixed is False:
         problems.append(f"{target_id} is still {after[target_id][0]}: {after[target_id][1][:5]}")
+        items.append(item("lesson", f"probe:{target_id}", "build", where=target_id,
+                          attempt=f"still {after[target_id][0]}: {after[target_id][1][:5]}"))
     if request is not None:
         with sandbox.checkout(store, head) as code, tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "acceptance.xml"
@@ -207,6 +216,8 @@ def precheck(
                 accepted = f"uncovered:{type(exc).__name__}"
             if accepted != "green":
                 problems.append(f"the contract does not pass yet ({accepted}):\n{result.out[-3000:]}")
+                items.append(item("lesson", "acceptance", "build", where="the acceptance contract",
+                                  attempt=f"{accepted}: {result.out[-200:]}"))
             lessons = read_refusals(result, _capabilities(sandbox), during="the acceptance contract")
     else:
         lessons = []
@@ -217,6 +228,9 @@ def precheck(
         suite(sandbox, store, base, base, cache, refusals=before_lessons)
         known = {lesson["capability"] for lesson in before_lessons}
         new = sorted({lesson["capability"] for lesson in lessons} - known)
+        items += [item("lesson", "wall", "build", rules=_rules_held(lesson["held_by"]), where=lesson["capability"],
+                       attempt=lesson["attempt"], new=lesson["capability"] in new, available=str(lesson["available"]),
+                       instead=lesson["instead"], ask=lesson["ask"]) for lesson in lessons]
         if new:
             told = "\n".join(f"- {lesson['capability']} (held by {lesson['held_by']}): tried `{lesson['attempt']}`; "
                              f"available: {lesson['available']}; instead: {lesson['instead']}"
@@ -228,9 +242,15 @@ def precheck(
         fixed = status == "green"
     if status != "green":
         problems.append(f"main's tests are {status} on this candidate: {failures[:3]}")
+        items += [item("lesson", "tests", "build", where="main's tests",
+                       attempt=f"main's tests are {status} on this candidate: {failure}")
+                  for failure in (failures[:5] or [""])]
     changed = probes.git(store, "diff", "--name-only", base, head).split()
     lint = tools(sandbox, store, base, head, changed)
     problems += [f"{name} reports new errors: {errs[:10]}" for name, errs in lint.items()]
+    items += [item("lesson", name, "build", where=str(err).split(":")[0], attempt=str(err))
+              for name, errs in lint.items() for err in errs[:10]]
+    dossier = route(items)
     return {
         "ok": not problems,
         "fixed": fixed,
@@ -241,4 +261,6 @@ def precheck(
         "isolation": sandbox.isolation,
         "changed": changed,
         "refusals": lessons,
+        "feedback": dossier,
+        "feedback_text": render(dossier),
     }
