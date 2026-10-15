@@ -61,6 +61,15 @@ class Configuration(unittest.TestCase):
         self.assertEqual(self.config["linux"]["resources"]["pids"]["limit"], 32)
         self.assertEqual(self.config["process"]["args"], ["run"])
 
+    def test_rootless_gvisor_cannot_silently_ignore_group_configuration(self):
+        with patch("fabric.runtime.bac.shutil.which", return_value="/usr/bin/runsc"), \
+             patch("fabric.runtime.bac.os.getuid", return_value=12345), \
+             patch.object(Bac, "_execute") as execute:
+            bac = Bac(SMALL, profile="reinforced")
+        self.assertFalse(bac.ready)
+        self.assertIn("rootless", bac.why)
+        execute.assert_not_called()
+
     def test_runtime_accounts_receive_distinct_cgroup_subtrees(self):
         with patch.object(Bac, "_unavailable", return_value=None):
             own = Bac(SMALL)

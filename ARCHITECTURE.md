@@ -184,6 +184,9 @@ aux agents. Les diagnostics libres ne doivent pas devenir un canal d'exfiltratio
 Le bac OCI définit namespaces, environnement minimal, fichiers déclarés, filtre seccomp et budgets cgroups.
 Tous les profils exigent désormais les limites du groupe ; un plafond par processus ne remplace pas un plafond
 cumulé. `base` accepte runsc, runc ou crun ; `reinforced` et `critical` exigent runsc sans repli implicite.
+Le mode rootless de runsc peut ignorer les erreurs de configuration cgroups : il est donc refusé.
+Sous un compte non privilégié, `base` utilise runc/crun ; les profils qui exigent runsc restent indisponibles.
+Un service runsc privilégié distinct et ses frontières devront être qualifiés avant d'ouvrir ce parcours.
 Cela sélectionne un runtime, sans qualifier les domaines de contrôle ou de récupération du profil.
 Les cgroups sont rangés par UID puis exécution. L'installateur laboratoire prépare des sous-arbres distincts
 pour agent et runner, garde leurs plafonds agrégés sous propriété root et vérifie le lancement sous ces comptes

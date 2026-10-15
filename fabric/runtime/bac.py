@@ -129,6 +129,11 @@ class Bac:
         with tempfile.TemporaryDirectory(prefix="bac-check-") as cwd:
             os.chmod(cwd, 0o755)                            # a runner account must be able to enter it
             for runtime in found:
+                if Path(runtime).name == "runsc" and (os.getuid() != 0 or self.as_user):
+                    # runsc's rootless mode ignores cgroup configuration errors.
+                    # Successful execution cannot establish our fail-closed group budget.
+                    refusals.append("runsc: rootless mode cannot guarantee cgroup configuration")
+                    continue
                 for groups in (True,):
                     self.runtime, self.groups = runtime, groups
                     ran = self._execute(["/usr/bin/true"], cwd, None, (), (), 30)
@@ -153,8 +158,6 @@ class Bac:
         if Path(str(self.runtime)).name == "runsc":
             # The same walls under gVisor: its own empty network, the OCI seccomp profile applied too (not ignored).
             base += ["--network=none", "--oci-seccomp"]
-            if os.getuid() != 0 or self.as_user:
-                base.append("--rootless")
             if not self.groups:
                 base.append("--ignore-cgroups")
         return base
