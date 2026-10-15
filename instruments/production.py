@@ -435,6 +435,28 @@ def crossed(live: dict | None, prev: dict | None) -> int | None:
 MIGRATION = re.compile(r"migrations/(\d+)[^/]*\.sql")
 
 
+LESSONS = ("correction", "refusal")
+
+
+def platform_refusals(points: list) -> tuple[str, list]:
+    """`repo:code:platform refusals` from the platform's latest records (gate and egress, JSON lines): what it had to
+    correct or refuse on the product's traffic (D69: a production refusal is a defect of the code and opens work).
+    What it merely imposed teaches nothing; an alarm goes to the hidden control, not here. No capture: uncovered."""
+    latest = next((text for _, text in reversed(points) if text is not None), None)
+    if latest is None:
+        return "uncovered:no-capture", []
+    found = set()
+    for line in latest.splitlines():
+        try:
+            r = __import__("json").loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and r.get("kind") in LESSONS:
+            found.add(f"{r.get('route', '?')}: {r.get('capability', '?')}: {str(r.get('attempt', ''))[:160]}")
+    details = sorted(found)[:50]
+    return ("found:" + str(len(found)) if found else "none"), details
+
+
 def measure(inp: dict) -> dict:
     """The production job: inputs as the host materialised them; facts and what the console shows."""
     m, now_ms, regs = measures(inp.get("rules") or {}), inp["now"], inp["registers"]
@@ -448,6 +470,9 @@ def measure(inp: dict) -> dict:
     a = assess(sources, answers, m, now, since)
     warming = sources and a["coverage"] != "complete" and all(p and p[-1][1] is not None for p in sources.values())
     facts = [] if warming else [("run:sources:all", "coverage", a["coverage"]), ("run:service:all", "slo", a["slo"])]
+    platform = [s["points"] for s in inp["series"].values() if s["role"] == "platform"]
+    platform_status, platform_details = platform_refusals(platform[0]) if platform else ("uncovered:not-configured", [])
+    facts.append(("repo:code:platform", "refusals", platform_status))   # a defect of the code, repaired in the code
     earlier = {(f["resource"], f["property"]): f["status"] for f in inp["facts"]}
     good = {r.split("/")[1] for (r, p), s in earlier.items() if p == "good" and s == "yes"}
     if not inp.get("deploy"):
@@ -464,7 +489,8 @@ def measure(inp: dict) -> dict:
     facts += [(r, p, "no") for (r, p), s in sorted(earlier.items()) if p in PREMISES and s == "yes"
               and (r, p) not in offered and p != "good"]
     base = m["base_url"].rstrip("/")
-    return {"facts": [[r, p, s, []] for r, p, s in facts],
+    return {"facts": [[r, p, s, platform_details if (r, p) == ("repo:code:platform", "refusals") else []]
+                      for r, p, s in facts],
             "extra": {"served": a["served"], "canary_percent": m["canary_percent"], "components": a["components"], "slos": a["slos"], "silent": a["silent"],
                       "fetch": [[pid, method, base + path, expected, path] for pid, method, path, expected in m["probes"]]
                       if base else [], "probes": answers[-1][1] if answers else []}}

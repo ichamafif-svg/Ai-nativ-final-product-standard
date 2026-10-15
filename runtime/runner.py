@@ -86,9 +86,9 @@ class Process:
 
 class Runner:
     def __init__(self, root: str, port: int, health: str, data: str | None, repo: str, releases: str,
-                 ready_s: float = 30.0, bac=None):
+                 ready_s: float = 30.0, bac=None, records=()):
         self.root, self.port, self.health, self.data, self.ready_s = root, port, health, data, ready_s
-        self.repo, self.releases, self.bac = repo, releases, bac
+        self.repo, self.releases, self.bac, self.records = repo, releases, bac, tuple(records)
         self.live = self.canary = None
         self.weight, self.restart_seen, self.ports = 0, None, iter(range(port + 1, port + 1000))
         self.lock, self.counts = threading.Lock(), {}      # release -> {"ok", "error", "buckets"}
@@ -214,6 +214,16 @@ class Runner:
                              f'{c["ok"] + c["error"]}')
         return "\n".join(lines) + "\n"
 
+    def platform_records(self) -> bytes:
+        out = []
+        for path in self.records:
+            try:
+                with open(path, "rb") as f:
+                    out.append(f.read()[-1_000_000:])
+            except OSError:
+                pass
+        return b"".join(out)
+
     def handler(self):
         runner = self
 
@@ -233,6 +243,8 @@ class Runner:
             def _forward(self):
                 if self.path == "/__standard/metrics":
                     return self._send(200, [("Content-Type", "text/plain; version=0.0.4")], runner.exposition().encode())
+                if self.path == "/__standard/platform":           # D68: what the gate and the egress recorded
+                    return self._send(200, [("Content-Type", "application/jsonl")], runner.platform_records())
                 with runner.lock:
                     live, canary, weight = runner.live, runner.canary, runner.weight
                 target = canary if (canary and self.path != "/metrics" and random.random() * 100 < weight) else live
@@ -265,6 +277,8 @@ def main(argv=None) -> None:
     parser.add_argument("--data")
     parser.add_argument("--repo", required=True, help="the canonical repository, read only")
     parser.add_argument("--releases", default=os.path.expanduser("~/releases"))
+    parser.add_argument("--records", action="append", default=[],
+                        help="a platform record file (gate, egress) served at /__standard/platform")
     parser.add_argument("--unconfined", action="store_true",
                         help="run releases without the bac: demonstrations only, never inferred")
     a = parser.parse_args(argv)
@@ -277,7 +291,7 @@ def main(argv=None) -> None:
             raise SystemExit(f"releases run only in the bac (D68): {bac.why}")
     os.makedirs(a.releases, exist_ok=True)
     root = a.registers if os.path.isdir(a.registers) else os.path.dirname(a.registers)
-    runner = Runner(root, a.port, a.health, a.data, a.repo, a.releases, bac=bac)
+    runner = Runner(root, a.port, a.health, a.data, a.repo, a.releases, bac=bac, records=a.records)
     threading.Thread(target=runner.follow, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", a.port), runner.handler()).serve_forever()
 

@@ -117,7 +117,7 @@ bans = ["js-import:next-auth", "js-import:jsonwebtoken", "js-import:jose", "js-i
 
 [block.access]
 does = "every route declares its id; the dependency reads @access fresh on each call; a route not in @access is admin-only; @critical routes refuse unauthenticated calls; response models filter fields by role; a route without an id stops the app in production; also= predicates that can only refuse"
-probes = ["access-matrix", "unauthenticated"]
+probes = ["access-matrix", "unauthenticated", "field-uses"]
 
 [block.access.fastapi]
 module = "standard_blocks.access"

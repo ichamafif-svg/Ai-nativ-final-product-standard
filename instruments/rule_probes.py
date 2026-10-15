@@ -34,10 +34,10 @@ TRACE = re.compile(r"Traceback \(most recent call last\)|File \"[^\"]+\", line \
 APP_PROBES = ("headers", "cookies", "cors", "csrf", "methods", "errors", "no-store", "param-pollution", "rate-limit",
               "unknown-field", "unauthenticated", "access-matrix", "health", "no-debug", "shutdown", "upload-limits",
               "upload-type", "zip-slip", "oidc-flow", "session-rotation", "logout", "session-timeout", "reauth",
-              "log-redaction")
+              "log-redaction", "field-uses")
 
 HTTP_PROBES = ("headers", "cookies", "cors", "csrf", "methods", "errors", "no-store", "param-pollution",
-               "unauthenticated", "health", "rate-limit")
+               "unauthenticated", "health", "field-uses", "rate-limit")
 
 
 def http_routes(endpoints) -> list:
@@ -276,6 +276,38 @@ class Probe:
                 want_ok = role in allowed or "*" in allowed
                 if want_ok and status == 403 or not want_ok and status != 403:
                     bad.append(f"{key} as {role}: {status}")
+        return bad, False
+
+    async def field_uses(self):
+        """DATA-MIN: a response carries only the fields @field_uses declares for its use (D70: declared intent).
+        Keys are route ids (in-process) or "GET /path"; objects and lists of objects are read one level deep."""
+        declared = self.values.get("field_uses", {})
+        if not declared:
+            return [], True
+        ids = {}
+        if self.app is not None and getattr(getattr(self.app, "state", None), "standard_access", None) is not None:
+            from standard_blocks.access import route_ids
+            ids = {rid: key for key, rid in route_ids(self.app).items() if rid}
+        bad = []
+        for use, fields in sorted(declared.items()):
+            key = use if re.fullmatch(r"GET /\S*", use) else ids.get(use)
+            if not key or not key.startswith("GET "):
+                bad.append(f"{use}: no GET route to read it from")
+                continue
+            undo = self.as_user("admin") if self.app is not None else (lambda: None)
+            try:
+                async with self.client() as c:
+                    resp = await c.get(re.sub(r"\{[^}]+\}", "1", key.split(" ", 1)[1]))
+            finally:
+                undo()
+            try:
+                body = resp.json()
+            except ValueError:
+                continue
+            rows = body if isinstance(body, list) else [body]
+            extra = sorted({k for row in rows if isinstance(row, dict) for k in row} - set(fields))
+            if extra:
+                bad.append(f"{use} returns {', '.join(extra[:8])} beyond its declared use")
         return bad, False
 
     # -- runtime ------------------------------------------------------------------------------------------------

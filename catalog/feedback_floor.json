@@ -28,7 +28,7 @@
  "CSPRNG": "static",
  "CSRF": "measured",
  "CSV-INJ": "static",
- "DATA-MIN": "review",
+ "DATA-MIN": "measured",
  "DEFAULT-ACCOUNTS": "measured",
  "DEP-SOURCE": "measured",
  "DESER": "static",

@@ -53,8 +53,9 @@ def seccomp() -> dict:
             entry["args"] = [{"index": a["index"], "value": a["value"], "valueTwo": a.get("valueTwo", 0),
                               "op": a["op"]} for a in rule["args"]]
         rules.append(entry)
+    # SECCOMP_FILTER_FLAG_LOG: the kernel logs every refused call, which the platform's alarm watcher reads (D69).
     return {"defaultAction": profile["defaultAction"], "defaultErrnoRet": profile.get("defaultErrnoRet", 1),
-            "architectures": architectures, "syscalls": rules}
+            "architectures": architectures, "syscalls": rules, "flags": ["SECCOMP_FILTER_FLAG_LOG"]}
 
 
 def _bind(path: Path, *, write: bool) -> dict:

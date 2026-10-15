@@ -22,8 +22,9 @@ class Matrix(unittest.TestCase):
         self.assertEqual(sum(self.m["totals"].values()), 156)
 
     def test_business_intent_stays_in_review_until_it_is_declared(self):
-        for rid in ("DATA-MIN", "VALIDATE-COMBO", "TRANSACTION", "LOCKING", "CONCURRENCY", "MULTI-APPROVAL"):
+        for rid in ("VALIDATE-COMBO", "TRANSACTION", "LOCKING", "CONCURRENCY", "MULTI-APPROVAL"):
             self.assertIn(rid, self.m["review_only"])
+        self.assertEqual(self.m["rules"]["DATA-MIN"]["strength"], "measured")   # declared (@field_uses), so probed
 
     def test_a_planned_wall_gives_no_strength(self):
         ssrf = self.m["rules"]["SSRF"]
@@ -122,7 +123,7 @@ class Views(unittest.TestCase):
             record(path, "build", "r1", 2, False)
             self.assertEqual(first_pass(path), {"tasks": 3, "passed": 2, "first_attempt": 1, "rate": 0.333})
             text = matrix_text(attempts=path)
-        self.assertIn("review only (17)", text)
+        self.assertIn("review only (16)", text)
         self.assertIn("first-attempt passes: 1 of 3", text)
         self.assertIn("held by platform:egress", matrix_text("SSRF"))
 

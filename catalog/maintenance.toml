@@ -56,6 +56,21 @@ sources = ["@scanner"]
 repair = "deploy"
 
 [[target]]
+id = "run-platform"
+kind = "property"
+coverage = "run-sources"
+resource = "repo:code:platform"
+property = "refusals"
+expect = "none"
+min_level = "real"
+fresh_ms = 900000
+due_ms = 86400000
+owner = "@owner"
+sources = ["@scanner"]
+repair = "remediate"
+instruction = "In production, the platform corrected or refused what the product's code did (D68, D69): each finding names the capability, the route and what to do instead. Change the code so that it no longer needs the correction, or draft the value the human must sign."
+
+[[target]]
 id = "vulns"
 kind = "property"
 coverage = "inventory"

@@ -7,6 +7,8 @@ permissions:
 jobs:
   walls:
     runs-on: ubuntu-24.04
+    env:
+      STANDARD_COMPONENTS: ${{ github.workspace }}/.components      # the same pinned components for user and root
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +38,7 @@ jobs:
           sudo -E env "PATH=$PATH" python -m instruments.walls | tee walls.json
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_refusals.py' -v
+          sudo -E env "PATH=$PATH" python -m tools.platform_walls
       - name: every measured wall holds
         run: |
           python - <<'EOF'

@@ -20,7 +20,7 @@ DEPENDENCIES = r"requirements[A-Za-z0-9_.-]*\.txt|sbom\.json"
 FEATURE = rf"({SEGMENT}/){{0,8}}{SEGMENT}\.(py|md|txt|json|toml|ya?ml|sql|html|css|js|mjs|cjs|jsx|ts|tsx)"
 REPAIR = {
     "vulns": DEPENDENCIES, "licenses": DEPENDENCIES, "sbom": r"sbom\.json", "deps-age": rf"{DEPENDENCIES}|{SOURCE}",
-    "sast": SOURCE, "ci": SOURCE, "secrets": SOURCE,
+    "sast": SOURCE, "ci": SOURCE, "secrets": SOURCE, "run-platform": SOURCE,
 }
 WORKFLOWS = rf"\.github/workflows/{SEGMENT}\.ya?ml"             # the one reserved scope a target owns: `actions`
 

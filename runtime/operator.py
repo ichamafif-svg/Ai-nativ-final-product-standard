@@ -348,6 +348,8 @@ class Installation:
         sources = {f"metrics-{i}": ("metrics", url) for i, url in enumerate(run.get("metrics", []))}
         if (deploy or {}).get("runner_metrics"):
             sources["runner"] = ("runner", deploy["runner_metrics"])
+        if (deploy or {}).get("platform_records"):                     # D68: what the gate and egress recorded
+            sources["platform"] = ("platform", deploy["platform_records"])
         self.releases = Registers(self.repo_path, resolve(deploy["root"]), clock=self.clock,
                                   served=lambda: self.instruments.served,
                                   canary_percent=lambda: self.instruments.canary_percent) if deploy else None
