@@ -9,7 +9,7 @@ jobs:
   walls:
     runs-on: ubuntu-24.04
     env:
-      STANDARD_COMPONENTS: ${{ github.workspace }}/.components      # the same pinned components for user and root
+      STANDARD_COMPONENTS: /tmp/standard-components-ci      # the same pinned components for user and root
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +45,10 @@ jobs:
       - name: walls and bac tests as an ordinary user
         if: matrix.as == 'user'
         run: |
-          sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m engine.verification.walls | tee walls.json
+          sudo install -d -m 0755 /tmp/standard-user-code
+          git archive HEAD | sudo tar -x -C /tmp/standard-user-code
+          cd /tmp/standard-user-code
+          sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m engine.verification.walls | tee "$GITHUB_WORKSPACE/walls.json"
           sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
           sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m unittest discover -s tests -p 'test_refusals.py' -v
           sudo /usr/local/libexec/standard-cgroup-run standard-agent env "STANDARD_COMPONENTS=$STANDARD_COMPONENTS" "PATH=$PATH" python -m unittest discover -s tests -p 'test_gateway.py' -v
@@ -53,7 +56,7 @@ jobs:
       - name: walls and bac tests as root, with control groups
         if: matrix.as == 'root'
         run: |
-          sudo -E env "PATH=$PATH" python -m engine.verification.walls | tee walls.json
+          sudo -E env "PATH=$PATH" python -m engine.verification.walls | tee "$GITHUB_WORKSPACE/walls.json"
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_refusals.py' -v
           sudo -E env "PATH=$PATH" python -m tools.platform_walls
@@ -61,7 +64,7 @@ jobs:
         if: matrix.as == 'gvisor'
         run: |
           sudo -E env "PATH=$PATH" python -c "from fabric.runtime.bac import Bac; b = Bac(); print(b.runtime, b.why); assert b.ready and b.runtime.endswith('runsc')"
-          sudo -E env "PATH=$PATH" python -m engine.verification.walls | tee walls.json
+          sudo -E env "PATH=$PATH" python -m engine.verification.walls | tee "$GITHUB_WORKSPACE/walls.json"
           sudo -E env "PATH=$PATH" python -m unittest discover -s tests -p 'test_enclosure.py' -v
       - name: every measured wall holds
         run: |

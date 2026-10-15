@@ -72,7 +72,8 @@ print(json.dumps(r))
 """
 
 
-def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[Bac] = Bac) -> dict[str, str]:
+def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[Bac] = Bac,
+            diagnostics: list | None = None) -> dict[str, str]:
     """One run inside the bac with these walls, and one deliberately overlong run for the time wall."""
     bac = kind(walls, python=python)
     result = {wall: "unmeasured" for wall in WALLS}
@@ -91,6 +92,9 @@ def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[
             inside = json.loads(ran.out.strip().splitlines()[-1])
         except (ValueError, IndexError):
             inside = {}
+            if diagnostics is not None:
+                diagnostics.append({"runtime": Path(bac.runtime).name, "code": ran.code,
+                                    "probe_error": ran.out[-2000:]})
         result.update({wall: inside[wall] for wall in inside if wall in result and inside[wall] in ("held", "broken")})
         if not bac.groups:
             result["cgroups"] = "absent"
@@ -105,4 +109,7 @@ def measure(walls: Walls = Walls(), *, python: str = sys.executable, kind: type[
 
 
 if __name__ == "__main__":
-    print(json.dumps(measure(), indent=2))
+    diagnostics = []
+    print(json.dumps(measure(diagnostics=diagnostics), indent=2))
+    if diagnostics:
+        print(json.dumps({"fixture_diagnostics": diagnostics}), file=sys.stderr)
