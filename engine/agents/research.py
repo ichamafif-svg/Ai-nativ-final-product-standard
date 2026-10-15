@@ -71,11 +71,17 @@ class Research:
         if not isinstance(source, str) or source not in self.sources:
             raise ResearchError("source is not configured by the operator")
         host = urllib.parse.urlsplit(self.sources[source]).hostname
+        transport = None
+        if self.gate is not None and hasattr(self.gate, "tiers"):
+            routes = {p.egress for p in self.gate.tiers.values()}
+            if len(routes) == 1 and None not in routes:
+                from engine.agents.llm import platform_transport
+                transport = platform_transport(*next(iter(routes)))
         try:
             response = request("GET", source, endpoints=self.sources,
                                values=Values({"destinations": [host], "outbound_timeout_s": 10,
                                               "outbound_max_bytes": 1_000_000}),
-                               headers={"User-Agent": "standard-research"})
+                               headers={"User-Agent": "standard-research"}, transport=transport)
         except (httpx.HTTPError, ValueError) as exc:
             raise ResearchError(f"research source refused: {type(exc).__name__}") from None
         return response.content.decode(errors="replace")[:20000]

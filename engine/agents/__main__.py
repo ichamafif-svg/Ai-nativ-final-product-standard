@@ -75,7 +75,8 @@ def build(config_path):
                   review=agent_cfg.get("review"), research_steps=agent_cfg.get("research_steps", 8))
     routes = installed_routes(agent.scopes, model=agent.llm is not None, scanner=True)
     repairer = Repairer(service, WorkEngine(store.parent / "work.db"), agent, routes, clock=clock,
-                        state_path=store.parent / "proposals.json", findings=path.parent / "findings.json",
+                        state_path=store.parent / "proposals.json",
+                        findings=resolve(agent_cfg.get("public_context", ".")) / "findings.json",
                         memory=Memory(store.parent / "memory.json", budget=int(agent_cfg.get("attempts", 3))))
     grant = c["grants"]["agent"]
     producers = [repairer]
@@ -92,8 +93,8 @@ def build(config_path):
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) < 2 or argv[0] not in ("run", "patrol", "patrol-results", "acceptance"):
-        print("usage: python -m engine.agents (run|patrol|patrol-results) standard.toml [interval-seconds|focus]\n"
+    if len(argv) < 2 or argv[0] not in ("run", "once", "patrol", "patrol-results", "acceptance"):
+        print("usage: python -m engine.agents (run|once|patrol|patrol-results) standard.toml [interval-seconds|focus]\n"
               "       python -m engine.agents acceptance standard.toml SPECIFICATION_FILE [DRAFT_OUT]")
         return 2
     loop, repairer, main_, refresh = build(argv[1])
@@ -136,6 +137,8 @@ def main(argv=None) -> int:
         except Exception as exc:
             report = {"blocked": f"{type(exc).__name__}: {exc}"}
         print(json.dumps({"at": int(time.time() * 1000), **report}, default=str), flush=True)
+        if argv[0] == "once":
+            return 0 if "blocked" not in report else 1
         time.sleep(interval)
 
 

@@ -74,6 +74,8 @@ def init(args) -> None:
     d = Path(args.dir).resolve()
     (d / "keys").mkdir(parents=True)
     os.chmod(d / "keys", 0o700)
+    (d / "admission").mkdir(mode=0o750)
+    (d / "public" / "requests").mkdir(parents=True, mode=0o750)
     (d / "agent").mkdir()                                  # U's own directory: its key, its store, its notes
     signers = {i: new_key(d / ("agent" if i == "agent" else "keys") / f"{i}.key") for i in IDENTITIES}
     assessor = new_key(d / "keys" / "assessor.key")
@@ -150,11 +152,12 @@ path = "assessment.json"
 assessors = {{ operator = "{assessor_public}" }}
 
 [socket]
-path = "admission.sock"
+path = "admission/gateway.sock"
 
 [agent]
 key = "agent/agent.key"
 store = "agent/store"
+public_context = "public"
 {data_section}''')
     print(f"constituted {d}: genesis {domain}, capabilities in force: {', '.join(grants)}")
 

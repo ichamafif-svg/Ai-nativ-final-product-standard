@@ -222,7 +222,13 @@ Un scénario owner-only ne démontre pas toute la règle TENANT.
 
 La capture des logs, les empreintes et les checkpoints apportent des contrôles locaux. Ils ne démontrent pas
 une rétention indépendante face au root de cet hôte. K, BT et le second juge partagent encore un processus.
-Le processus de l'agent lui-même reste sur l'hôte ; ses candidats sont confinés. Le déploiement laboratoire
+Le service agent du laboratoire passe par `engine.agents.enclosed` : bubblewrap crée une racine de fichiers
+limitée, des namespaces PID/réseau/IPC/UTS et retire les capacités. Seuls l'état agent en écriture, le dépôt
+local en lecture, la configuration et le répertoire du socket d'admission sont exposés. Les plafonds UID
+finis restent sous propriété root ; les bacs OCI imbriqués conservent leur propre isolation.
+Les appels de modèles utilisent un relais loopback vers le socket public du proxy, sans clé fournisseur.
+La CLI directe `engine.agents run` reste une exécution non enfermée ; elle n'est pas le service installé.
+Le parcours Git distant n'est pas ouvert dans cette enclosure. Les autorités sur l'hôte restent partagées. Le déploiement laboratoire
 conserve un humain auto-évalué sur le même hôte et ne constitue pas une installation de production qualifiée.
 
 ## 9. Intégrité, distribution et récupération

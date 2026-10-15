@@ -44,18 +44,19 @@ git_source() {
 }
 
 unit() {
-  local name="$1" user="$2" command="$3" stop_control=""
+  local name="$1" user="$2" command="$3" stop_control="" dependency=""
   if [ "$name" = standard-agent ]; then
     # The fixed launcher places this process outside the service's initial cgroup.
     # Signal its main process, then let root kill the complete bounded UID subtree.
+    dependency="standard-operator.service"
     stop_control="KillMode=process
 ExecStopPost=+/bin/sh -c 'echo 1 > /sys/fs/cgroup/standard-bac/$(id -u standard-agent)/cgroup.kill'"
   fi
   cat > "/etc/systemd/system/$name.service" <<EOF
 [Unit]
 Description=Standard laboratory $name
-After=network-online.target standard-cgroups.service
-Requires=standard-cgroups.service
+After=network-online.target standard-cgroups.service $dependency
+Requires=standard-cgroups.service $dependency
 
 [Service]
 User=$user
@@ -169,7 +170,7 @@ EOF
   done
 
   unit standard-operator standard-guard "$PY -m fabric.control.runtime serve $ROOT/install/standard.toml 30"
-  unit standard-agent standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent $PY -m engine.agents run $ROOT/install/standard.toml 60"
+  unit standard-agent standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent $PY -m engine.agents.enclosed launch $ROOT/install/standard.toml 60"
   unit standard-web standard-web "$PY -m interface.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
   systemctl enable --now standard-cgroups

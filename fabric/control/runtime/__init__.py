@@ -6,7 +6,7 @@ from fabric.control.bt.release import CORE, code_digest as source_digest
 # The dependency closure is part of the release: cryptography verifies every signature K and T admit (T01, D49).
 # The rule catalog is too: the scanner measures the product against it, so changing a rule changes the release; and so
 # are the building blocks products install: a block is pinned with the rules it holds.
-SOURCES = (*CORE, "tools/cgroup_setup.sh", "tools/install_server.sh", "engine/__init__.py", "engine/catalog/floors.py", "fabric/control/runtime", "requirements.hashes",
+SOURCES = (*CORE, "tools/cgroup_setup.sh", "tools/install_server.sh", "engine/__init__.py", "engine/agents/enclosed.py", "engine/catalog/floors.py", "fabric/control/runtime", "requirements.hashes",
            "engine/catalog", "blocks/python/standard_blocks", "blocks/js/front.mjs", "fabric")
 CATALOG_DATA = ("asvs.toml", "blocks.toml", "maintenance.toml", "policy.toml", "values.toml", "vocabulary.toml", "LICENSE.md")
 
