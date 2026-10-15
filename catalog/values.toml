@@ -201,3 +201,30 @@ way = "less"
 type = "text"
 doc = "the product's ASGI application, module:attribute (e.g. shop.main:app), which Standard's probes start in-process; or, for a product Standard cannot import (Next.js), the URL where it runs (e.g. http://127.0.0.1:3000 in CI), probed over HTTP only. No default: until it is set, every probe of the running app is a coverage debt."
 way = "less"
+
+# Business intent (D70): what only the product's owner knows. Declared, it can be probed; undeclared, it stays with
+# the patrol. The agent may draft these; the human signs them.
+
+[limited]
+type = "list"
+doc = "resources a check-then-act must never exceed under concurrent requests (seats, stock, balance), as route ids."
+default = []
+way = "more"
+
+[field_rules]
+type = "map"
+doc = "model -> conditions its fields must satisfy together (for example 'start <= end')."
+default = {}
+way = "more"
+
+[field_uses]
+type = "map"
+doc = "route id -> the fields its caller needs in the response; nothing else is returned."
+default = {}
+way = "less"
+
+[operations]
+type = "map"
+doc = "business operation -> the routes or steps that commit together or not at all."
+default = {}
+way = "more"

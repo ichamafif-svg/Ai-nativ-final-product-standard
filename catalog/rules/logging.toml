@@ -71,12 +71,13 @@ do = "Ship logs to a separate system the product cannot modify."
 never = "Logs only on the application host, writable by the application."
 applies = []
 when = []
-who = ["human", "det"]
+who = ["human"]
 block = "log"
 absorb = "partial"
 held_by = "platform:logs"
 phase = "run"
 check = ["human"]
+planned = ["probe:log-append-only"]
 asvs = ["16.4.2", "16.4.3"]
 cwe = ["779"]
 

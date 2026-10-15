@@ -21,7 +21,7 @@ py_no = '''data = await request.json(); amount = data["amount"]'''
 
 [[rule]]
 id = "VALIDATE-COMBO"
-do = "Check fields that depend on each other together, in the model's validator."
+do = "Check fields that depend on each other together (@field_rules), in the model's validator."
 never = "Accept each field alone when their combination can be wrong (end before start, city outside its country)."
 applies = ["api"]
 when = ["construct:request-body"]
@@ -31,6 +31,8 @@ absorb = "none"
 held_by = "code"
 phase = "build"
 check = ["patrol"]
+planned = ["probe:invalid-combinations"]
+values = ["field_rules"]
 asvs = ["2.2.3"]
 cwe = ["20"]
 py_ok = '''@model_validator(mode="after")
@@ -72,7 +74,7 @@ cwe = ["770"]
 
 [[rule]]
 id = "TRANSACTION"
-do = "Run each business operation in one transaction: it commits whole or rolls back whole."
+do = "Run each business operation (@operations) in one transaction: it commits whole or rolls back whole."
 never = "Two writes of one operation in separate commits; a side effect (mail, payment) before the commit."
 applies = ["database"]
 when = ["construct:sql-call", "construct:lock"]
@@ -82,6 +84,8 @@ absorb = "none"
 held_by = "code"
 phase = "build"
 check = ["patrol"]
+planned = ["probe:interrupted-operation"]
+values = ["operations"]
 asvs = ["2.3.3"]
 cwe = ["662"]
 py_ok = '''with session.begin():
@@ -90,7 +94,7 @@ py_no = '''debit(a); session.commit(); credit(b); session.commit()'''
 
 [[rule]]
 id = "LOCKING"
-do = "Lock or use a conditional update when you check then act on a limited resource (seats, stock, balance)."
+do = "Lock or use a conditional update when you check then act on a limited resource (@limited: seats, stock, balance)."
 never = "Read, check in Python, then write: two requests pass the same check."
 applies = ["database"]
 when = ["construct:sql-call", "construct:lock"]
@@ -100,6 +104,8 @@ absorb = "none"
 held_by = "code"
 phase = "build"
 check = ["patrol"]
+planned = ["probe:limited-race"]
+values = ["limited"]
 asvs = ["2.3.4", "15.4.2"]
 cwe = ["362", "367"]
 py_ok = '''session.execute(update(Seat).where(Seat.id == sid, Seat.taken.is_(False)).values(taken=True))'''

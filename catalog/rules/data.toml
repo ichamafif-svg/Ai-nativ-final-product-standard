@@ -2,7 +2,7 @@ category = "Data protection"
 
 [[rule]]
 id = "DATA-MIN"
-do = "Return and process only the fields the caller needs: one response model per use, never the stored object."
+do = "Return and process only the fields the caller needs (@field_uses): one response model per use, never the stored object."
 never = "return user; select * sent to the client."
 applies = ["api"]
 when = ["construct:response-model"]
@@ -11,8 +11,9 @@ block = ""
 absorb = "none"
 held_by = "code"
 phase = "build"
-values = ["sensitive"]
+values = ["sensitive", "field_uses"]
 check = ["patrol"]
+planned = ["probe:field-uses"]
 asvs = ["11.7.2", "14.2.6", "15.3.1"]
 cwe = ["200", "213"]
 py_ok = '''class OrderOut(Output):

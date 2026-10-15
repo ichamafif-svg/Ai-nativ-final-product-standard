@@ -37,7 +37,8 @@ REQUIRED = {"id": str, "do": str, "applies": list, "when": list, "who": list, "b
 # until their step of D68 ships; until then the rule's block still holds it.
 HELD_BY = re.compile(r"platform:(ingress|identity|egress|secrets|keys|data|resources|logs|files)"
                      r"|code(:(access|render|front))?|idp|release")
-OPTIONAL = {"never": str, "values": list, "wire": list, "team_only": bool, **{k: str for k in EXAMPLES}}
+OPTIONAL = {"never": str, "values": list, "wire": list, "team_only": bool, "planned": list,
+            **{k: str for k in EXAMPLES}}
 CHECK = re.compile(r"blocks|patrol|human|mypy|fact:[a-z_]+|probe:[a-z0-9-]+|test:[a-z0-9-]+|bandit:B\d{3}"
                    r"|semgrep:standard\.[a-z0-9-]+")
 BAN = re.compile(r"(import|call|builtin|attr-set|js-word):[\w.*$]+(:[\w.]+)?"
@@ -132,6 +133,12 @@ def validate(cat: dict) -> None:
                 raise CatalogError(f"{rid}: no block declares probe {c[6:]}")
             if c == "patrol" and "ai" not in r["who"] or c == "human" and "human" not in r["who"]:
                 raise CatalogError(f"{rid}: check {c} without {c == 'patrol' and 'ai' or 'human'} in who")
+        deterministic = [c for c in r["check"] if c not in ("patrol", "human")]
+        if ("det" in r["who"]) != bool(deterministic):
+            raise CatalogError(f"{rid}: who says det exactly when a deterministic check exists")
+        for c in r.get("planned", []):
+            if not (c.startswith("probe:") and CHECK.fullmatch(c)) or c in r["check"]:
+                raise CatalogError(f"{rid}: planned names a probe still to build, not a check already in place")
         if r.get("team_only") and r["who"] != ["human"]:
             raise CatalogError(f"{rid}: a team-only rule is the humans' to check")
         for a in r["asvs"]:

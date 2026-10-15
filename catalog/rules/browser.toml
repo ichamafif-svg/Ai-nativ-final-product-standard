@@ -118,9 +118,10 @@ when = []
 who = ["human"]
 block = ""
 absorb = "none"
-held_by = "code"
+held_by = "platform:ingress"
 phase = "run"
 check = ["human"]
+planned = ["probe:origin-split"]
 asvs = ["3.5.4"]
 cwe = []
 

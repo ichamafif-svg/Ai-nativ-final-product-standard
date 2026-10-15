@@ -77,7 +77,7 @@ cwe = ["235"]
 
 [[rule]]
 id = "CONCURRENCY"
-do = "Guard shared state with one lock order, timeouts on waits, and bounded pools."
+do = "Guard shared state (@limited first) with one lock order, timeouts on waits, and bounded pools."
 never = "Two locks taken in different orders; a wait without timeout; an unbounded thread pool."
 applies = ["concurrency"]
 when = ["construct:thread", "construct:lock"]
@@ -87,5 +87,7 @@ absorb = "none"
 held_by = "code"
 phase = "build"
 check = ["patrol"]
+planned = ["probe:limited-race"]
+values = ["limited"]
 asvs = ["15.4.1", "15.4.3", "15.4.4"]
 cwe = ["362", "833"]

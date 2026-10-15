@@ -44,6 +44,7 @@ def _sources(rule: dict) -> dict:
         if holder in WALLED:
             out["build"].append("wall")
         out["run"].append("wall" if holder in RUNNING else "wall (planned)")
+    out["admission"] += [f"{c} (planned)" for c in rule.get("planned", [])]
     for kind in ("patrol", "human"):
         if kind in checks:
             out["admission" if kind == "human" else "build"].append(kind)

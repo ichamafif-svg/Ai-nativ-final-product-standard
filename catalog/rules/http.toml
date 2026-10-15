@@ -57,10 +57,11 @@ when = ["surface:endpoint"]
 who = ["human", "ai"]
 block = ""
 absorb = "none"
-held_by = "code"
+held_by = "platform:ingress"
 phase = "build"
 values = ["high_value"]
 check = ["human", "patrol"]
+planned = ["probe:message-signature"]
 asvs = ["4.1.5"]
 cwe = ["345"]
 
