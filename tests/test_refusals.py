@@ -30,6 +30,15 @@ class Reading(unittest.TestCase):
         self.assertEqual(read(Ran(1, "ValueError: bad input\n"), MAP, during="tests"), [])
         self.assertEqual(read(Ran(0, "4 passed\n"), MAP, during="tests"), [])
 
+    def test_the_stack_names_the_candidates_own_lines_never_libraries(self):
+        out = ('Traceback (most recent call last):\n'
+               '  File "/work/tree/app.py", line 7, in add\n'
+               '  File "/usr/lib/python3.13/socket.py", line 864, in create_connection\n'
+               '  File "/work/tree/.venv/lib/site-packages/x.py", line 3, in y\n'
+               'OSError: [Errno 101] Network is unreachable\n')
+        [lesson] = read(Ran(1, out), MAP, during="tests", root="/work/tree")
+        self.assertEqual(lesson["stack"], ["app.py:7"])
+
     def test_a_record_never_says_more_than_the_map(self):
         out = "OSError: [Errno 30] Read-only file system: '/work/x'\nMemoryError\nFile too large"
         text = json.dumps(read(Ran(1, out), MAP, during="tests"))

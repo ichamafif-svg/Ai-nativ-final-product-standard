@@ -22,6 +22,12 @@ def _doc(node) -> str:
     return doc.strip().splitlines()[0][:100] if doc.strip() else ""
 
 
+def _is_test(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return (path.startswith("tests/") or "/tests/" in path or name.startswith("test_") or name.endswith("_test.py")
+            or ".test." in name or ".spec." in name)
+
+
 class RepoMap:
     def __init__(self, tree):
         """tree: anything with paths() and read(path) -> bytes (a Snapshot)."""
@@ -61,6 +67,27 @@ class RepoMap:
                     name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
                     if name:
                         self.calls[name].add(path)
+
+    def reading(self, focus) -> dict:
+        """Before coding (D70): for each file the task touches, its definitions with the code and the tests that use
+        them, and the definitions of its neighbours (same directory) to reuse rather than rewrite."""
+        out = {}
+        for path in sorted(set(focus) & set(self.modules)):
+            touched = {}
+            for d in self.modules[path]:
+                if not d.startswith(("def ", "class ")):
+                    continue
+                name = d.split()[1].split("(")[0].rstrip(":")
+                users = [u for u in self.callers(name) if u != path]
+                touched[d] = {"tests": [u for u in users if _is_test(u)],
+                              "code": [u for u in users if not _is_test(u)]}
+            folder = path.rsplit("/", 1)[0] if "/" in path else ""
+            neighbours = {p: self.modules[p] for p in sorted(self.modules)
+                          if p != path and not _is_test(p) and (p.rsplit("/", 1)[0] if "/" in p else "") == folder
+                          and p not in focus}
+            out[path] = {"definitions": touched, "reuse": neighbours,
+                         "untested": sorted(d for d, u in touched.items() if not u["tests"])}
+        return out
 
     def callers(self, name: str) -> list:
         return sorted(self.calls.get(name, ()))

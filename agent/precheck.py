@@ -95,6 +95,15 @@ def environment(sandbox: Sandbox, requirements: Path, cache) -> str:
     return str(python)
 
 
+def _observer(scratch: Path) -> Path:
+    """Standard's read-only observer (sitecustomize), copied into the run's scratch so the bac may mount it."""
+    import shutil
+    target = scratch / "observe"
+    target.mkdir(exist_ok=True)
+    shutil.copy(Path(__file__).resolve().parents[1] / "enclosure" / "observe" / "sitecustomize.py", target)
+    return target
+
+
 def _capabilities(sandbox) -> dict:
     bac = getattr(sandbox, "bac", None)
     return capability_map(bac.walls, groups=bac.groups) if bac is not None else capability_map()
@@ -123,11 +132,13 @@ def suite(sandbox: Sandbox, store, base: str, head: str, cache=None, *, refusals
             return "uncovered", [str(exc)]
         report = Path(tempfile.mkdtemp()) / "report.xml"
         (report.parent / "pytest.ini").write_text("[pytest]\n")
+        observer = _observer(report.parent)
         result = sandbox.run([python, "-m", "pytest", "-c", report.parent / "pytest.ini", "--rootdir", code, "-p",
-                     "no:cacheprovider", "-q", "-rA", f"--junitxml={report}", main_tree / "tests"], code, pythonpath=code,
+                     "no:cacheprovider", "-q", "-rA", f"--junitxml={report}", main_tree / "tests"], code,
+                             pythonpath=f"{code}:{observer}",
                              readable=(main_tree, *([Path(cache)] if cache else [])), writable=(report.parent,))
         if refusals is not None:
-            refusals += read_refusals(result, _capabilities(sandbox), during="main's tests")
+            refusals += read_refusals(result, _capabilities(sandbox), during="main's tests", root=code)
         if not report.exists():
             return "uncovered", ["the suite produced no report"]
         try:
@@ -218,7 +229,7 @@ def precheck(
                 problems.append(f"the contract does not pass yet ({accepted}):\n{result.out[-3000:]}")
                 items.append(item("lesson", "acceptance", "build", where="the acceptance contract",
                                   attempt=f"{accepted}: {result.out[-200:]}"))
-            lessons = read_refusals(result, _capabilities(sandbox), during="the acceptance contract")
+            lessons = read_refusals(result, _capabilities(sandbox), during="the acceptance contract", root=code)
     else:
         lessons = []
     status, failures = suite(sandbox, store, base, head, cache, refusals=lessons)
@@ -228,8 +239,9 @@ def precheck(
         suite(sandbox, store, base, base, cache, refusals=before_lessons)
         known = {lesson["capability"] for lesson in before_lessons}
         new = sorted({lesson["capability"] for lesson in lessons} - known)
-        items += [item("lesson", "wall", "build", rules=_rules_held(lesson["held_by"]), where=lesson["capability"],
-                       attempt=lesson["attempt"], new=lesson["capability"] in new, available=str(lesson["available"]),
+        items += [item("lesson", "wall", "build", rules=_rules_held(lesson["held_by"]),
+                       where=" <- ".join(reversed(lesson["stack"])) or lesson["capability"],
+                       attempt=f"{lesson['capability']}: {lesson['attempt']}", new=lesson["capability"] in new, available=str(lesson["available"]),
                        instead=lesson["instead"], ask=lesson["ask"]) for lesson in lessons]
         if new:
             told = "\n".join(f"- {lesson['capability']} (held by {lesson['held_by']}): tried `{lesson['attempt']}`; "

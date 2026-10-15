@@ -227,7 +227,11 @@ def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=()
     if hasattr(tree, "paths"):
         paths = sorted(tree.paths())
         focus = sorted(set(focus) & set(paths))
-        add("repository", {"files": len(paths), "focus": focus, "map": RepoMap(tree).render(limit=4000, focus=focus)})
+        repo = RepoMap(tree)
+        if focus:
+            # D70: what the task touches, the tests that cover it, and what already exists nearby to reuse.
+            add("before_coding", repo.reading(focus))
+        add("repository", {"files": len(paths), "focus": focus, "map": repo.render(limit=4000, focus=focus)})
         for path in focus[:4]:
             if getattr(tree, "entries", {}).get(path, ("",))[0] == "120000":
                 continue

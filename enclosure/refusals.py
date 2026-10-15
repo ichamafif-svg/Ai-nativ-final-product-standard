@@ -14,6 +14,7 @@ refused system calls), never the candidate's output. An error this reader does n
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from enclosure.bac import TIMED_OUT, Ran
 
@@ -38,6 +39,10 @@ WALLS = {
         "make the slow step bounded or faster; a run is stopped at the time limit"),
 }
 FROM_KERNEL = {"memory": "limits.memory_mb", "processes": "limits.processes"}
+# Python tracebacks, pytest's short frames and Node's stack lines: where in the candidate's own code a call started.
+FRAMES = (re.compile(r'File "(?P<path>[^"]+)", line (?P<line>\d+)'),
+          re.compile(r"^(?P<path>[\w./-]+\.py):(?P<line>\d+): in "),
+          re.compile(r"\((?P<path>/[^():]+\.[cm]?[jt]sx?):(?P<line>\d+):\d+\)"))
 
 
 def _available(capability: str, capabilities: dict):
@@ -46,19 +51,51 @@ def _available(capability: str, capabilities: dict):
     return value.get(key) if key and isinstance(value, dict) else value
 
 
-def read(ran: Ran, capabilities: dict, *, during: str) -> list[dict]:
-    """The lessons of one run, at most one per capability, in a stable order."""
+def _own(path: str, root: Path | None) -> str | None:
+    """A frame in the candidate's own checkout, relative to it; None for libraries and the interpreter."""
+    if root is None:
+        return None
+    p = Path(path)
+    if not p.is_absolute():
+        return None if "site-packages" in path or path.startswith("<") else path
+    try:
+        rel = p.relative_to(root)
+    except ValueError:
+        return None
+    return None if "site-packages" in rel.parts or "node_modules" in rel.parts else str(rel)
+
+
+def read(ran: Ran, capabilities: dict, *, during: str, root=None) -> list[dict]:
+    """The lessons of one run, at most one per capability, in a stable order.
+
+    With `root` (the checkout the run used), each lesson read from the output also carries `stack`: the frames of
+    the candidate's own code that led to it, innermost last, as `path:line` relative to the checkout."""
+    root = Path(root).resolve() if root is not None else None
     found: dict[str, str] = {}
+    stacks: dict[str, list] = {}
+    frames: list = []
     for kernel_limit in ran.limited or ():
         if kernel_limit in FROM_KERNEL:
             found.setdefault(FROM_KERNEL[kernel_limit], "the kernel enforced this limit on the run")
     if ran.code == TIMED_OUT:
         found.setdefault("limits.time_s", "the run reached the time limit and was stopped")
     for line in ran.out.splitlines():
+        for frame in FRAMES:
+            m = frame.search(line)
+            if m:
+                own = _own(m.group("path"), root)
+                if own:
+                    frames.append(f"{own}:{m.group('line')}")
+                break
+        if not line.strip() or line.startswith(("Traceback", "____", "====")):
+            frames = [] if line.startswith(("____", "====")) else frames
         for capability, (_, pattern, _) in WALLS.items():
-            if pattern is not None and capability not in found and pattern.search(line):
-                found[capability] = line.strip()[:240]
+            if pattern is not None and pattern.search(line) and (
+                    capability not in found or (not stacks.get(capability) and frames)):
+                found[capability] = line.strip()[:240]      # a line with its stack beats one without
+                stacks[capability] = frames[-3:]
     return [{"kind": "lesson", "during": during, "capability": capability, "held_by": WALLS[capability][0],
-             "attempt": found[capability], "available": _available(capability, capabilities),
+             "attempt": found[capability], "stack": stacks.get(capability, []),
+             "available": _available(capability, capabilities),
              "instead": WALLS[capability][2], "ask": capabilities.get("ask")}
             for capability in WALLS if capability in found]

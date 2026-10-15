@@ -75,7 +75,8 @@ class Builder:
         context = context or {"task": {"id": f"request:{rid}", "need": "implement", "resource": f"build:request/{rid}"}}
         scope = write_scope("build", rid)
         documents = {"specification": spec.decode(errors="replace"), "acceptance": contract.decode(errors="replace")}
-        for _ in range(self.iterations):
+        from agent.attempts import record as record_attempt
+        for attempt in range(1, self.iterations + 1):
             prompt = (f"Implement a feature request in this repository.\nRequest {rid}: {title}\n\n"
                       f"Specification preview (read full ref=document/specification):\n{documents['specification'][:1200]}\n\n"
                       f"Its acceptance tests, signed by the product owner (they will be added as "
@@ -119,8 +120,10 @@ class Builder:
             head = commit_files(self.store, base, blobs, message)
             problems = self.check(base, head, rid, targets)
             if not problems:
+                record_attempt(self.store.parent / "attempts.jsonl", "build", rid, attempt, True)
                 return head
             feedback = "\n".join(problems)[:5000]
+        record_attempt(self.store.parent / "attempts.jsonl", "build", rid, self.iterations, False)
         raise AgentError(f"no implementation of {rid} passed the agent's checks: {feedback[:1500]}")
 
     # ---- the pass ---------------------------------------------------------------------------------------------------

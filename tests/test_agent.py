@@ -159,7 +159,10 @@ class WholeLaw(unittest.TestCase):
         for word in ("seccomp", "namespace", "netns", "cgroup"):
             self.assertNotIn(word, json.dumps(lesson))
         wall = [e for e in check["feedback"]["agent"] if e["source"] == "wall"]
-        self.assertEqual([e["where"] for e in wall], ["network.outbound"])
+        self.assertEqual(len(wall), 1)
+        self.assertTrue(wall[0]["attempt"].startswith("network.outbound"), wall)
+        self.assertIn("app.py:", wall[0]["where"])                   # the line of the agent's own code
+        self.assertTrue(any(f.startswith("app.py:") for f in lesson["stack"]), lesson)
         self.assertIn("SSRF", wall[0]["rules"])
         self.assertIn("instead:", check["feedback_text"])
 

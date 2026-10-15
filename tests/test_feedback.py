@@ -75,3 +75,65 @@ class Filter(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Tree:
+    def __init__(self, files):
+        self.files = {p: c.encode() for p, c in files.items()}
+
+    def paths(self):
+        return list(self.files)
+
+    def read(self, path):
+        return self.files[path]
+
+
+class BeforeCoding(unittest.TestCase):
+    TREE = Tree({"app/billing.py": "def charge(a):\n    return a\n\n\ndef refund(a):\n    return -a\n",
+                 "app/tax.py": "def vat(a):\n    '''Value added tax.'''\n    return a * 0.2\n",
+                 "app/api.py": "from app.billing import charge\n\n\ndef pay(x):\n    return charge(x)\n",
+                 "tests/test_billing.py": "from app.billing import charge\n\n\ndef test_charge():\n"
+                                          "    assert charge(1) == 1\n"})
+
+    def test_touched_definitions_come_with_their_tests_callers_and_neighbours(self):
+        from context.repository import RepoMap
+        reading = RepoMap(self.TREE).reading(["app/billing.py"])["app/billing.py"]
+        charge = reading["definitions"]["def charge(a)"]
+        self.assertEqual(charge, {"tests": ["tests/test_billing.py"], "code": ["app/api.py"]})
+        self.assertEqual(reading["untested"], ["def refund(a)"])
+        self.assertIn("app/tax.py", reading["reuse"])
+        self.assertNotIn("tests/test_billing.py", reading["reuse"])
+
+    def test_the_mission_carries_it_before_coding(self):
+        from context.missions import assemble
+        packet = json.loads(assemble({}, self.TREE, role="build", focus=["app/billing.py"])[0])["packet"]
+        self.assertIn("app/billing.py", packet["before_coding"])
+
+
+class Views(unittest.TestCase):
+    def test_the_matrix_and_the_first_pass_rate_are_shown_to_people(self):
+        import tempfile
+        from agent.attempts import first_pass, record
+        from surface.cli import matrix_text
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "attempts.jsonl")
+            record(path, "repair", "secrets", 1, True)
+            record(path, "repair", "deps", 2, True)
+            record(path, "build", "r1", 2, False)
+            self.assertEqual(first_pass(path), {"tasks": 3, "passed": 2, "first_attempt": 1, "rate": 0.333})
+            text = matrix_text(attempts=path)
+        self.assertIn("review only (17)", text)
+        self.assertIn("first-attempt passes: 1 of 3", text)
+        self.assertIn("held by platform:egress", matrix_text("SSRF"))
+
+
+class Admission(unittest.TestCase):
+    def test_a_refutation_reaches_the_agent_as_facts_tied_to_rules(self):
+        from agent.repair import admission_feedback
+        resource = "repo:code:x/b/h"
+        findings = {f"{resource}|blocks": {"details": ["SSRF: app.py:3:call:requests.get"]},
+                    f"{resource}|tests": {"details": ["test_app::test_add failed"]}}
+        text = admission_feedback(findings, resource)
+        self.assertIn("[admission:blocks] rules SSRF", text)
+        self.assertIn("[admission:tests]", text)
+        self.assertLess(text.index("admission:blocks"), text.index("admission:tests"))

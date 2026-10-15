@@ -13,6 +13,7 @@ that still contains the mark is refused.
 """
 
 from __future__ import annotations
+import re
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,19 @@ def dossier(target: dict, status: str, details: list, files: list, check: dict, 
             f"These are the agent's own checks: the independent instruments measure this commit again.\n"
             + (f"\nRisks: {risks[:1500]}\n" if risks else "")
             + f"\nStandard-Target: {target['id']}\n")
+
+
+def admission_feedback(findings: dict, resource: str) -> str:
+    """D70: the scanner's refutation at admission reaches the agent through the same dossier, as facts tied to the
+    catalog rules its details name."""
+    from catalog import load as load_catalog
+    from context.feedback import item, render, route
+    known = {r["id"] for r in load_catalog()["rules"]}
+    items = [item("lesson", f"admission:{prop}", "admission", trust="fact", where=prop, attempt=str(d),
+                  rules=[rid for rid in re.findall(r"\b([A-Z][A-Z0-9]+(?:-[A-Z0-9]+)*):", str(d)) if rid in known])
+             for prop in ("tests", "regressions", "scoped", "blocks")
+             for d in findings.get(f"{resource}|{prop}", {}).get("details", [])[:3]]
+    return render(route(items))
 
 
 class Agent:
@@ -134,7 +148,8 @@ class Agent:
             upgrades = json.dumps({n: {k: v for k, v in p.items() if k in ("latest", "changelog", "releases", "license")}
                                    for n, p in self.data.packages.items()}, indent=1)[:6000]
         where = "\n".join(d[:400] for d in finding["details"][:20]) or "(none published)"
-        for _ in range(self.iterations):
+        from agent.attempts import record as record_attempt
+        for attempt in range(1, self.iterations + 1):
             instruction = task_of(target_id) or "Serve the client requirement within the write scope the rules give it."
             prompt = (f"Repository maintenance. Target `{target_id}`.\nTask: {instruction}\n"
                       f"Requirement: {target['resource']} must have {target['property']} = {target['expect']}; "
@@ -177,8 +192,10 @@ class Agent:
                                   str(reply.get("risks", "")))
                 head = self._commit(base, encoded, message)
                 self.publish(head)
+                record_attempt(self.store.parent / "attempts.jsonl", "repair", target_id, attempt, True)
                 return head, "model"
             feedback = (check.get("feedback_text") or "\n".join(check["problems"]))[:4000]
+        record_attempt(self.store.parent / "attempts.jsonl", "repair", target_id, self.iterations, False)
         raise AgentError(f"no candidate for {target_id} passed the agent's precheck: {feedback[:1500]}")
 
 
@@ -366,7 +383,8 @@ class Repairer:
         details = [d for prop in ("tests", "regressions", "scoped", "blocks")
                    for d in findings.get(f"{resource}|{prop}", {}).get("details", [])[:3]]
         rules = explain(details, Rules(view["law"]["effective"]).values())
-        why = "the scanner refuted it: " + ", ".join(move["refuted"]) + (" | " + " | ".join(details) if details else "") \
+        dossier = admission_feedback(findings, resource)
+        why = "the scanner refuted it: " + ", ".join(move["refuted"]) + (f"\n{dossier}" if dossier else "") \
             + (f"\nThe rules behind it:\n{rules}" if rules else "")
         self.memory.record(p["target"], at=now, base=p["base"], head=p["head"], route=p["way"], outcome="judge",
                            why=why[:2000])

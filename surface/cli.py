@@ -163,12 +163,36 @@ def coverage_text(view: dict, findings: dict) -> str:
     return "\n".join(lines)
 
 
+def matrix_text(rule_id=None, attempts=None) -> str:
+    """D70 for people: which sources cover each rule at which moment, its strongest source, and the gaps."""
+    from catalog import load
+    from context.feedback import matrix
+    m = matrix(load())
+    if rule_id:
+        r = m["rules"].get(rule_id.upper())
+        if r is None:
+            return f"no rule {rule_id}"
+        lines = [f"{rule_id.upper()}  held by {r['held_by']}  strongest: {r['strength']}"]
+        lines += [f"  {moment:<10} {', '.join(sources) or '-'}" for moment, sources in r["sources"].items()]
+        return "\n".join(lines)
+    t = m["totals"]
+    lines = [f"156 rules by strongest active source: measured {t['measured']}, wall {t['wall']}, "
+             f"static {t['static']}, review only {t['review']}, none {t['none']}",
+             f"review only ({len(m['review_only'])}): {', '.join(m['review_only'])}",
+             f"walls planned, not yet in force where the product runs: {len(m['planned_walls'])} rules"]
+    if attempts:
+        from agent.attempts import first_pass
+        fp = first_pass(attempts)
+        lines.append(f"first-attempt passes: {fp['first_attempt']} of {fp['tasks']} tasks (rate {fp['rate']})")
+    return "\n".join(lines)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m surface")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("command", choices=("status", "moves", "queue", "tasks", "context", "drift", "patrol",
                                             "read-model", "law", "dossier", "yes", "no", "release", "rules",
-                                            "coverage", "rule"))
+                                            "coverage", "rule", "matrix"))
     parser.add_argument("args", nargs="*")
     parser.add_argument("--identity")
     parser.add_argument("--key")
@@ -180,6 +204,9 @@ def main(argv=None) -> int:
     ref = args.args[0] if args.args else None
     if args.command == "dossier":
         print(dossier(args.repo or ".", ref or "HEAD"))
+        return 0
+    if args.command == "matrix":
+        print(matrix_text(ref, args.memory))
         return 0
     client = GatewayClient(args.socket)
     try:
