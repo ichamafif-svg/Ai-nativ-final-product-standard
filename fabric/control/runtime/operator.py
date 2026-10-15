@@ -374,7 +374,7 @@ class Installation:
         self.instruments = Instruments(
             self.service, Instrument(key(self.keys, "scanner"), grants["scanner"], self.clock), self.host, self.boundary,
             self.repo_path, self.proposals, anchor=repo.get("anchor"), install=c.get("tests", {}).get("install") is True,
-            inbox=resolve(repo["inbox"]) if repo.get("inbox") else None, findings=self.path.parent / "findings.json",
+            inbox=resolve(repo["inbox"]) if repo.get("inbox") else None, findings=resolve(c.get("agent", {}).get("public_context", ".")) / "findings.json",
             sources=sources, production=bool(sources) or deploy is not None,
             registers=self.releases)
         self.prover = Prover(self.service, self.resolve, key(self.keys, "oracle"), grants["oracle"], self.clock)

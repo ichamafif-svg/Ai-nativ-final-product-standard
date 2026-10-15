@@ -222,8 +222,38 @@ Un scénario owner-only ne démontre pas toute la règle TENANT.
 
 La capture des logs, les empreintes et les checkpoints apportent des contrôles locaux. Ils ne démontrent pas
 une rétention indépendante face au root de cet hôte. K, BT et le second juge partagent encore un processus.
-Le processus de l'agent lui-même reste sur l'hôte ; ses candidats sont confinés. Le déploiement laboratoire
+Le service agent du laboratoire passe par `engine.agents.enclosed` : bubblewrap crée une racine de fichiers
+limitée, des namespaces PID/réseau/IPC/UTS et retire les capacités. Seuls l'état agent en écriture, le dépôt
+local en lecture, la configuration et le répertoire du socket d'admission sont exposés. Les plafonds UID
+finis restent sous propriété root ; les bacs OCI imbriqués conservent leur propre isolation.
+Le montage cgroupfs reste unique pour respecter les accès sécurisés de runc ; les permissions natives
+limitent les écritures au sous-arbre délégué. Les tentatives de modifier le plafond parent ou de migrer
+hors de ce domaine sont testées. Cela dépend du DAC de l'hôte, sans indépendance face à root.
+Les appels de modèles utilisent un relais loopback vers le socket public du proxy, sans clé fournisseur.
+La CLI directe `engine.agents run` reste une exécution non enfermée ; elle n'est pas le service installé.
+Le parcours Git distant n'est pas ouvert dans cette enclosure. Les autorités sur l'hôte restent partagées. Le déploiement laboratoire
 conserve un humain auto-évalué sur le même hôte et ne constitue pas une installation de production qualifiée.
+
+### Pouvoirs effectifs dans le laboratoire
+
+| Identité ou domaine | Pouvoirs exposés | Frontière et limite |
+|---|---|---|
+| Agent enfermé | Sa clé, son espace de propositions, lecture du dépôt et du contexte public, admission signée | Aucun endpoint de commande privilégiée ; K juge la portée et la révocation |
+| Candidat imbriqué | Fichiers explicitement montés et budgets de son bac | Pas de réseau direct ni de clé de contrôle ; reste dépendant du noyau Linux |
+| Contrôle / guard | Journal, clés de services, vérification et promotion des artefacts | Compte distinct de l'agent ; les deux juges partagent encore un processus |
+| Runner de vérification | Exécution des candidats pour les instruments | Compte distinct et lanceur fixe ; aucune clé de contrôle |
+| Proxy de modèles | Destinations autorisées et jeton OpenBao délégué | L'agent voit le socket public et la CA ; la séparation administrative du proxy reste à déployer |
+| Preuves et reconstruction | Conservation et octets connus hors de la racine agent | Protégés de l'agent dans les tests ; aucune indépendance face au root commun n'est revendiquée |
+
+Révoquer une capacité K bloque ses futures admissions. Cela ne retire pas rétroactivement des données déjà lues,
+ne restaure pas un espace compromis et n'interrompt pas à lui seul les appels réseau en cours. Le confinement
+opérationnel doit aussi arrêter le service et révoquer les accès externes concernés. Le chemin de reconstruction
+ne réactive aucune capacité révoquée et ne restitue pas les données ou les clés client.
+
+Le prérequis `unshare -Urn` est vérifié avant le remplacement du laboratoire. Son succès ne suffit pas : la CI
+exécute aussi le candidat OCI depuis l'enclosure réelle. Un workspace cloud peut refuser les user namespaces ;
+aucun privilège supplémentaire ni assouplissement LSM n'est automatiquement appliqué pour contourner ce refus.
+Un déploiement qui ne permet pas cette imbrication nécessite un exécuteur orchestré séparément, non fourni ici.
 
 ## 9. Intégrité, distribution et récupération
 

@@ -44,18 +44,19 @@ git_source() {
 }
 
 unit() {
-  local name="$1" user="$2" command="$3" stop_control=""
+  local name="$1" user="$2" command="$3" stop_control="" dependency=""
   if [ "$name" = standard-agent ]; then
     # The fixed launcher places this process outside the service's initial cgroup.
     # Signal its main process, then let root kill the complete bounded UID subtree.
+    dependency="standard-operator.service"
     stop_control="KillMode=process
 ExecStopPost=+/bin/sh -c 'echo 1 > /sys/fs/cgroup/standard-bac/$(id -u standard-agent)/cgroup.kill'"
   fi
   cat > "/etc/systemd/system/$name.service" <<EOF
 [Unit]
 Description=Standard laboratory $name
-After=network-online.target standard-cgroups.service
-Requires=standard-cgroups.service
+After=network-online.target standard-cgroups.service $dependency
+Requires=standard-cgroups.service $dependency
 
 [Service]
 User=$user
@@ -102,6 +103,15 @@ install_lab() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q git python3-venv python3-pip util-linux bubblewrap curl runc sudo >/dev/null
   python3 -c 'import sys; assert sys.version_info >= (3, 11)'
 
+  id standard-guard >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-guard
+  id standard-agent >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-agent
+  usermod -a -G standard-guard standard-agent
+  # Check the host prerequisite before replacing even a disposable existing installation.
+  # Never grant extra capabilities or disable host LSM policy to get past this refusal.
+  runuser -u standard-agent -- unshare -Urn /usr/bin/true || {
+    echo "user/network namespaces unavailable; use a qualified orchestrator or host" >&2; exit 1;
+  }
+
   rm -rf -- "$CODE" "$ROOT"
   install -d -m 0755 "$CODE" "$ROOT" "$ROOT/seed" "$ROOT/hosting"
   touch "$CODE/$MARKER" "$ROOT/$MARKER"
@@ -112,8 +122,6 @@ install_lab() {
   chown -R root:root "$CODE"
   chmod -R a+rX,go-w "$CODE"
 
-  id standard-guard >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin standard-guard
-  id standard-agent >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-agent
   id standard-gate  >/dev/null 2>&1 || useradd -m -s /bin/sh -G standard-guard standard-gate
   id standard-web   >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin -G standard-guard standard-web
   id standard-runner >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin standard-runner
@@ -169,7 +177,7 @@ EOF
   done
 
   unit standard-operator standard-guard "$PY -m fabric.control.runtime serve $ROOT/install/standard.toml 30"
-  unit standard-agent standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent $PY -m engine.agents run $ROOT/install/standard.toml 60"
+  unit standard-agent standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent $PY -m engine.agents.enclosed launch $ROOT/install/standard.toml 60"
   unit standard-web standard-web "$PY -m interface.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
   systemctl enable --now standard-cgroups

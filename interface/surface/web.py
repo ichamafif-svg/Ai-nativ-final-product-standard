@@ -71,14 +71,15 @@ class Installation:
         self.repo = resolve(repo.get("path") or repo.get("mirror"))
         self.inbox = resolve(repo["inbox"]) if repo.get("inbox") else None
         agent = resolve(c.get("agent", {}).get("store", "agent/store")).parent
-        self.findings, self.memory, self.proposals = base / "findings.json", agent / "memory.json", agent / "proposals.json"
+        self.findings = resolve(c.get("agent", {}).get("public_context", ".")) / "findings.json"
+        self.memory, self.proposals = agent / "memory.json", agent / "proposals.json"
         self.work_db = agent / "work.db"
         self.grant_ids = {name: gid for name, gid in c["grants"].items() if name == "human"}
         self.product = self.repo.name.removesuffix(".git")
         run = c.get("run", {})
         from interface.surface.telemetry import Telemetry
         self.telemetry = Telemetry(Path(run.get("store", Path.home() / ".standard" / "telemetry.db")).expanduser(),
-                                   base / "readings", slo=float(run.get("slo", 99.9)) / 100,
+                                   self.findings.parent / "readings", slo=float(run.get("slo", 99.9)) / 100,
                                    interval=float(run.get("interval", 15)))
         self.rollback = bool(c.get("deploy")) and "agent" in c["grants"]     # D30: can act in production
         self.slo_db = base / "slo.db"

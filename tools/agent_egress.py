@@ -8,7 +8,8 @@ egress proxy, writes its CA certificate beside the configuration (`agent-egress-
 put under `[llm]`: `egress` and `egress_ca`. Tiers then name their key as `key = "secret:NAME"`: the provider keys
 live in the key service and are injected by the proxy; the agent's process never reads them.
 
-Known limit: the agent runs on the host, not in a bac; this routes and keeps its keys, it does not wall its network.
+With --enclosed, prints the private loopback URL and public Unix socket/CA mount
+for engine.agents.enclosed. The proxy itself remains outside that enclosure.
 """
 from __future__ import annotations
 
@@ -36,7 +37,11 @@ def main(argv=None) -> int:
                     bao=OpenBao(spec["bao"], token.read_text().strip())).start()
     ca = config.parent / "agent-egress-ca.pem"
     shutil.copy(egress.mount / "ca.pem", ca)
-    print(json.dumps({"egress": f"http://127.0.0.1:{egress.port}", "egress_ca": str(ca)}), flush=True)
+    result = {"egress": f"http://127.0.0.1:{egress.port}", "egress_ca": str(ca)}
+    if "--enclosed" in argv[1:]:
+        result = {"egress": "http://127.0.0.1:3128", "egress_ca": str(egress.mount / "ca.pem"),
+                  "egress_socket": str(egress.mount / "egress.sock")}
+    print(json.dumps(result), flush=True)
     try:
         signal.sigwait({signal.SIGINT, signal.SIGTERM})
     finally:

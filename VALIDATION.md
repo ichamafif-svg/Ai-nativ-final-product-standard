@@ -75,7 +75,7 @@ restent à qualifier sur le déploiement cible.
 La vérification syntaxique des unités n'établit pas leur comportement. Le PR reste un brouillon pour cette raison.
 
 Les limites de conception et de déploiement restent dans `ARCHITECTURE.md` et `fabric/guarantees.toml` :
-processus agent encore sur l'hôte, autorités de contrôle/preuve/récupération non séparées physiquement,
+CLI agent directe non enfermée, autorités de contrôle/preuve/récupération non séparées physiquement,
 restauration des données et clés non fournie par la reconstruction d'artefacts, vérification avant import,
 délai sortant et renouvellement borné des jetons encore à réaliser. Les réflexions transformées des secrets
 et les quotas distribués ne font pas partie des garanties ajoutées.
@@ -87,3 +87,29 @@ Références d'intégration : [délégation cgroup v2](https://www.kernel.org/do
 Le mode rootless de runsc est refusé car sa documentation indique que des erreurs de configuration cgroups
 peuvent être ignorées. Sous un compte non privilégié, le profil base peut sélectionner runc/crun ; les profils
 exigeant runsc restent indisponibles. Voir les [limites natives de runsc rootless](https://gvisor.dev/docs/user_guide/rootless/).
+
+
+## Suite : enclosure du processus agent
+
+Le PR #4 ajoute le lancement natif bubblewrap de l'agent. Sur le commit `28218c5`, les trois parcours Linux
+ont réussi, dont les scénarios natifs suivants : accès hôte et écriture du dépôt refusés, plafond parent et
+migration hors délégation refusés, candidat OCI imbriqué exécuté, admission autorisée puis refusée après
+révocation, reconstruction d'octets vérifiés sans effacement des observations, et démarrage réel de l'agent
+avec diagnostics non vides et contrat BUILD lisible. Le contrôle de ce scénario est une fixture signée à deux
+juges ; il ne fournit pas une attestation de déploiement ni une mission de construction par un modèle réel.
+
+Le workspace local refuse `unshare -Urn` avec `Operation not permitted`. Ce refus est conservé ; la qualification
+native vient du parcours Linux de CI, pas d'une simulation locale. Le premier montage cgroups superposé était
+refusé par runc (`EXDEV`) ; le montage natif unique a réussi sans ajouter de capacité au compte agent. Les
+permissions DAC de l'hôte et les plafonds root restent donc des hypothèses explicites.
+
+La première suite locale de cette passe a exécuté 418 tests : les sept erreurs AF_UNIX connues, un défaut de
+chemin dans l'inventaire ensuite corrigé, et deux échecs liés aux proxies SOCKS du workspace. Les tests affectés
+par ces proxies ont réussi après retrait des variables de proxy, sans modification de leur contrat. Les suites
+ciblées inventaire (7), structure (16), catalogue (13) et autonomie/contexte (46) ont réussi.
+
+Le dernier code `9906f6d` a également réussi les sept tests du parcours agent, dont l'appel de modèle et la
+recherche HTTPS depuis l'enclosure via le vrai proxy et OpenBao, avec un fournisseur de test. Le compte agent
+ne détient qu'une référence de secret ; le fournisseur observe la clé injectée sur le POST correspondant.
+Les trois parcours utilisateur/root/gVisor et la politique sortante ont réussi.
+Preuve : [parcours Linux et enclosure](https://github.com/ichamafif-svg/Ai-nativ-final-product-standard/actions/runs/38814708278).
