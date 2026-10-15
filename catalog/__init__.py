@@ -31,7 +31,12 @@ PHASES = ("build", "run")
 VALUE_TYPES = ("list", "map", "int", "text")
 EXAMPLES = ("py_ok", "py_no", "js_ok", "js_no")
 REQUIRED = {"id": str, "do": str, "applies": list, "when": list, "who": list, "block": str, "absorb": str,
-            "phase": str, "check": list, "asvs": list, "cwe": list}
+            "held_by": str, "phase": str, "check": list, "asvs": list, "cwe": list}
+# Who holds the rule once D68 is in place: an invariant of the execution platform, the product's code (with a
+# block or without), the client's identity provider, or Standard's release line. Platform holders are planned
+# until their step of D68 ships; until then the rule's block still holds it.
+HELD_BY = re.compile(r"platform:(ingress|identity|egress|secrets|keys|data|resources|logs|files)"
+                     r"|code(:(access|render|front))?|idp|release")
 OPTIONAL = {"never": str, "values": list, "wire": list, "team_only": bool, **{k: str for k in EXAMPLES}}
 CHECK = re.compile(r"blocks|patrol|human|mypy|fact:[a-z_]+|probe:[a-z0-9-]+|test:[a-z0-9-]+|bandit:B\d{3}"
                    r"|semgrep:standard\.[a-z0-9-]+")
@@ -106,6 +111,8 @@ def validate(cat: dict) -> None:
         if r["absorb"] not in ABSORB or (r["absorb"] == "none") != (r["block"] == "") or \
                 (r["block"] and r["block"] not in blocks):
             raise CatalogError(f"{rid}: a block absorbs it fully or partly, or no block and absorb none")
+        if not HELD_BY.fullmatch(r["held_by"]):
+            raise CatalogError(f"{rid}: held_by names the platform, the code, the identity provider or the release")
         if r["phase"] not in PHASES:
             raise CatalogError(f"{rid}: phase")
         named = set(r.get("values", []))
@@ -366,7 +373,8 @@ def contracts(cat: dict, features, values: dict, *, touched=None, category=None,
     named = sorted(named)
     return {"catalog": cat["digest"],
             "rules": [{"id": r["id"], "text": render(r, values, full=r["absorb"] != "full"),
-                       "block": r["block"], "absorption": r["absorb"], "checks": r["check"],
+                       "block": r["block"], "absorption": r["absorb"], "held_by": r["held_by"],
+                       "checks": r["check"],
                        "wire": r.get("wire", []), "verifiers": r["who"]} for r in chosen],
             "blocks": {name: {"guarantees": cat["blocks"][name]["does"],
                               "probes": cat["blocks"][name]["probes"],
@@ -386,7 +394,8 @@ def contracts(cat: dict, features, values: dict, *, touched=None, category=None,
 
 def render_contracts(packet: dict) -> str:
     """Same text for human and model; a bounded consumer can defer entire entries without rewriting them."""
-    lines = [r["text"] + f"\nabsorb {r['absorption']}; wire {', '.join(r['wire']) or '(none)'}; "
+    lines = [r["text"] + f"\nheld by {r['held_by']}{' (planned, D68)' if r['held_by'].startswith('platform') else ''}; "
+             f"absorb {r['absorption']}; wire {', '.join(r['wire']) or '(none)'}; "
              f"check {', '.join(r['checks'])}" for r in packet["rules"]]
     for name, block in packet["blocks"].items():
         lines.append(f"block {name}: {block['guarantees']}\nprobes {', '.join(block['probes']) or '(none)'}\n"

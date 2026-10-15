@@ -44,9 +44,19 @@ class Catalog(unittest.TestCase):
         broken(lambda c: c["rules"][0].update(do="Refuse above @nowhere"))
         broken(lambda c: c["rules"][0].update(check=["probe:mind-reading"]))
         broken(lambda c: c["rules"][0].update(block="", absorb="full"))
+        broken(lambda c: c["rules"][0].update(held_by="the wall, somehow"))
+        broken(lambda c: c["rules"][0].pop("held_by"))
         broken(lambda c: c["rules"][0].update(check=["patrol"], who=["det"]))
         broken(lambda c: c["blocks"]["web"]["stacks"]["nextjs"]["bans"].append("rm -rf /"))
         broken(lambda c: c["blocks"]["web"]["stacks"].update(rails={"module": "x", "use": "x", "bans": []}))
+
+    def test_every_rule_says_who_holds_it_and_blocks_left_in_code_stay_with_their_rules(self):
+        holders = {r["id"]: r["held_by"] for r in self.cat["rules"]}
+        self.assertEqual(len(holders), 156)
+        for r in self.cat["rules"]:
+            if r["block"] in ("access", "render", "front") and r["held_by"].startswith("code:"):
+                self.assertEqual(r["held_by"], f"code:{r['block']}")
+        self.assertEqual({r["held_by"] for r in self.cat["rules"] if r["block"] == "idp"}, {"idp"})
 
     def test_team_only_rules_wait_for_a_team(self):
         one = {r["id"] for r in applicable(self.cat, ["api", "high-value"])}

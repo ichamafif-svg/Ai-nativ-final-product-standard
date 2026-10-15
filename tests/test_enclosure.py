@@ -72,6 +72,17 @@ class Configuration(unittest.TestCase):
                                   "cpu_percent": 50})
         self.assertEqual(capability_map(walls)["network"]["outbound"], "none: no host is reachable")
 
+    def test_the_mission_says_in_one_place_what_the_bac_gives_and_who_holds_each_rule(self):
+        import json
+        from context.missions import assemble
+        packet = json.loads(assemble({"product": {"features": ["web"], "stacks": ["fastapi"]}}, None,
+                                     role="build", touched=["surface:endpoint"])[0])["packet"]
+        self.assertNotIn("capabilities", packet)
+        autonomy = packet["autonomy"]
+        self.assertEqual(autonomy["bac"]["limits"]["memory_mb"], Walls().memory_mb)
+        held = {rid for ids in autonomy["rules_by_holder"].values() for rid in ids}
+        self.assertEqual(held, set(packet["rule_ids"]))
+
     def test_the_agent_sandbox_is_this_bac(self):
         box = Sandbox(timeout=30, memory_mb=512, file_limit=1_048_576)
         self.assertIsInstance(box.bac, Bac)

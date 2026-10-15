@@ -204,13 +204,22 @@ def assemble(context: dict, tree, *, role: str, scope=None, touched=(), focus=()
         else:
             deferred.append(f"mission/{name}")
 
+    holders: dict = {}
+    for rule in technical["rules"]:
+        holders.setdefault(rule["held_by"], []).append(rule["id"])
+    # One place says what the agent can, cannot, with which resources, and who holds each selected rule (D69).
+    context = {**context, "autonomy": {
+        **(context.get("autonomy") or {}), "bac": capability_map(),
+        "rules_by_holder": dict(sorted(holders.items())),
+        "holders": "code: yours, in the product's code; code:<block>: yours, through that block; platform:<part>: "
+                   "held by the execution platform once that part of D68 ships, until then by the rule's block; "
+                   "idp: a setting of the identity provider, for the human; release: Standard's release line"}}
     for name in ("task", "requirement", "definition", "measurement", "operation", "autonomy", "decision", "proof_plan", "law_trace"):
         if context.get(name):
             add(name, context[name])
     names = set(re.findall(r"@([a-z_]+)", json.dumps(context.get("law_trace", context.get("operation", {})))))
     for name in sorted(names & cat["policy"]["parameter"].keys()):
         add(f"policy/{name}", sources[f"policy/{name}"])
-    add("capabilities", capability_map())                 # D69: what the bac gives, before designing
     add("technical", render_contracts(technical))
     for name in ("review", "mission", "findings", "facts", "known_gaps", "weak_spots"):
         if context.get(name):
