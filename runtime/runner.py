@@ -18,6 +18,11 @@ outcome} and standard_release_duration_seconds_bucket{release,le}): the instrume
 goes, the canary stops; when `current` becomes the canary, it simply becomes the live process.
 
 The product's own process, without any privilege over the guard.
+
+D68: each release runs in the bac (`enclosure/`), started through its door: no network of its own, a read-only
+tree, the data directory as its one writable place, the platform's limits. The runner reaches it only through the
+door's Unix socket, for health and for traffic; in production the gateway (Envoy and the gate) stands in front of
+the runner. Without a bac nothing is started, unless `--unconfined` says so explicitly (demonstrations only).
 """
 from __future__ import annotations
 
@@ -27,11 +32,11 @@ import os
 import random
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding",
@@ -39,13 +44,39 @@ HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", 
 BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
 
 
+PRODUCT_PORT = 8000
+
+
+class DoorConnection(http.client.HTTPConnection):
+    def __init__(self, path: str, timeout: float):
+        super().__init__("release", timeout=timeout)
+        self.door = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.door)
+
+
 class Process:
-    def __init__(self, release: str, child, port: int):
-        self.release, self.child, self.port = release, child, port
+    def __init__(self, release: str, child, port: int | None, door: str | None = None, service=None):
+        self.release, self.child, self.port, self.door, self.service = release, child, port, door, service
+
+    def alive(self) -> bool:
+        return self.service.running() if self.service else self.child.poll() is None
+
+    def connect(self, timeout: float) -> http.client.HTTPConnection:
+        if self.door:
+            return DoorConnection(self.door, timeout)
+        return http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
 
     def stop(self, drain: float = 2.0) -> None:
-        if self.child.poll() is None:
+        if self.alive():
             time.sleep(drain)                               # let in-flight requests finish
+        if self.service:
+            self.service.stop()
+            return
+        if self.child.poll() is None:
             self.child.terminate()
             try:
                 self.child.wait(timeout=10)
@@ -55,9 +86,9 @@ class Process:
 
 class Runner:
     def __init__(self, root: str, port: int, health: str, data: str | None, repo: str, releases: str,
-                 ready_s: float = 30.0):
+                 ready_s: float = 30.0, bac=None):
         self.root, self.port, self.health, self.data, self.ready_s = root, port, health, data, ready_s
-        self.repo, self.releases = repo, releases
+        self.repo, self.releases, self.bac = repo, releases, bac
         self.live = self.canary = None
         self.weight, self.restart_seen, self.ports = 0, None, iter(range(port + 1, port + 1000))
         self.lock, self.counts = threading.Lock(), {}      # release -> {"ok", "error", "buckets"}
@@ -91,40 +122,61 @@ class Runner:
         if path is None:
             print(f"{release} cannot be read from the repository: it receives no traffic", flush=True)
             return None
-        port = next(self.ports)
-        env = {**os.environ, "STANDARD_RELEASE": release}
-        if self.data:
-            env["STANDARD_DATA"] = self.data
-        child = subprocess.Popen([sys.executable, os.path.join(path, "service.py"), str(port)], cwd=path, env=env)
+        if self.bac is not None:
+            process = self._start_in_bac(release, path)
+        else:
+            port = next(self.ports)
+            env = {**os.environ, "STANDARD_RELEASE": release}
+            if self.data:
+                env["STANDARD_DATA"] = self.data
+            child = subprocess.Popen([sys.executable, os.path.join(path, "service.py"), str(port)], cwd=path, env=env)
+            process = Process(release, child, port)
         deadline = time.time() + self.ready_s
-        while time.time() < deadline and child.poll() is None:
+        while time.time() < deadline and process.alive():
             try:
-                if urllib.request.urlopen(f"http://127.0.0.1:{port}{self.health}", timeout=2).status == 200:
-                    return Process(release, child, port)
+                conn = process.connect(2)
+                conn.request("GET", self.health)
+                if conn.getresponse().status == 200:
+                    conn.close()
+                    return process
+                conn.close()
             except Exception:
                 pass
             time.sleep(0.3)
-        child.kill()
-        child.wait()
+        process.stop(drain=0)
         print(f"{release} did not become healthy: it receives no traffic", flush=True)
         return None
+
+    def _start_in_bac(self, release: str, path: str) -> Process:
+        from enclosure.bac import Service
+        from enclosure.stack import DOOR
+        door = os.path.join(self.releases, f"{release}.door")
+        os.makedirs(door, exist_ok=True)
+        os.chmod(door, 0o777)
+        sock = os.path.join(door, "http.sock")
+        env = {"STANDARD_RELEASE": release, **({"STANDARD_DATA": self.data} if self.data else {})}
+        service = Service(self.bac, [self.bac.python, "-I", str(DOOR), sock, str(PRODUCT_PORT), "--",
+                                     self.bac.python, os.path.join(path, "service.py"), str(PRODUCT_PORT)],
+                          path, env=env, readable=(str(DOOR.parent),),
+                          writable=(door, *([self.data] if self.data else [])))
+        return Process(release, service.process, None, door=sock, service=service)
 
     def follow(self) -> None:
         while True:
             current, canary, restart = self._read("current"), self._read("canary"), self._read("restart")
             weight = self._read("canary_weight")
             self.weight = int(weight) if weight and weight.isdigit() else 0
-            live_dead = self.live is not None and self.live.child.poll() is not None
+            live_dead = self.live is not None and not self.live.alive()
             if current and (self.live is None or self.live.release != current or live_dead
                             or (restart and restart != self.restart_seen and restart.startswith(current))):
-                if self.canary is not None and self.canary.release == current and self.canary.child.poll() is None:
+                if self.canary is not None and self.canary.release == current and self.canary.alive():
                     fresh, self.canary = self.canary, None  # promoted: the canary is already warm
                 else:
                     fresh = self.start(current)
                 if fresh is not None:
                     with self.lock:
                         old, self.live = self.live, fresh
-                    print(f"serving {current} on :{fresh.port}", flush=True)
+                    print(f"serving {current} on {fresh.door or fresh.port}", flush=True)
                     if old is not None:
                         threading.Thread(target=old.stop, daemon=True).start()
                 self.restart_seen = restart
@@ -139,7 +191,7 @@ class Runner:
                     with self.lock:
                         self.canary = started
                     if started:
-                        print(f"canary {canary} on :{started.port} for {self.weight} %", flush=True)
+                        print(f"canary {canary} on {started.door or started.port} for {self.weight} %", flush=True)
             time.sleep(1)
 
     def record(self, release: str, failed: bool, seconds: float) -> None:
@@ -189,7 +241,7 @@ class Runner:
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 start = time.perf_counter()
                 try:
-                    conn = http.client.HTTPConnection("127.0.0.1", target.port, timeout=30)
+                    conn = target.connect(30)
                     conn.request(self.command, self.path, body or None,
                                  {k: v for k, v in self.headers.items() if k.lower() not in HOP})
                     r = conn.getresponse()
@@ -213,10 +265,19 @@ def main(argv=None) -> None:
     parser.add_argument("--data")
     parser.add_argument("--repo", required=True, help="the canonical repository, read only")
     parser.add_argument("--releases", default=os.path.expanduser("~/releases"))
+    parser.add_argument("--unconfined", action="store_true",
+                        help="run releases without the bac: demonstrations only, never inferred")
     a = parser.parse_args(argv)
+    bac = None
+    if not a.unconfined:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from enclosure.bac import Bac
+        bac = Bac()
+        if not bac.ready:
+            raise SystemExit(f"releases run only in the bac (D68): {bac.why}")
     os.makedirs(a.releases, exist_ok=True)
     root = a.registers if os.path.isdir(a.registers) else os.path.dirname(a.registers)
-    runner = Runner(root, a.port, a.health, a.data, a.repo, a.releases)
+    runner = Runner(root, a.port, a.health, a.data, a.repo, a.releases, bac=bac)
     threading.Thread(target=runner.follow, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", a.port), runner.handler()).serve_forever()
 

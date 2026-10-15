@@ -29,6 +29,7 @@
  "sensitive_actions": "list",
  "session_idle_min": "int",
  "session_max_hours": "int",
+ "start": "text",
  "trackers": "list",
  "trusted_proxies": "list",
  "trusted_types": "text",

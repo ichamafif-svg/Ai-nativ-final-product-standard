@@ -112,21 +112,28 @@ class Bac:
         self.runtime = None
         return "OCI runtime refused the bac: " + "; ".join(refusals)
 
-    def _execute(self, args, cwd, env, readable, writable, timeout, stdin: bytes | None = None) -> Ran:
-        name = uuid.uuid4().hex
+    def _base(self) -> list:
         state = Path(tempfile.gettempdir(), f"bac-state-{os.getuid()}")
         state.mkdir(mode=0o700, exist_ok=True)
         base = [str(self.runtime), "--root", str(state)]
         if Path(str(self.runtime)).name == "crun":
             base.append(f"--cgroup-manager={'cgroupfs' if self.groups else 'disabled'}")
+        return base
+
+    def _bundle(self, bundle, args, cwd, env, readable, writable, name) -> None:
+        rootfs = Path(bundle, "rootfs")
+        rootfs.mkdir()
+        for path in oci.SYSTEM:
+            if Path(path).is_symlink():
+                Path(rootfs, path.lstrip("/")).symlink_to(Path(path).readlink())
+        config = self.config(args, cwd, env=env, readable=readable, writable=writable, name=name)
+        Path(bundle, "config.json").write_text(json.dumps(config))
+
+    def _execute(self, args, cwd, env, readable, writable, timeout, stdin: bytes | None = None) -> Ran:
+        name = uuid.uuid4().hex
+        base = self._base()
         with tempfile.TemporaryDirectory(prefix="bac-bundle-") as bundle, tempfile.TemporaryFile() as output:
-            rootfs = Path(bundle, "rootfs")
-            rootfs.mkdir()
-            for path in oci.SYSTEM:
-                if Path(path).is_symlink():
-                    Path(rootfs, path.lstrip("/")).symlink_to(Path(path).readlink())
-            config = self.config(args, cwd, env=env, readable=readable, writable=writable, name=name)
-            Path(bundle, "config.json").write_text(json.dumps(config))
+            self._bundle(bundle, args, cwd, env, readable, writable, name)
             try:
                 try:
                     keep = ["--keep"] if Path(str(self.runtime)).name == "runc" else []
@@ -152,6 +159,34 @@ class Bac:
         if not self.ready:
             return Ran(REFUSED, f"execution refused: {self.why}")
         return self._execute(args, cwd, {**BASE_ENV, **(env or {})}, readable, writable, self.walls.timeout_s, stdin)
+
+
+class Service:
+    """A long-running process in the bac (the product in production): same walls, no time limit, stopped by the
+    platform. The runtime removes the container, and every process it left, when it stops."""
+
+    def __init__(self, bac: "Bac", args, cwd, *, env=None, readable=(), writable=(), log=None):
+        if not bac.ready:
+            raise RuntimeError(f"execution refused: {bac.why}")
+        self.name, self.base = uuid.uuid4().hex, bac._base()
+        self._bundle = tempfile.mkdtemp(prefix="bac-service-")
+        bac._bundle(self._bundle, args, cwd, {**BASE_ENV, **(env or {})}, readable, writable, self.name)
+        self.process = subprocess.Popen([*self.base, "run", "--bundle", self._bundle, self.name],
+                                        stdin=subprocess.DEVNULL, stdout=log or subprocess.DEVNULL,
+                                        stderr=subprocess.STDOUT)
+
+    def running(self) -> bool:
+        return self.process.poll() is None
+
+    def stop(self, grace_s: float = 5.0) -> None:
+        subprocess.run([*self.base, "kill", self.name, "TERM"], capture_output=True, timeout=30)
+        try:
+            self.process.wait(timeout=grace_s)
+        except subprocess.TimeoutExpired:
+            subprocess.run([*self.base, "kill", "--all", self.name, "KILL"], capture_output=True, timeout=30)
+            self.process.wait(timeout=30)
+        subprocess.run([*self.base, "delete", "--force", self.name], capture_output=True, timeout=30)
+        shutil.rmtree(self._bundle, ignore_errors=True)
 
 
 def capability_map(walls: Walls = Walls(), *, groups: bool = True) -> dict:

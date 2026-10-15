@@ -99,3 +99,33 @@ def read(ran: Ran, capabilities: dict, *, during: str, root=None) -> list[dict]:
              "available": _available(capability, capabilities),
              "instead": WALLS[capability][2], "ask": capabilities.get("ask")}
             for capability in WALLS if capability in found]
+
+
+# What the gate corrected or refused on the product's own traffic (D68 step 2), read as lessons for its code.
+ENTRY = {
+    "ingress.headers": "the product sent a banner or a security header weaker than the rules: send nothing (the "
+                       "gateway imposes the rules' value) or a stricter one",
+    "ingress.cookies": "set Secure, HttpOnly, SameSite and Path on every cookie the product sets",
+    "ingress.json": "accept only JSON every parser reads the same way: no duplicate key, no two keys equal once "
+                    "Unicode-normalised, bounded depth",
+    "ingress.isolation": "a cross-site request must come from an origin in @origins; draft it if it is legitimate",
+    "ingress.time": "answer within @request_timeout_s: make the slow step bounded or asynchronous",
+    "ingress.size": "keep request bodies under @body_max_bytes, or draft a higher limit with its reason",
+}
+
+
+def from_gate(records: list, *, during: str) -> list[dict]:
+    """Lessons from the gate's records: corrections of the code and refusals. What the platform merely imposed
+    (a header the product did not send) is its job, not a defect of the code, and teaches nothing."""
+    out, seen = [], set()
+    for r in records:
+        if r.get("kind") not in ("correction", "refusal") or r.get("capability") not in ENTRY:
+            continue
+        key = (r["capability"], r["route"], r["attempt"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"kind": "lesson", "during": during, "capability": r["capability"], "held_by": r["held_by"],
+                    "attempt": f"{r['route']}: {r['attempt']}", "stack": [], "available": None,
+                    "instead": ENTRY[r["capability"]], "ask": None, "route": r["route"]})
+    return out

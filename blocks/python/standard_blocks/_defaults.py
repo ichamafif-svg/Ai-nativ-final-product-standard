@@ -40,6 +40,7 @@ DEFAULTS = {'access': {},
 # The type of every named value (values.toml): a value of another type is refused and its strict default kept.
 TYPES = {'access': 'map',
  'app': 'text',
+ 'start': 'text',
  'archive_max_files': 'int',
  'body_max_bytes': 'int',
  'critical': 'list',

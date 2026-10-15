@@ -183,6 +183,45 @@ class WholeLaw(unittest.TestCase):
         self.assertTrue(any(e["source"] == "tests" for e in check["feedback"]["agent"]), check["feedback"])
 
 
+class BehindTheGateway(unittest.TestCase):
+    """D68 step 2: what the gate corrects on the candidate's product, and not on base's, is its lesson."""
+
+    SERVER = ("import os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\n\n\n"
+              "class H(BaseHTTPRequestHandler):\n    def log_message(self, *a):\n        pass\n\n"
+              "    def do_GET(self):\n        self.send_response(200)\n{cookie}"
+              "        self.send_header('content-length', '2')\n        self.end_headers()\n"
+              "        self.wfile.write(b'ok')\n\n\n"
+              "if __name__ == '__main__':\n    HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
+
+    def test_a_weak_cookie_behind_the_gateway_is_the_candidates_lesson(self):
+        from catalog import effective, load
+        from enclosure.components import where
+        box = Sandbox()
+        if not box.isolated or not where("envoy"):
+            self.skipTest("needs the bac and Envoy")
+        files = {**FILES, "server.py": self.SERVER.format(cookie="")}
+        store, base = store_with(files)
+        from agent.candidate import commit_files
+        weak = "        self.send_header('set-cookie', 'cart=1')\n"
+        head = commit_files(store, base, {"server.py": self.SERVER.format(cookie=weak).encode()}, "candidate")
+        values = effective(load(), {"start": "python3 -I server.py", "request_timeout_s": 5})
+        check = precheck(store, base, head, None, {}, EMPTY, box, values=values)
+        self.assertIsNone(check["entry"])
+        self.assertFalse(check["ok"])
+        self.assertTrue(any("behind the gateway" in p for p in check["problems"]), check["problems"])
+        lesson = next(r for r in check["refusals"] if r["capability"] == "ingress.cookies")
+        self.assertEqual(lesson["held_by"], "platform:ingress")
+        self.assertIn("COOKIES", lesson["rules"])
+
+    def test_without_start_nothing_runs_and_it_is_said(self):
+        store, base = store_with()
+        box = Sandbox()
+        if not box.isolated:
+            self.skipTest("needs the bac")
+        check = precheck(store, base, base, None, {}, EMPTY, box)
+        self.assertIn("@start", check["entry"])
+
+
 class Model(unittest.TestCase):
     """A model that is wrong first: the agent learns from its own checks before proposing anything."""
 

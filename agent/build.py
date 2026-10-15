@@ -57,11 +57,12 @@ class Builder:
         self.candidate, self.last_candidate = CandidateWorkflow(**(review or {})), None
 
     # ---- checks in the agent's own sandbox ------------------------------------------------------------------------
-    def check(self, base: str, head: str, rid: str, targets: dict) -> list:
+    def check(self, base: str, head: str, rid: str, targets: dict, *, values: dict | None = None) -> list:
         from agent.precheck import precheck
 
         check = precheck(
-            self.store, base, head, None, targets, self.data, self.sandbox, self.store.parent / "venvs", request=rid
+            self.store, base, head, None, targets, self.data, self.sandbox, self.store.parent / "venvs", request=rid,
+            values=values,
         )
         # D70: when the precheck fails, the agent reads its one ordered feedback dossier.
         return [check["feedback_text"] or "\n".join(check["problems"])] if check["problems"] else []
@@ -118,7 +119,8 @@ class Builder:
                 from agent.candidate import record
                 message += "\nAdvisory workflow: " + record(self.last_candidate) + "\n"
             head = commit_files(self.store, base, blobs, message)
-            problems = self.check(base, head, rid, targets)
+            from agent.precheck import values_in_force
+            problems = self.check(base, head, rid, targets, values=values_in_force(context))
             if not problems:
                 record_attempt(self.store.parent / "attempts.jsonl", "build", rid, attempt, True)
                 return head

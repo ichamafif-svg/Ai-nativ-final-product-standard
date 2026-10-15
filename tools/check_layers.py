@@ -17,7 +17,7 @@ ALLOWED = {
     "instruments": ("kernel", "instruments", "standard_blocks", "enclosure"),  # existing in-process product probes
     "catalog": ("kernel", "catalog"),
     "blocks": ("blocks.python.standard_blocks",),
-    "enclosure": ("enclosure",),
+    "enclosure": ("enclosure", "blocks.python.standard_blocks"),   # the platform owns the policy the blocks held
     "context": ("kernel", "instruments", "catalog", "context", "agent.work", "enclosure"),
     "agent": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "enclosure", "blocks.python.standard_blocks"),
     "surface": ("kernel", "instruments", "bt.signing", "bt.gateway", "catalog", "context", "agent", "surface", "blocks.python.standard_blocks"),

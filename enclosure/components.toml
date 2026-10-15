@@ -1,0 +1,27 @@
+# The platform's components (D68): reused, never rewritten, pinned in the release by exact version and digest.
+# `python -m tools.components fetch [DIR]` downloads each archive, checks its digest before unpacking, then checks
+# the binary's digest; a mismatch installs nothing. Standard writes the policy; these are the mechanisms.
+
+[envoy]
+version = "1.40.0"
+url = "https://github.com/envoyproxy/envoy/releases/download/v1.40.0/envoy-1.40.0-linux-x86_64"
+archive_sha256 = "8aa137a7d00994ce43f613556f5a120709229f63bedb86eedde5ccbc402c2b80"
+binary = "envoy"
+binary_sha256 = "8aa137a7d00994ce43f613556f5a120709229f63bedb86eedde5ccbc402c2b80"
+role = "gateway and egress filtering"
+
+[oauth2-proxy]
+version = "7.15.5"
+url = "https://github.com/oauth2-proxy/oauth2-proxy/releases/download/v7.15.5/oauth2-proxy-v7.15.5.linux-amd64.tar.gz"
+archive_sha256 = "f63f94bf72c5f46ab002a0a275aa8b3cf19b4d828aed08a13978cb9a62c3a1fd"
+binary = "oauth2-proxy-v7.15.5.linux-amd64/oauth2-proxy"
+binary_sha256 = "ed5063f5a655560048a594974210f1c9e4f539bbfe81a834addb6fc740f3309d"
+role = "OpenID Connect sign-in for the gateway"
+
+[openbao]
+version = "2.7.1"
+url = "https://github.com/openbao/openbao/releases/download/v2.7.1/openbao_2.7.1_linux_amd64.tar.gz"
+archive_sha256 = "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243"
+binary = "bao"
+binary_sha256 = "535cf827b13753046757f5ec8b97ae0ef21f10a40ffe673f0d5e75616170f5ea"
+role = "key service and secret broker"

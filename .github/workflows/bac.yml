@@ -21,12 +21,14 @@ jobs:
       # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; a rootless runtime needs them.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: pip install --require-hashes -r requirements.hashes
+      - run: python -m tools.components fetch                 # Envoy, oauth2-proxy, OpenBao, checked against their pins
       - name: walls and bac tests as an ordinary user
         if: matrix.as == 'user'
         run: |
           python -m instruments.walls | tee walls.json
           python -m unittest discover -s tests -p 'test_enclosure.py' -v
           python -m unittest discover -s tests -p 'test_refusals.py' -v
+          python -m unittest discover -s tests -p 'test_gateway.py' -v
       - name: walls and bac tests as root, with control groups
         if: matrix.as == 'root'
         run: |

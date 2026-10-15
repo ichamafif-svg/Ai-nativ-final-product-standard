@@ -117,3 +117,47 @@ def visible(model_by_role: dict, user, default):
         if user is not None and role in user.roles:
             return model
     return default
+
+
+class PlatformUser:
+    """Who the gateway says the caller is (D68): the claims of `x-standard-identity`, verified here."""
+
+    def __init__(self, claims: dict):
+        self.claims = claims
+        self.id = claims["sub"]
+        self.email = claims.get("email")
+        self.roles = list(claims.get("groups", []))
+
+
+def platform_identity(*, public_key: str | None = None, audience: str | None = None):
+    """`current_user` for Access when the product runs behind Standard's gateway (D68).
+
+    The gateway removes every identity header a client sends and states the caller in `x-standard-identity`: a
+    short EdDSA token signed by the platform's key service, for this product only. Verifying it here means a forged
+    header could not pass even if a wall gave way. Key and audience come from STANDARD_IDENTITY_KEY (PEM) or
+    STANDARD_IDENTITY_KEY_FILE, and STANDARD_AUDIENCE. No header, or a token that does not verify: 401.
+    """
+    import jwt
+
+    def key() -> str:
+        if public_key:
+            return public_key
+        if os.environ.get("STANDARD_IDENTITY_KEY"):
+            return os.environ["STANDARD_IDENTITY_KEY"]
+        with open(os.environ["STANDARD_IDENTITY_KEY_FILE"], encoding="utf-8") as f:
+            return f.read()
+
+    async def current_user(request: Request) -> PlatformUser:
+        token = request.headers.get("x-standard-identity")
+        if not token:
+            raise HTTPException(401, "sign in")
+        try:
+            claims = jwt.decode(token, key(), algorithms=["EdDSA"], issuer="standard-gateway",
+                                audience=audience or os.environ.get("STANDARD_AUDIENCE", "product"),
+                                options={"require": ["exp", "iat", "aud", "iss", "sub"]})
+        except (jwt.PyJWTError, OSError, KeyError):
+            log.security("access.identity_refused")
+            raise HTTPException(401, "sign in") from None
+        return PlatformUser(claims)
+
+    return current_user

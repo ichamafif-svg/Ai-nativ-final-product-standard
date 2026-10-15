@@ -144,6 +144,38 @@ def _with_rules(lessons: list) -> list:
     return [{**lesson, "rules": _rules_held(lesson["held_by"])} for lesson in lessons]
 
 
+def values_in_force(context) -> dict | None:
+    """The named values in force for a task's context (D68: `@start` runs the product behind the gateway)."""
+    from context.policy import Rules
+    law = (context or {}).get("effective_law")
+    try:
+        return Rules(law).values() if law else None
+    except Exception:
+        return None
+
+
+def _entry(sandbox, store, base: str, head: str, values: dict | None, cache) -> tuple[list, str | None]:
+    """The gate's lessons on the candidate's product that base's product did not earn (D68 step 2)."""
+    from agent.entry import lessons as entry_lessons
+    if not values or not values.get("start"):
+        return [], "@start is not set: the product was not run behind the gateway"
+    found = {}
+    for label, commit in (("base", base), ("head", head)):
+        with sandbox.checkout(store, commit) as tree:
+            try:
+                python = environment(sandbox, tree / "requirements.txt", cache)
+            except Exception as exc:
+                return [], f"the product's environment could not be prepared: {exc}"
+            path = str(Path(python).parent)
+            found[label], why = entry_lessons(tree, values, during="behind the gateway",
+                                              env={"PATH": f"{path}:/usr/local/bin:/usr/bin:/bin", "PYTHONPATH": str(tree)},
+                                              readable=(*([Path(cache)] if cache else []),))
+            if why:
+                return [], why
+    known = {(lesson["capability"], lesson["route"]) for lesson in found["base"]}
+    return [{**lesson, "new": (lesson["capability"], lesson["route"]) not in known} for lesson in found["head"]], None
+
+
 def suite(sandbox: Sandbox, store, base: str, head: str, cache=None, *, refusals: list | None = None) -> tuple[str, list]:
     """Main's tests against the candidate's code, in the sandbox: (green|red|uncovered, failures).
 
@@ -212,6 +244,7 @@ def precheck(
     cache=None,
     *,
     request: str | None = None,
+    values: dict | None = None,
 ) -> dict:
     """Candidate checks only; fixed=None means no local instrument measured that requirement, never a success."""
     before, after = measure(Snapshot(store, base), targets, data), measure(Snapshot(store, head), targets, data)
@@ -274,6 +307,16 @@ def precheck(
                              for lesson in lessons if lesson["capability"] in new)
             problems.append("the candidate's code touched the bac's walls, even if its tests pass. Change the design, "
                             f"or draft the value for the human to sign:\n{told}")
+    entry_lessons, entry_note = _entry(sandbox, store, base, head, values, cache)
+    if entry_lessons:
+        new_entry = [lesson for lesson in entry_lessons if lesson["new"]]
+        items += [item("lesson", "gateway", "build", rules=_rules_held(lesson["held_by"]), where=lesson["route"],
+                       attempt=f"{lesson['capability']}: {lesson['attempt']}", new=lesson["new"],
+                       instead=lesson["instead"]) for lesson in entry_lessons]
+        if new_entry:
+            told = "\n".join(f"- {lesson['attempt']}; instead: {lesson['instead']}" for lesson in new_entry)
+            problems.append("behind the gateway, the candidate's product needed corrections base's did not:\n" + told)
+        lessons += entry_lessons
     lessons = _with_rules(lessons)
     if target_id == "ci":
         fixed = status == "green"
@@ -311,6 +354,7 @@ def precheck(
         "isolation": sandbox.isolation,
         "changed": changed,
         "refusals": lessons,
+        "entry": entry_note,
         "quality": quality,
         "feedback": dossier,
         "feedback_text": render(dossier),
