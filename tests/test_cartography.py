@@ -1,21 +1,55 @@
 """A map is a revision-bound description, never an authority or measured fact."""
 import os
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fabric.data.postgres import Database, PG, available
+from fabric.data.postgres import Database, PG, _as_postgres
 from interface.context.cartography import SCHEMA, run
 
 
-@unittest.skipUnless(available(), "PostgreSQL 16 with PL/Python unavailable")
+class MapDatabase(Database):
+    """Plain PostgreSQL fixture: the descriptive map does not require PL/Python."""
+
+    def start(self):
+        self.root.parent.chmod(self.root.parent.stat().st_mode | 0o111)
+        for path in (self.root, self.socket):
+            path.mkdir(parents=True, exist_ok=True)
+            self._chown(path)
+        self.socket.chmod(0o755)
+        subprocess.run([*_as_postgres(), str(PG / "initdb"), "-D", str(self.data), "-A", "reject", "-U", "postgres"],
+                       check=True, capture_output=True, timeout=120)
+        hba = self.data / "pg_hba.conf"
+        hba.write_text("local all postgres peer\nlocal product product trust\nlocal all all reject\n")
+        self._chown(hba)
+        self.process = subprocess.Popen([*_as_postgres(), str(PG / "postgres"), "-D", str(self.data),
+                                         "-c", f"unix_socket_directories={self.socket}", "-c", "listen_addresses="],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        until = time.monotonic() + 30
+        while time.monotonic() < until:
+            if subprocess.run([str(PG / "pg_isready"), "-h", str(self.socket)],
+                              capture_output=True).returncode == 0:
+                break
+            time.sleep(.1)
+        else:
+            raise RuntimeError("PostgreSQL did not start")
+        self.psql("CREATE ROLE product LOGIN")
+        self.psql("CREATE DATABASE product OWNER product")
+        return self
+
+
+@unittest.skipUnless(os.getuid() == 0 and (PG / "postgres").exists(),
+                     "root PostgreSQL 16 test fixture unavailable")
 class Cartography(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.db = Database(Path(self.tmp.name)).start(audience="map-test", public_pem="unused")
+        self.db = MapDatabase(Path(self.tmp.name))
         self.addCleanup(self.db.stop)
+        self.db.start()
         self.db.psql(SCHEMA.read_text(), database="product")
         self.db.psql("""
             INSERT INTO cartography.types(id,version,kind,label) VALUES
