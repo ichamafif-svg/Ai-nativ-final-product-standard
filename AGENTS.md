@@ -171,6 +171,8 @@ read/search its snapshot, fetch only configured research sources, and experiment
 Research outputs are notes, never signed facts or permission to register an instrument.
 
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
+For the agent → candidate → network boundaries, read [ARCHITECTURE_PATH.md](ARCHITECTURE_PATH.md) first;
+the SQLite map in `interface/context/standard.sqlite` then provides typed links and open gaps for exploration.
 The installed agent submits candidate execution to `fabric.runtime.supervisor` outside its namespaces.
 It has no cgroupfs mount. Supervisor loss refuses execution without local fallback. The command API accepts only
 scratch/cache mounts and bounded limits; results remain untrusted. Agent and supervisor still share the lab UID

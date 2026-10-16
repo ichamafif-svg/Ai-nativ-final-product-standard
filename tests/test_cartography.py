@@ -17,8 +17,10 @@ class StandardMap(unittest.TestCase):
             self.assertEqual(validate(db), [])
             items = gaps(db)
             self.assertGreaterEqual(len(items), 30)
-            self.assertTrue(any('independent supervisor UID' in x['description'] for x in items))
-            self.assertTrue(any('Client data and key restoration' in x['description'] for x in items))
+            self.assertTrue(any('independent supervisor UID' in x['title'] for x in items if x['category'] == 'architecture'))
+            self.assertTrue(any('Client data and key restoration' in x['title'] for x in items if x['category'] == 'architecture'))
+            self.assertTrue(any(x['id'] == 'gap/agent-egress-lifecycle' and 'install_server.sh' in x['description']
+                                for x in items))
             self.assertTrue(any(x['category'] == 'missing_link' and x['id'] == 'resource/evidence'
                                 for x in items))
             graph = neighborhood(db, 'capability/candidate-run')

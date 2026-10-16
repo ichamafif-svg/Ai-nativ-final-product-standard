@@ -92,7 +92,7 @@ def _rows(db: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict]:
 
 
 def gaps(db: sqlite3.Connection) -> list[dict]:
-    explicit = _rows(db, """SELECT id, title, title AS description, state, source, 'architecture' AS category
+    explicit = _rows(db, """SELECT id, title, description, state, source, 'architecture' AS category
         FROM nodes WHERE kind='gap' ORDER BY id""")
     missing = _rows(db, """SELECT node_id AS id, link_kind, direction, target_kind,
         reason AS description, source, 'missing_link' AS category FROM missing_links
@@ -273,7 +273,13 @@ def main(argv=None) -> None:
             print("Commandes : gaps, search MOT, node ID, path SOURCE DEST, validate")
         elif args.command == "gaps":
             for item in result['items']:
-                print(f"[{item['category']}] {item['id']}: {item['description']}")
+                detail = item['description']
+                if item['category'] == 'architecture':
+                    print(f"[{item['category']}] {item['id']}: {item['title']}")
+                    if detail and not detail.startswith('Travail restant de la garantie '):
+                        print(f"  {detail}")
+                else:
+                    print(f"[{item['category']}] {item['id']}: {detail}")
                 print(f"  source: {item['source']}")
         elif args.command == "node":
             for item in result['nodes']:

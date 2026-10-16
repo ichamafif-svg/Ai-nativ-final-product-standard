@@ -2,7 +2,9 @@
 
 La carte répond à « qui fait quoi, avec quelle capacité, quelle limite, quel effet et quel travail reste ouvert ? ». Elle est une **description du dépôt**. Une relation dans la carte n'accorde aucun droit ; `documented` indique seulement qu'une source la décrit. Les tests cités ne sont pas des résultats mesurés. K, BT et les instruments ne consultent pas cette base pour juger.
 
-La base versionnée est `interface/context/standard.sqlite`. Elle contient 120 objets et 142 liens initiaux, ancrés sur le commit indiqué par `basis_sha`. Ses domaines couvrent agent, build, produit, client, contrôle, vérification et récupération. L'inventaire des garanties dans `fabric/guarantees.toml` est représenté avec ses limites explicites. Les sources des objets et liens pointent vers les fichiers du dépôt. Les questions ouvertes incluent l'UID partagé avec le superviseur, la rétention indépendante des preuves, l'absence de produit réel qualifié et la restauration des données et clés.
+La base versionnée est `interface/context/standard.sqlite`. Elle contient 133 objets et 163 liens, ancrés sur le commit indiqué par `basis_sha`. Ses domaines couvrent agent, build, produit, client, contrôle, vérification et récupération. L'inventaire des garanties dans `fabric/guarantees.toml` est représenté avec ses limites explicites. Les sources des objets et liens pointent vers les fichiers du dépôt. Les 35 lacunes ou questions ouvertes incluent l'UID partagé avec le superviseur, la rétention indépendante des preuves, l'absence de produit réel qualifié et la restauration des données et clés.
+
+Pour commencer une mission, lire [le parcours agent, candidat et réseau](ARCHITECTURE_PATH.md). Il montre les trois chemins distincts : candidat sans réseau, proxy de l'agent vers ses modèles et proxy du produit. La carte permet ensuite de naviguer dans les objets cités et leurs autres relations. Le document et la carte sont deux lectures d'un même état de conception ; les sources liées dans la carte permettent de revenir au code.
 
 ## Lire la carte
 
@@ -13,6 +15,9 @@ python -m interface.context.cartography overview
 python -m interface.context.cartography gaps
 python -m interface.context.cartography search superviseur
 python -m interface.context.cartography node capability/candidate-run
+python -m interface.context.cartography node gap/agent-egress-lifecycle
+python -m interface.context.cartography node capability/agent-egress
+python -m interface.context.cartography node capability/product-egress
 python -m interface.context.cartography node authority/kernel --depth 2
 python -m interface.context.cartography path agent/mission component/candidate --depth 6
 python -m interface.context.cartography validate
