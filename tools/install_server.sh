@@ -22,7 +22,7 @@ lab_path() {
 }
 
 stop_lab() {
-  for unit in standard-agent standard-web standard-operator; do
+  for unit in standard-agent standard-candidates standard-web standard-operator; do
     if systemctl is-active --quiet "$unit"; then
       systemctl stop "$unit"
       ! systemctl is-active --quiet "$unit" || { echo "could not stop $unit" >&2; exit 1; }
@@ -31,7 +31,7 @@ stop_lab() {
 }
 
 check_units() {
-  for unit in standard-agent standard-web standard-operator; do
+  for unit in standard-agent standard-candidates standard-web standard-operator; do
     if systemctl is-active --quiet "$unit"; then
       echo "refusing active $unit without a laboratory marker" >&2
       exit 1
@@ -44,13 +44,16 @@ git_source() {
 }
 
 unit() {
-  local name="$1" user="$2" command="$3" stop_control="" dependency=""
-  if [ "$name" = standard-agent ]; then
+  local name="$1" user="$2" command="$3" stop_control="" dependency="" leaf=""
+  if [ "$name" = standard-agent ] || [ "$name" = standard-candidates ]; then
     # The fixed launcher places this process outside the service's initial cgroup.
     # Signal its main process, then let root kill the complete bounded UID subtree.
-    dependency="standard-operator.service"
+    if [ "$name" = standard-agent ]; then
+      dependency="standard-operator.service standard-candidates.service"
+      leaf="/enclosure"
+    fi
     stop_control="KillMode=process
-ExecStopPost=+/bin/sh -c 'echo 1 > /sys/fs/cgroup/standard-bac/$(id -u standard-agent)/cgroup.kill'"
+ExecStopPost=+/bin/sh -c 'echo 1 > /sys/fs/cgroup/standard-bac/$(id -u standard-agent)$leaf/cgroup.kill'"
   fi
   cat > "/etc/systemd/system/$name.service" <<EOF
 [Unit]
@@ -177,11 +180,13 @@ EOF
   done
 
   unit standard-operator standard-guard "$PY -m fabric.control.runtime serve $ROOT/install/standard.toml 30"
-  unit standard-agent standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent $PY -m engine.agents.enclosed launch $ROOT/install/standard.toml 60"
+  unit standard-candidates standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent $PY -m fabric.runtime.supervisor $ROOT/install/execution/candidate.sock $ROOT/install/scratch --cache $ROOT/install/agent/venvs --agent-uid $(id -u standard-agent)"
+  unit standard-agent standard-agent "+/usr/local/libexec/standard-cgroup-run standard-agent --enclosed $PY -m engine.agents.enclosed launch $ROOT/install/standard.toml 60"
   unit standard-web standard-web "$PY -m interface.surface.web $ROOT/install/standard.toml --bind 127.0.0.1 --port 8080"
   systemctl daemon-reload
   systemctl enable --now standard-cgroups
   systemctl enable --now standard-operator
+  systemctl enable --now standard-candidates
   systemctl enable --now standard-agent standard-web
   local ready=0
   for _ in {1..15}; do

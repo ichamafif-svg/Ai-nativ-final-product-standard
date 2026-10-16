@@ -77,6 +77,9 @@ def init(args) -> None:
     (d / "admission").mkdir(mode=0o750)
     (d / "public" / "requests").mkdir(parents=True, mode=0o750)
     (d / "agent").mkdir()                                  # U's own directory: its key, its store, its notes
+    (d / "agent" / "venvs").mkdir()
+    (d / "scratch").mkdir(mode=0o700)
+    (d / "execution").mkdir(mode=0o750)
     signers = {i: new_key(d / ("agent" if i == "agent" else "keys") / f"{i}.key") for i in IDENTITIES}
     assessor = new_key(d / "keys" / "assessor.key")
     root = {"identities": {i: {"kind": k, "keys": [signers[i].root_key()]} for i, k in IDENTITIES.items()}}
@@ -188,6 +191,12 @@ def separate(args) -> None:
         if p.is_dir():
             os.chmod(p, 0o2750)                              # the guard reads proposals, never writes them
     os.chmod(d / "agent" / "agent.key", 0o600)
+    os.chown(d / "scratch", agent.pw_uid, agent.pw_gid)
+    os.chmod(d / "scratch", 0o700)
+    # Only the external executor writes this directory. The agent receives a
+    # read-only mount; sharing the UID is a lab namespace assumption, not IAM.
+    os.chown(d / "execution", 0, agent.pw_gid)
+    os.chmod(d / "execution", 0o770)
     # Each side reads the other's repository from outside only (fetch, ls-remote): git must be told to accept the owner.
     # The guard never runs git inside U's store, so U's repository configuration never executes as the guard.
     reads = {guard: [d / "agent" / "store"], agent: []}

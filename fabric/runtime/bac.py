@@ -162,13 +162,24 @@ class Bac:
                 base.append("--ignore-cgroups")
         return base
 
-    def _bundle(self, bundle, args, cwd, env, readable, writable, name) -> None:
+    def _bundle(self, bundle, args, cwd, env, readable, writable, name, mount_sources=None) -> None:
         rootfs = Path(bundle, "rootfs")
         rootfs.mkdir()
         for path in oci.SYSTEM:
             if Path(path).is_symlink():
                 Path(rootfs, path.lstrip("/")).symlink_to(Path(path).readlink())
         config = self.config(args, cwd, env=env, readable=readable, writable=writable, name=name)
+        if mount_sources is not None:
+            # The supervisor pins each requested inode before invoking the runtime.
+            # Never resolve an agent-controlled pathname again at mount time.
+            expected = {str(Path(p)) for p in (cwd, *readable, *writable)}
+            actual = {m["destination"] for m in config["mounts"] if m["destination"] in expected}
+            if actual != expected:
+                raise ValueError("candidate mount changed during configuration")
+            for mount in config["mounts"]:
+                if mount["destination"] in expected:
+                    mount["source"] = mount_sources[mount["destination"]]
+            config["process"]["cwd"] = str(cwd)
         Path(bundle, "config.json").write_text(json.dumps(config))
         if self.as_user:                    # the runner reads its bundle; its empty root is its own (mount points)
             Path(bundle).chmod(0o755)
@@ -177,12 +188,12 @@ class Bac:
                 os.lchown(path, *self.ids)
 
     def _execute(self, args, cwd, env, readable, writable, timeout, stdin: bytes | None = None,
-                 split: bool = False) -> Ran:
+                 split: bool = False, mount_sources=None) -> Ran:
         name = uuid.uuid4().hex
         base = self._base()
         with tempfile.TemporaryDirectory(prefix="bac-bundle-") as bundle, tempfile.TemporaryFile() as output, \
                 tempfile.TemporaryFile() as errors, tempfile.TemporaryFile() as input_file:
-            self._bundle(bundle, args, cwd, env, readable, writable, name)
+            self._bundle(bundle, args, cwd, env, readable, writable, name, mount_sources)
             process = None
             try:
                 try:

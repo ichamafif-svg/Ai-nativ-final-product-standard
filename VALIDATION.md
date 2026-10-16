@@ -113,3 +113,25 @@ recherche HTTPS depuis l'enclosure via le vrai proxy et OpenBao, avec un fournis
 ne détient qu'une référence de secret ; le fournisseur observe la clé injectée sur le POST correspondant.
 Les trois parcours utilisateur/root/gVisor et la politique sortante ont réussi.
 Preuve : [parcours Linux et enclosure](https://github.com/ichamafif-svg/Ai-nativ-final-product-standard/actions/runs/38814708278).
+
+## Exécution extérieure des candidats
+
+Le superviseur extérieur remplace le lancement OCI imbriqué dans le service agent. Le montage cgroupfs est
+retiré de l'enclosure. Les tests couvrent les demandes hors scratch/cache, les limites supérieures à l'allocation,
+les liens substitués avant montage, l'identité du client et le refus sans repli lorsque le service disparaît.
+Le parcours natif agent vérifie l'exécution via le superviseur, l'absence de clé agent et de socket superviseur
+dans le candidat, et le refus du runtime local dans l'enclosure. Ces vérifications natives doivent réussir sur
+Linux avant toute qualification ; leur présence dans le dépôt ne prouve pas leur réussite.
+
+Cette version conserve le même UID pour agent et superviseur et un budget agrégé commun. Elle n'installe pas
+de micro-VM et n'établit pas une indépendance administrative. La vérification signée reste séparée sous le
+compte runner. Le précheck HTTP complet derrière Envoy reste explicitement indisponible dans l'agent enfermé.
+
+Sur la révision d'implémentation `0ee0494`, la suite locale exécute 426 tests : 368 réussites, 49 sauts,
+sept erreurs AF_UNIX (`Operation not permitted`) et deux échecs dus aux proxies SOCKS du workspace.
+Les suites intent (1) et Next.js (9) passent après retrait des variables de proxy, dont les deux tests concernés.
+Les suites structure (16), catalogue (13), inventaire de garanties (7), les quatre tests de politique d'enclosure,
+les quatre tests locaux du superviseur et l'essai différentiel des deux juges passent. Deux tests du superviseur
+utilisant de vrais sockets sont sautés ici. Les deux relectures indépendantes de `0ee0494` ne rapportent aucun
+constat concret. Le push GitHub a été refusé par la revue automatique d'approbation : cette passe n'a donc
+pas encore de résultat CI natif. Aucun déploiement ni fusion n'a été effectué.

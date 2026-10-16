@@ -171,6 +171,10 @@ read/search its snapshot, fetch only configured research sources, and experiment
 Research outputs are notes, never signed facts or permission to register an instrument.
 
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
+The installed agent submits candidate execution to `fabric.runtime.supervisor` outside its namespaces.
+It has no cgroupfs mount. Supervisor loss refuses execution without local fallback. The command API accepts only
+scratch/cache mounts and bounded limits; results remain untrusted. Agent and supervisor still share the lab UID
+and aggregate budgets: this is not independent identity isolation. Do not claim a micro-VM or nested gVisor stack.
 
 ## One work path and one observation source
 

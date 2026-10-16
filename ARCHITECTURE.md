@@ -195,7 +195,8 @@ une preuve de séparation face à son administrateur root.
 Une unité de préparation recrée la délégation à chaque démarrage. Le lanceur fixe, installé sous propriété root,
 place son propre processus dans la délégation avant de changer d'identité ; il ne peut cibler que les comptes
 agent et runner. Le contrôle conserve l'accès en lecture aux compteurs ; une lecture impossible reste inconnue.
-L'arrêt du service agent nettoie son sous-arbre avec le mécanisme natif `cgroup.kill`.
+L'arrêt du service agent nettoie seulement son groupe `enclosure` avec `cgroup.kill`.
+L'arrêt du superviseur nettoie le sous-arbre UID complet, candidats compris ; l'unité agent dépend de lui.
 
 L'entrée utilise Envoy et oauth2-proxy, puis la politique Standard : identité signée pour un produit, JSON strict,
 refus des collisions, délai, en-têtes et cookies. Le prototype local suppose une terminaison TLS amont.
@@ -224,11 +225,26 @@ La capture des logs, les empreintes et les checkpoints apportent des contrôles 
 une rétention indépendante face au root de cet hôte. K, BT et le second juge partagent encore un processus.
 Le service agent du laboratoire passe par `engine.agents.enclosed` : bubblewrap crée une racine de fichiers
 limitée, des namespaces PID/réseau/IPC/UTS et retire les capacités. Seuls l'état agent en écriture, le dépôt
-local en lecture, la configuration et le répertoire du socket d'admission sont exposés. Les plafonds UID
-finis restent sous propriété root ; les bacs OCI imbriqués conservent leur propre isolation.
-Le montage cgroupfs reste unique pour respecter les accès sécurisés de runc ; les permissions natives
-limitent les écritures au sous-arbre délégué. Les tentatives de modifier le plafond parent ou de migrer
-hors de ce domaine sont testées. Cela dépend du DAC de l'hôte, sans indépendance face à root.
+local en lecture, la configuration, le contexte public et les répertoires des sockets choisis sont exposés.
+Le scratch partagé est distinct de l'état agent. Aucun cgroupfs n'entre dans sa racine : un appel direct
+au runtime OCI ne peut pas y obtenir les budgets requis. Les plafonds UID restent finis et sous propriété root.
+
+Le service extérieur `fabric.runtime.supervisor` lance les candidats depuis l'environnement hôte, hors des
+namespaces de l'agent. Son API Unix accepte une commande, des chemins sous le scratch ou le cache de dépendances
+et des limites au plus égales à son allocation fixe. Elle ne reçoit ni configuration OCI arbitraire, ni secret,
+ni nouveau réseau, ni identité d'exécution choisie par l'appelant. Une seule exécution est admise à la fois.
+Les chemins sont ouverts composant par composant sans suivre les liens ; les descripteurs restent ouverts
+jusqu'au démontage, pour empêcher une substitution de chemin entre contrôle et montage. Les sorties restent
+bornées par le bac. La perte du superviseur refuse le travail sans repli vers une exécution locale.
+
+Le laboratoire conserve le même UID pour l'agent et le superviseur afin de partager les fichiers temporaires
+sans service privilégié de transfert. Le superviseur dispose de la délégation cgroups ; l'agent n'en voit pas
+le montage. Cette séparation dépend donc de l'enclosure et du noyau, sans indépendance d'identité face à leur
+compromission. Les budgets UID agrégés sont encore partagés. Une identité distincte ou une micro-VM par charge
+reste une qualification ultérieure, et non une protection revendiquée ici. Les sorties du candidat sont
+non fiables ; les instruments de vérification restent sous un autre compte et ne consomment pas ses assertions.
+Le précheck HTTP complet derrière Envoy n'est pas déplacé vers cette API de commandes : il reste indisponible
+dans l'agent enfermé, avec un diagnostic explicite, sans devenir une preuve de conformité.
 Les appels de modèles utilisent un relais loopback vers le socket public du proxy, sans clé fournisseur.
 La CLI directe `engine.agents run` reste une exécution non enfermée ; elle n'est pas le service installé.
 Le parcours Git distant n'est pas ouvert dans cette enclosure. Les autorités sur l'hôte restent partagées. Le déploiement laboratoire
@@ -238,8 +254,9 @@ conserve un humain auto-évalué sur le même hôte et ne constitue pas une inst
 
 | Identité ou domaine | Pouvoirs exposés | Frontière et limite |
 |---|---|---|
-| Agent enfermé | Sa clé, son espace de propositions, lecture du dépôt et du contexte public, admission signée | Aucun endpoint de commande privilégiée ; K juge la portée et la révocation |
-| Candidat imbriqué | Fichiers explicitement montés et budgets de son bac | Pas de réseau direct ni de clé de contrôle ; reste dépendant du noyau Linux |
+| Agent enfermé | Sa clé, ses propositions, scratch, contexte public, admission signée et demandes de tests bornées | Pas de montage cgroups ; K juge la portée et la révocation |
+| Superviseur de candidats | Création et arrêt des bacs OCI, limites fixes, scratch et cache explicitement sélectionnés | Hors des namespaces agent ; même UID dans le laboratoire, sans autorité d'admission |
+| Candidat séparé | Fichiers explicitement montés et budgets de son bac | Ni socket superviseur, ni état agent, ni réseau direct ; reste dépendant du noyau Linux |
 | Contrôle / guard | Journal, clés de services, vérification et promotion des artefacts | Compte distinct de l'agent ; les deux juges partagent encore un processus |
 | Runner de vérification | Exécution des candidats pour les instruments | Compte distinct et lanceur fixe ; aucune clé de contrôle |
 | Proxy de modèles | Destinations autorisées et jeton OpenBao délégué | L'agent voit le socket public et la CA ; la séparation administrative du proxy reste à déployer |
