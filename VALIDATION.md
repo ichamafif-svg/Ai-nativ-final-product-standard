@@ -118,7 +118,7 @@ Preuve : [parcours Linux et enclosure](https://github.com/ichamafif-svg/Ai-nativ
 
 Le superviseur extérieur remplace le lancement OCI imbriqué dans le service agent. Le montage cgroupfs est
 retiré de l'enclosure. Les tests couvrent les demandes hors scratch/cache, les limites supérieures à l'allocation,
-les liens substitués avant montage, l'identité du client et le refus sans repli lorsque le service disparaît.
+les liens substitués avant copie privée, l'identité et le cgroup du client et le refus sans repli lorsque le service disparaît.
 Le parcours natif agent vérifie l'exécution via le superviseur, l'absence de clé agent et de socket superviseur
 dans le candidat, et le refus du runtime local dans l'enclosure. Ces vérifications natives doivent réussir sur
 Linux avant toute qualification ; leur présence dans le dépôt ne prouve pas leur réussite.
@@ -133,5 +133,8 @@ Les suites intent (1) et Next.js (9) passent après retrait des variables de pro
 Les suites structure (16), catalogue (13), inventaire de garanties (7), les quatre tests de politique d'enclosure,
 les quatre tests locaux du superviseur et l'essai différentiel des deux juges passent. Deux tests du superviseur
 utilisant de vrais sockets sont sautés ici. Les deux relectures indépendantes de `0ee0494` ne rapportent aucun
-constat concret. Le push GitHub a été refusé par la revue automatique d'approbation : cette passe n'a donc
-pas encore de résultat CI natif. Aucun déploiement ni fusion n'a été effectué.
+constat concret. Avec l'accord explicite de l'humain, la PR brouillon #5 a ensuite été publiée. Le premier
+parcours natif a refusé le montage OCI via `/proc/PID/fd/N` (`permission denied`) : les vérifications root,
+gVisor et la suite générale passaient, mais le test de séparation candidat a échoué. Le superviseur copie
+désormais les entrées par descripteur dans un scratch privé avant de donner à OCI des chemins ordinaires.
+Ce changement doit encore être validé par le même parcours natif ; aucun déploiement ni fusion n'a été effectué.

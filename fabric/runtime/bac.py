@@ -170,11 +170,11 @@ class Bac:
                 Path(rootfs, path.lstrip("/")).symlink_to(Path(path).readlink())
         config = self.config(args, cwd, env=env, readable=readable, writable=writable, name=name)
         if mount_sources is not None:
-            # The supervisor pins each requested inode before invoking the runtime.
-            # Never resolve an agent-controlled pathname again at mount time.
+            # Supervisor-owned snapshots have fixed names; requested paths are
+            # merely destinations inside the candidate's mount namespace.
             expected = {str(Path(p)) for p in (cwd, *readable, *writable)}
             actual = {m["destination"] for m in config["mounts"] if m["destination"] in expected}
-            if actual != expected:
+            if actual != expected or set(mount_sources) != expected:
                 raise ValueError("candidate mount changed during configuration")
             for mount in config["mounts"]:
                 if mount["destination"] in expected:

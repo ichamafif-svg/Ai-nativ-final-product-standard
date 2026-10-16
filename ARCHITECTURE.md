@@ -233,9 +233,15 @@ Le service extérieur `fabric.runtime.supervisor` lance les candidats depuis l'e
 namespaces de l'agent. Son API Unix accepte une commande, des chemins sous le scratch ou le cache de dépendances
 et des limites au plus égales à son allocation fixe. Elle ne reçoit ni configuration OCI arbitraire, ni secret,
 ni nouveau réseau, ni identité d'exécution choisie par l'appelant. Une seule exécution est admise à la fois.
-Les chemins sont ouverts composant par composant sans suivre les liens ; les descripteurs restent ouverts
-jusqu'au démontage, pour empêcher une substitution de chemin entre contrôle et montage. Les sorties restent
-bornées par le bac. La perte du superviseur refuse le travail sans repli vers une exécution locale.
+Les chemins sont ouverts composant par composant sans suivre les liens ; une copie privée des entrées est
+préparée depuis ces descripteurs avant de lancer OCI. Aucune référence à ces descripteurs ne parvient au
+candidat. Seuls les montages déclarés en écriture sont réconciliés vers leurs inodes d'origine, suppressions
+et renommages compris. La préparation et la restitution partagent un plafond de 1 GiB copiés, 50 000 entrées
+et 120 secondes de travail hors exécution ; leur dépassement refuse la requête. Cette copie n'est pas une
+transaction atomique : un échec pendant la restitution peut laisser un résultat partiel. Le service vérifie
+l'UID **et le cgroup** de chaque client :
+un candidat du même UID ne peut pas demander un nouveau bac via son socket. La perte du superviseur refuse
+le travail sans repli vers une exécution locale.
 
 Le laboratoire conserve le même UID pour l'agent et le superviseur afin de partager les fichiers temporaires
 sans service privilégié de transfert. Le superviseur dispose de la délégation cgroups ; l'agent n'en voit pas

@@ -148,7 +148,7 @@ class Native(unittest.TestCase):
     def _enclosed(self, script):
         bootstrap = ('import os,sys; from fabric.runtime.agent import command; '
                      'a=command(sys.argv[1],program=[sys.executable,"-c",sys.argv[2]]); os.execv(a[0],a)')
-        return subprocess.run(["/usr/local/libexec/standard-cgroup-run", "standard-agent", "env",
+        return subprocess.run(["/usr/local/libexec/standard-cgroup-run", "standard-agent", "--enclosed", "env",
                                f"PYTHONPATH={CODE}", PYTHON, "-c", bootstrap, str(self.config), script],
                               cwd=CODE, capture_output=True, text=True, timeout=90)
 
