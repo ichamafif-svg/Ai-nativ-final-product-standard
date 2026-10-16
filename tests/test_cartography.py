@@ -1,136 +1,111 @@
-"""A map is a revision-bound description, never an authority or measured fact."""
-import os
+"""Behavior of the checked-in descriptive SQLite map and its gap queries."""
+import json
+import sqlite3
 import subprocess
+import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from fabric.data.postgres import Database, PG, _as_postgres
-from interface.context.cartography import SCHEMA, run
-
-
-class MapDatabase(Database):
-    """Plain PostgreSQL fixture: the descriptive map does not require PL/Python."""
-
-    def start(self):
-        self.root.parent.chmod(self.root.parent.stat().st_mode | 0o111)
-        for path in (self.root, self.socket):
-            path.mkdir(parents=True, exist_ok=True)
-            self._chown(path)
-        self.socket.chmod(0o755)
-        subprocess.run([*_as_postgres(), str(PG / "initdb"), "-D", str(self.data), "-A", "reject", "-U", "postgres"],
-                       check=True, capture_output=True, timeout=120)
-        hba = self.data / "pg_hba.conf"
-        hba.write_text("local all postgres peer\nlocal product product trust\nlocal all all reject\n")
-        self._chown(hba)
-        self.process = subprocess.Popen([*_as_postgres(), str(PG / "postgres"), "-D", str(self.data),
-                                         "-c", f"unix_socket_directories={self.socket}", "-c", "listen_addresses="],
-                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        until = time.monotonic() + 30
-        while time.monotonic() < until:
-            if subprocess.run([str(PG / "pg_isready"), "-h", str(self.socket)],
-                              capture_output=True).returncode == 0:
-                break
-            time.sleep(.1)
-        else:
-            raise RuntimeError("PostgreSQL did not start")
-        self.psql("CREATE ROLE product LOGIN")
-        self.psql("CREATE DATABASE product OWNER product")
-        return self
+from interface.context.cartography import (DEFAULT_DB, compare, connect, gaps, import_json,
+                                           initialize, neighborhood, read, shortest_path, validate)
 
 
-@unittest.skipUnless(os.getuid() == 0 and (PG / "postgres").exists(),
-                     "root PostgreSQL 16 test fixture unavailable")
-class Cartography(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.db = MapDatabase(Path(self.tmp.name))
-        self.addCleanup(self.db.stop)
-        self.db.start()
-        self.db.psql(SCHEMA.read_text(), database="product")
-        self.db.psql("""
-            INSERT INTO cartography.types(id,version,kind,label) VALUES
-              ('probe',1,'object','Probe'), ('component',1,'object','Component'),
-              ('observes',1,'relation','Observes');
-            INSERT INTO cartography.revisions(scope,revision) VALUES ('standard','commit-a'),('standard','commit-b');
-            INSERT INTO cartography.objects(scope,revision,id,type_id,type_version,slug,name) VALUES
-              ('standard','commit-a','00000000-0000-0000-0000-000000000001','probe',1,'network-probe','Network probe'),
-              ('standard','commit-a','00000000-0000-0000-0000-000000000002','probe',1,'db-probe','Database probe'),
-              ('standard','commit-a','00000000-0000-0000-0000-000000000003','component',1,'gateway','Gateway'),
-              ('standard','commit-b','00000000-0000-0000-0000-000000000001','probe',1,'network-probe','Network probe');
-            INSERT INTO cartography.relations(scope,revision,id,type_id,type_version,source_id,target_id)
-              VALUES ('standard','commit-a','00000000-0000-0000-0000-000000000004','observes',1,
-                      '00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000003');
-            INSERT INTO cartography.expectations(scope,revision,id,object_type,object_version,
-                    relation_type,relation_version,direction)
-              VALUES ('standard','commit-a','00000000-0000-0000-0000-000000000005','probe',1,
-                      'observes',1,'outgoing');
-            INSERT INTO cartography.sources(scope,revision,object_id,source_kind,source_uri,source_revision)
-              VALUES ('standard','commit-a','00000000-0000-0000-0000-000000000001',
-                      'git_file','fabric/network/gateway.py','commit-a');
-        """, database="product")
+class StandardMap(unittest.TestCase):
+    def test_real_map_exposes_architecture_gaps_and_provenance(self):
+        with connect() as db:
+            self.assertEqual(validate(db), [])
+            items = gaps(db)
+            self.assertGreaterEqual(len(items), 30)
+            self.assertTrue(any('independent supervisor UID' in x['description'] for x in items))
+            self.assertTrue(any('Client data and key restoration' in x['description'] for x in items))
+            self.assertTrue(any(x['category'] == 'missing_link' and x['id'] == 'resource/evidence'
+                                for x in items))
+            graph = neighborhood(db, 'capability/candidate-run')
+            self.assertIn('authority/supervisor', {x['id'] for x in graph['nodes']})
+            self.assertEqual([x['target_id'] for x in shortest_path(
+                db, 'agent/mission', 'component/candidate')],
+                ['capability/candidate-run', 'authority/supervisor', 'component/candidate'])
+            self.assertTrue(any(x['kind'] == 'component' for x in read('search', db, key='OpenBao')['items']))
+            self.assertEqual(read('search', db, key='%')['items'], [])
+            self.assertRaises(sqlite3.OperationalError, db.execute,
+                              "UPDATE nodes SET title='altered' WHERE id='authority/kernel'")
 
-    def sql(self, text, *, check=True):
-        return self.db.psql(text, database="product", check=check)
+    def test_missing_link_is_resolved_by_real_relation_and_foreign_keys_hold(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'map.sqlite'
+            initialize(path)
+            data = {
+                'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
+                'nodes': [
+                    {'id': 'probe/a', 'kind': 'instrument', 'title': 'Probe', 'source': 'ARCHITECTURE.md'},
+                    {'id': 'target/a', 'kind': 'component', 'title': 'Target', 'source': 'ARCHITECTURE.md'}],
+                'expectations': [{'node_id': 'probe/a', 'link_kind': 'observes', 'direction': 'out',
+                                  'target_kind': 'component', 'reason': 'Target required',
+                                  'source': 'ARCHITECTURE.md'}]}
+            import_json(path, data)
+            with connect(path) as db:
+                self.assertEqual(read('gaps', db)['items'][0]['id'], 'probe/a')
+                with connect(DEFAULT_DB) as standard:
+                    difference = compare(db, standard)
+                    self.assertIn('probe/a', {x['id'] for x in difference['nodes']['removed']})
+                    self.assertIn('authority/kernel', {x['id'] for x in difference['nodes']['added']})
+            with self.assertRaises(sqlite3.IntegrityError):
+                import_json(path, {'links': [{'source_id': 'probe/a', 'target_id': 'missing',
+                                              'kind': 'observes', 'source': 'ARCHITECTURE.md'}]})
+            import_json(path, {'links': [{'source_id': 'probe/a', 'target_id': 'target/a',
+                                         'kind': 'observes', 'source': 'ARCHITECTURE.md'}]})
+            with connect(path) as db:
+                self.assertEqual(read('gaps', db)['items'], [])
+                self.assertEqual(validate(db), [])
+            with self.assertRaises(ValueError):
+                initialize(path)
 
-    def test_gaps_and_sources_are_bound_to_one_revision(self):
-        self.assertEqual(self.sql("SELECT slug||':'||status FROM cartography.gaps ORDER BY slug"),
-                         "db-probe:missing\nnetwork-probe:documented")
-        self.sql("""INSERT INTO cartography.exceptions(scope,revision,object_id,expectation_id,status,reason)
-            VALUES ('standard','commit-a','00000000-0000-0000-0000-000000000002',
-                    '00000000-0000-0000-0000-000000000005','not_applicable','experimental only')""")
-        self.assertEqual(self.sql("SELECT status||':'||reason FROM cartography.gaps WHERE slug='db-probe'"),
-                         "not_applicable:experimental only")
-        self.assertIn("foreign key", self.sql("""INSERT INTO cartography.relations
-            (scope,revision,type_id,type_version,source_id,target_id)
-            VALUES ('standard','commit-b','observes',1,
-            '00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000003')""",
-            check=False).lower())
+            with connect(path) as db:
+                page = read('search', db, key='a', limit=1)
+                self.assertEqual(len(page['items']), 1)
+                self.assertEqual(page['next_offset'], 1)
+                self.assertEqual(len(read('search', db, key='a', limit=1, offset=1)['items']), 1)
 
-    def test_kind_integrity_and_sealing(self):
-        self.assertIn("foreign key", self.sql("""INSERT INTO cartography.objects
-            (scope,revision,type_id,type_version,slug,name)
-            VALUES ('standard','commit-a','observes',1,'wrong','Wrong')""", check=False).lower())
-        self.assertIn("type definitions are immutable", self.sql(
-            "UPDATE cartography.types SET label='changed' WHERE id='probe'", check=False))
-        self.sql("UPDATE cartography.revisions SET state='sealed' WHERE revision='commit-a'")
-        self.assertIn("sealed cartography revision", self.sql(
-            "DELETE FROM cartography.objects WHERE slug='db-probe'", check=False))
-        self.assertIn("sealed cartography revision", self.sql(
-            "UPDATE cartography.revisions SET state='draft' WHERE revision='commit-a'", check=False))
+    def test_atomic_editor_rejects_unknown_column_and_invalid_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'map.sqlite'
+            initialize(path)
+            with self.assertRaises(ValueError):
+                import_json(path, {'nodes': [{'id': 'node', 'kind': 'component',
+                                             'title': 'N', 'source': 'ARCHITECTURE.md', 'grant': True}]})
+            with self.assertRaises(sqlite3.IntegrityError):
+                import_json(path, {'nodes': [
+                    {'id': 'good', 'kind': 'component', 'title': 'Good', 'source': 'ARCHITECTURE.md'},
+                    {'id': 'bad', 'kind': 'invalid', 'title': 'Bad', 'source': 'ARCHITECTURE.md'}]})
+            with connect(path) as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM nodes').fetchone()[0], 0)
+            import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
+                               'nodes': [{'id': 'escaped', 'kind': 'component', 'title': 'Escape',
+                                          'source': '../outside'}]})
+            with connect(path) as db:
+                self.assertIn('source absent or outside checkout: ../outside', validate(db))
+            cli = subprocess.run([sys.executable, '-m', 'interface.context.cartography',
+                                  'validate', '--db', str(path)], capture_output=True, text=True)
+            self.assertEqual(cli.returncode, 1)
+            self.assertIn('outside checkout', cli.stdout)
 
-    def test_shared_json_reader_quotes_scope_and_returns_sources(self):
-        self.sql("GRANT USAGE ON SCHEMA cartography TO product; "
-                 "GRANT SELECT ON ALL TABLES IN SCHEMA cartography TO product")
-        with patch.dict(os.environ, {"PGHOST": str(self.db.socket), "PGUSER": "product"}):
-            opts = {"dbname": "product", "scope": "standard", "revision": "commit-a", "psql": str(PG / "psql")}
-            self.assertEqual([g["status"] for g in run("gaps", **opts)["items"]], ["missing", "documented"])
-            self.assertIsNone(run("gaps", **opts)["next_offset"])
-            self.assertEqual(run("sources", **opts)["items"][0]["source_revision"], "commit-a")
-            self.assertEqual(run("objects", **{**opts, "scope": "standard' OR true --"})["items"], [])
-
-    def test_page_has_a_continuation_and_large_property_is_refused(self):
-        self.sql("""INSERT INTO cartography.objects(scope,revision,type_id,type_version,slug,name)
-            SELECT 'standard','commit-a','probe',1,'probe-'||n,'Probe '||n
-            FROM generate_series(1,101) n""")
-        self.assertIn("check constraint", self.sql("""INSERT INTO cartography.objects
-            (scope,revision,type_id,type_version,slug,name,properties)
-            VALUES ('standard','commit-a','probe',1,'oversized','Oversized',
-                    jsonb_build_object('payload', repeat('x',5000)))""", check=False).lower())
-        self.sql("GRANT USAGE ON SCHEMA cartography TO product; "
-                 "GRANT SELECT ON ALL TABLES IN SCHEMA cartography TO product")
-        with patch.dict(os.environ, {"PGHOST": str(self.db.socket), "PGUSER": "product"}):
-            opts = {"dbname": "product", "scope": "standard", "revision": "commit-a", "psql": str(PG / "psql")}
-            first = run("objects", **opts)
-            self.assertEqual(len(first["items"]), 100)
-            self.assertEqual(first["next_offset"], 100)
-            last = run("objects", **opts, offset=100)
-            self.assertEqual(len(last["items"]), 4)
-            self.assertIsNone(last["next_offset"])
+    def test_source_symlink_and_special_filename(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            outside = root / 'outside.py'
+            outside.write_text('outside')
+            checkout = root / 'checkout'
+            checkout.mkdir()
+            (checkout / 'link.py').symlink_to(outside)
+            path = root / 'map?#%.sqlite'
+            initialize(path)
+            import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
+                               'nodes': [{'id': 'link', 'kind': 'component', 'title': 'Link',
+                                          'source': 'link.py'}]})
+            with connect(path) as db:
+                self.assertIn('source absent or outside checkout: link.py', validate(db, checkout))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

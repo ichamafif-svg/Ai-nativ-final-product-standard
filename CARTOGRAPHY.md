@@ -1,60 +1,31 @@
-# Cartographie PostgreSQL de Standard — première tranche
+# Carte SQLite de Standard
 
-La carte est un **document navigable**. Elle n'autorise aucune action et ne
-sert ni de preuve à K/BT, ni de mesure aux instruments. La carte dérivée déjà
-présente dans `interface/context/model.py` reste la lecture d'une installation
-et d'un journal précis ; cette base permet d'éditer et comparer des descriptions
-architecturales. Aucune donnée de production n'y est recopiée.
+La carte répond à « qui fait quoi, avec quelle capacité, quelle limite, quel effet et quel travail reste ouvert ? ». Elle est une **description du dépôt**. Une relation dans la carte n'accorde aucun droit ; `documented` indique seulement qu'une source la décrit. Les tests cités ne sont pas des résultats mesurés. K, BT et les instruments ne consultent pas cette base pour juger.
 
-## Stockage et lectures
+La base versionnée est `interface/context/standard.sqlite`. Elle contient 120 objets et 142 liens initiaux, ancrés sur le commit indiqué par `basis_sha`. Ses domaines couvrent agent, build, produit, client, contrôle, vérification et récupération. L'inventaire des garanties dans `fabric/guarantees.toml` est représenté avec ses limites explicites. Les sources des objets et liens pointent vers les fichiers du dépôt. Les questions ouvertes incluent l'UID partagé avec le superviseur, la rétention indépendante des preuves, l'absence de produit réel qualifié et la restauration des données et clés.
 
-Le schéma `interface/context/cartography.sql` crée sept tables : `types`,
-`revisions`, `objects`, `relations`, `sources`, `expectations`, `exceptions`.
-Les objets et relations sont plats. Une relation `contains` peut décrire une
-hiérarchie ; aucune colonne `parent_id` ne lui donne un sens implicite. Une
-attente s'applique à une version de type et, éventuellement, aux objets dont
-les propriétés contiennent `applies_to`. Une exception `unknown` ou
-`not_applicable` porte sa justification. La vue `gaps` compte les relations
-documentées dans la **même révision** ; son résultat est un état documentaire.
+## Lire la carte
 
-Un `scope` identifie le système cartographié et `revision` la base exacte du
-dessin (par exemple un SHA Git ou l'identifiant d'une configuration déployée).
-La même identité UUID peut être reprise dans une nouvelle révision, ce qui
-permet de comparer les objets sans s'appuyer sur leur nom. Les objets et liens
-d'une révision scellée ne peuvent plus être modifiés ; le registre de types est
-immuable par version. `knowledge_status` reste une appréciation documentaire :
-`corroborated` ne prouve pas un comportement en production. Chaque source
-indique son URI, sa révision éventuelle et, si connue, sa date d'observation.
-
-L'installation exige une base **dédiée** et un propriétaire technique ; ne pas
-appliquer ce schéma dans la base `product` de la barrière de données. Il ne
-contient aucune information secret ni copie du code source. Le rôle de lecture
-reçoit `USAGE` sur le schéma et `SELECT` sur les tables et la vue. Un rôle
-d'écriture distinct et limité gère les brouillons dans des transactions ; le
-propriétaire de la base garde seul les opérations DDL et de scellement. Les
-privilèges réels et la connexion sont à configurer par le déploiement, pas par
-la carte.
-
-## Premier usage commun
-
-`psql` et les variables libpq habituelles (`PGHOST`, `PGUSER`, etc.) sont
-nécessaires. La CLI donne les mêmes réponses JSON aux humains et aux agents :
+Depuis la racine du dépôt, sans serveur, dépendance ou accès à une base produit :
 
 ```sh
-python -m interface.context.cartography init --dbname standard_map
-python -m interface.context.cartography objects --dbname standard_map --scope standard --revision COMMIT
-python -m interface.context.cartography relations --dbname standard_map --scope standard --revision COMMIT
-python -m interface.context.cartography gaps --dbname standard_map --scope standard --revision COMMIT
-python -m interface.context.cartography sources --dbname standard_map --scope standard --revision COMMIT
-python -m interface.context.cartography gaps --dbname standard_map --scope standard --revision COMMIT --offset 100
+python -m interface.context.cartography overview
+python -m interface.context.cartography gaps
+python -m interface.context.cartography search superviseur
+python -m interface.context.cartography node capability/candidate-run
+python -m interface.context.cartography node authority/kernel --depth 2
+python -m interface.context.cartography path agent/mission component/candidate --depth 6
+python -m interface.context.cartography validate
+python -m interface.context.cartography compare /tmp/ancienne.sqlite
+python -m interface.context.cartography gaps --json
 ```
 
-L'édition initiale se fait en SQL transactionnel dans une révision `draft`.
-Chaque réponse contient `items` (100 lignes au plus) et `next_offset` ; poursuivre
-jusqu'à `null` pour ne pas masquer les autres lacunes. Les champs textuels et
-JSON ont des tailles maximales en base, et la sortie JSON est bornée.
-L'API HTTP et les vues HTML ne sont pas encore branchées à cette base. Avant
-de les ajouter, il faut qualifier les rôles d'accès et remplir une première
-carte de Standard à partir de sources réelles. Les filtres, parcours et
-comparaisons devront rester bornés et ne jamais convertir un chemin décrit en
-autorisation ou en preuve.
+`node` présente les voisins et les sources ; `path` cherche un chemin **dirigé documenté**, sans prétendre prouver une possibilité d'accès. `gaps` affiche les limites recensées ainsi que les relations attendues et absentes. Une relation absente signifie « non décrite », jamais « protection inexistante ». `search` échappe les jokers SQL et annonce `next_offset` pour continuer avec `--offset`. Les parcours sont bornés à trois niveaux pour les voisins et huit pour les chemins. Le mode `--json` sert aux agents. La lecture ouvre SQLite en lecture seule. `validate` renvoie un code non nul si la carte est invalide.
+
+## Mettre à jour
+
+Le schéma est dans `interface/context/cartography.py`. `nodes` porte les objets typés, `links` leurs relations orientées, `expectations` les relations attendues, `metadata` le commit de base. Les identifiants lisibles sont stables. Chaque ligne possède une source existante dans le dépôt. La carte est un fichier par état Git. `compare ANCIENNE_BASE` liste les objets, liens et attentes ajoutés, retirés ou changés par identifiant stable ; extraire une ancienne base avec `git show REV:interface/context/standard.sqlite > /tmp/ancienne.sqlite`.
+
+Pour tester une nouvelle carte : `python -m interface.context.cartography init --db /tmp/map.sqlite`, puis `python -m interface.context.cartography import-json fichier.json --db /tmp/map.sqlite`. Le JSON comporte des listes `metadata`, `nodes`, `links`, `expectations` avec les mêmes colonnes que le schéma. Les ajouts sont transactionnels ; les clefs étrangères sont appliquées à chaque connexion. Éditer la carte suivie par Git dans une branche et valider le résultat avec `validate` et les tests avant de proposer le commit. L'éditeur ajoute des lignes ; supprimer ou corriger une ligne existante nécessite pour l'instant un outil SQLite. Aucune opération d'édition ne crée une permission dans Standard.
+
+Le commit de base sert à situer les sources. La validation vérifie leur présence dans le checkout, pas leur équivalence sémantique au code qui tourne. Après une modification des composants ou de leurs relations, revoir les entrées concernées et avancer `basis_sha`. Ne pas considérer la simple absence de lacune comme une attestation de sécurité.
