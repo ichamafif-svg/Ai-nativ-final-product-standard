@@ -2,8 +2,8 @@
 
 Only the agent's writable state, a read-only local source, configuration, admission
 socket directory and optional public egress mount enter the root. Control keys,
-journal, pins, host network and host homes never enter. Nested OCI candidates
-retain their existing sandbox; the host-owned UID cgroup ceiling still applies.
+journal, pins, host network and host homes never enter. An external supervisor
+runs OCI candidates; cgroupfs never enters the agent's root.
 """
 from __future__ import annotations
 
@@ -62,7 +62,13 @@ def layout(config) -> dict:
         requests = resolve(spec["build"].get("store", "requests"))
         if requests != public / "requests":
             raise AgentEnclosureError("BUILD contracts must use the public/requests store")
-    reads = [source, admission, path, public]
+    execution = base / "execution"
+    scratch = base / "scratch"
+    if resolve(agent.get("executor_socket", "execution/candidate.sock")) != execution / "candidate.sock":
+        raise AgentEnclosureError("candidate socket must use the dedicated execution directory")
+    if resolve(agent.get("scratch", "scratch")) != scratch:
+        raise AgentEnclosureError("candidate scratch must use the dedicated scratch directory")
+    reads = [source, admission, path, public, execution]
     if spec.get("data"):
         data = resolve(spec["data"]["path"])
         if data.is_relative_to(base):
@@ -72,12 +78,13 @@ def layout(config) -> dict:
         reads.append(egress)
     # A mount must not replace the private root, runtime, API filesystems or scratch.
     reserved = (Path("/usr"), Path("/etc"), Path("/proc"), Path("/dev"), Path("/sys"), Path("/tmp"))
-    for entry in [state, *reads]:
+    for entry in [state, scratch, *reads]:
         if entry == Path("/") or any(entry == p or entry in p.parents for p in reserved):
             raise AgentEnclosureError("mount overlaps a reserved enclosure path")
         if entry != path and entry != state and (entry == base or entry in base.parents):
             raise AgentEnclosureError("mount would expose the control installation")
-    return {"config": path, "state": state, "reads": reads, "source": source, "egress": egress}
+    return {"config": path, "state": state, "scratch": scratch, "execution": execution,
+            "reads": reads, "source": source, "egress": egress}
 
 
 def delegation(uid: int) -> Path:
@@ -124,10 +131,6 @@ def command(config, *, code=None, program=None) -> list[str]:
         if Path(name).exists():
             args += ["--ro-bind", name, name]
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/run",
-             # One native cgroup mount: runc intentionally refuses submount crossings.
-             # DAC and the host-owned finite parent ceilings bound authority;
-             # the unprivileged account can write only its delegated descendants.
-             "--bind", "/sys/fs/cgroup", "/sys/fs/cgroup",
              "--ro-bind", str(code), str(code)]
     # The interpreter's environment may be installed outside /usr and the code directory.
     runtime = Path(sys.prefix).resolve()
@@ -136,8 +139,10 @@ def command(config, *, code=None, program=None) -> list[str]:
     for path in view["reads"]:
         args += ["--ro-bind", str(path), str(path)]
     args += ["--bind", str(view["state"]), str(view["state"])]
+    args += ["--bind", str(view["scratch"]), str(view["scratch"])]
     env = {**BASE_ENV, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory",
-           "GIT_CONFIG_VALUE_0": str(view["source"])}
+           "GIT_CONFIG_VALUE_0": str(view["source"]), "TMPDIR": str(view["scratch"]),
+           "STANDARD_CANDIDATE_SOCKET": str(view["execution"] / "candidate.sock")}
     for key, value in env.items():
         args += ["--setenv", key, value]
     return [*args, "--chdir", str(code), "--", *(program or [sys.executable, "-m", "engine.agents.enclosed",

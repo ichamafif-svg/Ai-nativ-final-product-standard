@@ -20,6 +20,10 @@ def fixture(root):
     base = root / "install"
     (base / "agent" / "store").mkdir(parents=True)
     (base / "agent" / "agent.key").write_text("agent-only")
+    (base / "agent" / "venvs").mkdir()
+    (base / "scratch").mkdir()
+    (base / "execution").mkdir()
+    (base / "execution" / "candidate.sock").touch()
     (base / "admission").mkdir()
     (base / "public" / "requests").mkdir(parents=True)
     (base / "admission" / "gateway.sock").touch()
@@ -56,6 +60,8 @@ class Policy(unittest.TestCase):
             self.assertIn("--clearenv", args)
             self.assertIn(str(config.parent / "agent"), mounts)
             self.assertIn(str(config.parent / "admission"), mounts)
+            self.assertNotIn("/sys/fs/cgroup", mounts)
+            self.assertIn(str(config.parent / "execution"), mounts)
 
     def test_interface_uses_the_same_public_projection_for_findings_and_retained_metrics(self):
         from interface.surface.web import Installation
@@ -109,13 +115,44 @@ class Native(unittest.TestCase):
             path.chmod(0o755)
 
     def enclosed(self, script):
+        import signal
+        import time
+        base = self.config.parent
+        for directory in (base / "scratch", base / "agent" / "venvs", base / "execution"):
+            directory.mkdir(exist_ok=True)
+            os.chown(directory, self.account.pw_uid, self.account.pw_gid)
+            directory.chmod(0o700)
+        endpoint = base / "execution" / "candidate.sock"
+        endpoint.unlink(missing_ok=True)
+        supervisor = subprocess.Popen(["/usr/local/libexec/standard-cgroup-run", "standard-agent", "env",
+                                       f"PYTHONPATH={CODE}", PYTHON, "-m", "fabric.runtime.supervisor",
+                                       str(endpoint), str(base / "scratch"), "--cache", str(base / "agent" / "venvs"),
+                                       "--agent-uid", str(self.account.pw_uid)], cwd=CODE,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 40
+            while not endpoint.exists() and supervisor.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not endpoint.exists():
+                raise AssertionError("external supervisor did not start")
+            return self._enclosed(script)
+        finally:
+            os.killpg(supervisor.pid, signal.SIGTERM) if supervisor.poll() is None else None
+            try:
+                supervisor.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(supervisor.pid, signal.SIGKILL)
+                supervisor.wait(timeout=10)
+            supervisor.stderr.close()
+
+    def _enclosed(self, script):
         bootstrap = ('import os,sys; from fabric.runtime.agent import command; '
                      'a=command(sys.argv[1],program=[sys.executable,"-c",sys.argv[2]]); os.execv(a[0],a)')
-        return subprocess.run(["/usr/local/libexec/standard-cgroup-run", "standard-agent", "env",
+        return subprocess.run(["/usr/local/libexec/standard-cgroup-run", "standard-agent", "--enclosed", "env",
                                f"PYTHONPATH={CODE}", PYTHON, "-c", bootstrap, str(self.config), script],
                               cwd=CODE, capture_output=True, text=True, timeout=90)
 
-    def test_arbitrary_agent_code_cannot_escape_but_can_run_a_nested_candidate(self):
+    def test_arbitrary_agent_code_cannot_escape_and_candidates_execute_externally(self):
         # World-readable and writable outside the jail: refusals must come from
         # namespaces/mounts, not convenient DAC settings or an inner Python policy.
         hidden = self.root / "control.key"
@@ -127,6 +164,7 @@ class Native(unittest.TestCase):
         script = f'''
 import json, os, pathlib, socket, tempfile
 from fabric.runtime.bac import Bac, Walls
+from engine.agents.sandbox import Sandbox
 r = {{}}
 r["hidden"] = not pathlib.Path({str(hidden)!r}).exists()
 try:
@@ -152,19 +190,22 @@ state = pathlib.Path({str(self.config.parent / 'agent')!r})
 (state / "working").write_text("agent-owned")
 r["work"] = (state / "working").read_text() == "agent-owned"
 b = Bac(Walls(timeout_s=10, memory_mb=512))
-r["nested_ready"] = b.ready
-r["nested_reason"] = b.why
+r["local_runtime_refused"] = not b.ready
+box = Sandbox(timeout=10, memory_mb=512)
+r["external_ready"] = box.isolated
 with tempfile.TemporaryDirectory() as cwd:
-    result = b.run(["/usr/bin/true"],cwd)
-    r["nested_code"] = result.code
+    result = box.run(["/usr/bin/python3", "-c", "import pathlib; assert not pathlib.Path(" + repr(str(state / "agent.key")) + ").exists(); assert not pathlib.Path(" + repr(os.environ["STANDARD_CANDIDATE_SOCKET"]) + ").exists(); print('separate')"],cwd)
+    r["external_code"] = result.code
+    r["external_output"] = result.out
 print(json.dumps(r))
 '''
         ran = self.enclosed(script)
         self.assertEqual(ran.returncode, 0, ran.stderr[-3000:])
         facts = json.loads(ran.stdout.strip().splitlines()[-1])
-        for name in ("hidden", "source_readonly", "environment", "network", "processes", "work", "nested_ready", "ceiling_protected", "parent_migration_refused"):
+        for name in ("hidden", "source_readonly", "environment", "network", "processes", "work", "external_ready", "local_runtime_refused", "ceiling_protected", "parent_migration_refused"):
             self.assertTrue(facts[name], (name, facts))
-        self.assertEqual(facts["nested_code"], 0, facts)
+        self.assertEqual(facts["external_code"], 0, facts)
+        self.assertEqual(facts["external_output"].strip(), "separate", facts)
         self.assertEqual(source.read_text(), "known")
 
     def test_compromised_agent_is_revoked_and_reconstructed_without_erasing_evidence(self):

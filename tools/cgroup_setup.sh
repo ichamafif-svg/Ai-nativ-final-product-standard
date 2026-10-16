@@ -8,7 +8,7 @@ printf '%s\n' '+cpu +memory +pids' > /sys/fs/cgroup/standard-bac/cgroup.subtree_
 for account in standard-agent standard-runner; do
   task_uid="$(/usr/bin/id -u "$account")"
   subtree="/sys/fs/cgroup/standard-bac/$task_uid"
-  mkdir -p "$subtree" "$subtree/launcher"
+  mkdir -p "$subtree" "$subtree/launcher" "$subtree/enclosure"
   printf '%s\n' '+cpu +memory +pids' > "$subtree/cgroup.subtree_control"
   printf '%s\n' 8589934592 > "$subtree/memory.max"
   printf '%s\n' 512 > "$subtree/pids.max"

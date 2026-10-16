@@ -6,6 +6,7 @@ identity, on the exact commit: an agent that lies to itself here is still refuse
 from __future__ import annotations
 
 import shutil
+import os
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,10 @@ class Sandbox:
 
     def __init__(self, *, timeout: int = 600, memory_mb: int = 2048, python: str = sys.executable,
                  cache_roots=(), file_limit: int = 10_485_760):
-        self.bac = Bac(Walls(timeout_s=timeout, memory_mb=memory_mb, file_bytes=file_limit), python=python)
+        from fabric.runtime.supervisor import RemoteBac, SOCKET_ENV
+        walls = Walls(timeout_s=timeout, memory_mb=memory_mb, file_bytes=file_limit)
+        endpoint = os.environ.get(SOCKET_ENV)
+        self.bac = RemoteBac(endpoint, walls) if endpoint else Bac(walls, python=python)
         self.timeout, self.python = timeout, python
         self.cache_roots = frozenset(Path(path).resolve() for path in cache_roots)
         self.isolated = self.bac.ready
