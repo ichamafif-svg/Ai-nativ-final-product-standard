@@ -8,10 +8,98 @@ import unittest
 from pathlib import Path
 
 from interface.context.cartography import (DEFAULT_DB, compare, connect, gaps, import_json,
-                                           initialize, neighborhood, read, shortest_path, validate)
+                                           initialize, neighborhood, read, shortest_path, validate, context, coverage)
 
 
 class StandardMap(unittest.TestCase):
+    def test_work_packet_answers_candidate_authority_effects_and_unknown_deployment(self):
+        with connect() as db:
+            packet = context(db, 'capability/candidate-run')
+            outgoing = {(row['kind'], row['target_id']) for row in packet['links']
+                        if row['source_id'] == packet['focus']}
+            self.assertIn(('governed_by', 'authority/host-admin'), outgoing)
+            self.assertIn(('mediated_by', 'authority/supervisor'), outgoing)
+            self.assertIn(('limited_by', 'constraint/candidate-peer'), outgoing)
+            self.assertIn(('accesses', 'resource/scratch'), outgoing)
+            self.assertIn(('produces', 'effect/candidate-copyback'), outgoing)
+            self.assertEqual({x['dimension']: x['state'] for x in packet['assessments']},
+                             {'implementation': 'present', 'deployment': 'unknown', 'verification': 'unknown'})
+            self.assertIn('gap/copyback-atomic', packet['question_ids'])
+            self.assertIn('gap/candidate-runtime-profile', packet['question_ids'])
+            files = [x for x in context(db, 'component/agent-bac')['nodes'] if x['representation'] == 'source']
+            self.assertIn('fabric/runtime/agent.py', {x['source'] for x in files})
+            self.assertEqual(len(packet['nodes']), len({node['id'] for node in packet['nodes']}))
+            self.assertEqual(packet['missing_links'], [])
+
+    def test_unknown_assessment_and_wrong_relation_target_do_not_hide_questions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'map.sqlite'
+            initialize(path)
+            import_json(path, {'nodes': [
+                {'id': 'cap', 'kind': 'capability', 'title': 'Cap', 'source': 'ARCHITECTURE.md'},
+                {'id': 'file', 'kind': 'resource', 'title': 'File', 'source': 'ARCHITECTURE.md'}],
+                'links': [{'source_id': 'cap', 'kind': 'governed_by', 'target_id': 'file', 'source': 'ARCHITECTURE.md'}],
+                'expectations': [{'node_id': 'cap', 'link_kind': 'governed_by', 'direction': 'out',
+                                  'target_kind': 'authority', 'reason': 'Authority unknown', 'source': 'ARCHITECTURE.md'}]})
+            with connect(path) as db:
+                packet = context(db, 'cap')
+                self.assertTrue(all(x['state'] == 'unknown' for x in packet['assessments']))
+                self.assertEqual(len(packet['missing_links']), 1)
+
+    def test_coverage_uses_tracked_code_not_document_count_or_untracked_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / 'repo'
+            repo.mkdir()
+            def git(*args):
+                subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+            git('init', '-q')
+            for name in ('fabric/known.py', 'engine/unknown.py', 'engine/also.py', 'README.md'):
+                file = repo / name
+                file.parent.mkdir(exist_ok=True)
+                file.write_text('fixture')
+            git('add', '.')
+            git('-c', 'user.name=tests', '-c', 'user.email=tests@standard.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture')
+            (repo / 'untracked.py').write_text('not in inventory')
+            path = root / 'map.sqlite'
+            initialize(path)
+            import_json(path, {'nodes': [{'id': 'known', 'kind': 'component', 'title': 'Known',
+                                          'source': 'fabric/known.py#symbol'}]})
+            with connect(path) as db:
+                result = coverage(db, repo, limit=1)
+                self.assertEqual((result['tracked'], result['referenced'], result['unreferenced']), (3, 1, 2))
+                self.assertEqual(result['next_offset'], 1)
+                last = coverage(db, repo, limit=1, offset=result['next_offset'])
+                self.assertEqual(last['items'], ['engine/unknown.py'])
+                self.assertIsNone(last['next_offset'])
+
+    def test_compare_reads_older_schema_without_assessments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            before, after = [Path(temp) / name for name in ('old.sqlite', 'new.sqlite')]
+            for path in (before, after):
+                initialize(path)
+                import_json(path, {'nodes': [{'id': 'same', 'kind': 'component', 'title': 'Same', 'source': 'ARCHITECTURE.md'}]})
+            with connect(before, write=True) as db:
+                db.execute('DROP TABLE assessments')
+            import_json(after, {'assessments': [{'node_id': 'same', 'dimension': 'deployment', 'state': 'unknown',
+                                                'note': 'Not observed.', 'source': 'ARCHITECTURE.md'}]})
+            with connect(before) as old, connect(after) as new:
+                self.assertEqual(compare(old, new)['assessments']['added'][0]['dimension'], 'deployment')
+
+    def test_context_refuses_oversized_packet_instead_of_hiding_constraints(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'map.sqlite'
+            initialize(path)
+            nodes = [{'id': f'node/{i}', 'kind': 'component', 'title': str(i),
+                      'description': 'x' * 1900, 'source': 'ARCHITECTURE.md'} for i in range(20)]
+            links = [{'source_id': 'node/0', 'kind': 'depends_on', 'target_id': f'node/{i}',
+                      'source': 'ARCHITECTURE.md'} for i in range(1, 20)]
+            import_json(path, {'nodes': nodes, 'links': links})
+            with connect(path) as db:
+                with self.assertRaisesRegex(ValueError, 'context exceeds'):
+                    context(db, 'node/0')
+
     def test_real_map_exposes_architecture_gaps_and_provenance(self):
         with connect() as db:
             self.assertEqual(validate(db), [])

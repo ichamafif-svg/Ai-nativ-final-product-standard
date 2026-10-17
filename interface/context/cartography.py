@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import subprocess
 from collections import deque
 from pathlib import Path
 
@@ -16,6 +17,17 @@ DEFAULT_DB = ROOT / "interface" / "context" / "standard.sqlite"
 KINDS = ("domain", "component", "authority", "agent", "capability", "constraint",
          "effect", "resource", "instrument", "guarantee", "gap", "product")
 STATES = ("documented", "partial", "unknown", "missing")
+MAX_CONTEXT_CHARS = 28_000
+ASSESSMENTS = """
+CREATE TABLE assessments (
+  node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  dimension TEXT NOT NULL CHECK(dimension IN ('implementation','deployment','verification')),
+  state TEXT NOT NULL CHECK(state IN ('present','partial','absent','unknown','not_applicable')),
+  note TEXT NOT NULL CHECK(length(note) BETWEEN 1 AND 1000),
+  source TEXT NOT NULL CHECK(length(source) BETWEEN 1 AND 300),
+  PRIMARY KEY(node_id,dimension)
+);
+"""
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -56,7 +68,7 @@ FROM expectations e WHERE NOT EXISTS (
     (CASE WHEN e.direction='out' THEN l.source_id ELSE l.target_id END)=e.node_id
     AND (e.target_kind='' OR other.kind=e.target_kind)
 );
-"""
+""" + ASSESSMENTS + "INSERT INTO metadata VALUES('schema_version','2');"
 
 
 class MapConnection(sqlite3.Connection):
@@ -89,6 +101,91 @@ def initialize(path: Path) -> None:
 
 def _rows(db: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict]:
     return [dict(row) for row in db.execute(sql, args)]
+
+
+def _source_tables(db: sqlite3.Connection) -> list[str]:
+    tables = ['nodes', 'links', 'expectations']
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assessments'").fetchone():
+        tables.append('assessments')
+    return tables
+
+
+def assessments(db: sqlite3.Connection, node_id: str) -> list[dict]:
+    """Missing knowledge stays unknown; a documented node is not a deployed node."""
+    known = ({row['dimension']: dict(row) for row in db.execute(
+        'SELECT * FROM assessments WHERE node_id=?', (node_id,))}
+        if 'assessments' in _source_tables(db) else {})
+    return [known.get(dimension, {'node_id': node_id, 'dimension': dimension, 'state': 'unknown',
+                                 'note': 'Non renseigné dans la carte.', 'source': None})
+            for dimension in ('implementation', 'deployment', 'verification')]
+
+
+def coverage(db: sqlite3.Connection, root: Path = ROOT, *, limit: int = 100, offset: int = 0) -> dict:
+    """Direct source references among tracked code/config files, never behavioral coverage."""
+    if not 1 <= limit <= 200 or not 0 <= offset <= 1_000_000:
+        raise ValueError('invalid coverage page')
+    def git(*args):
+        run = subprocess.run(['git', '-C', str(root), *args], capture_output=True, timeout=10)
+        if run.returncode:
+            raise ValueError('coverage requires a Git checkout')
+        return run.stdout.decode('utf-8')
+    suffixes = {'.py', '.sh', '.toml', '.json', '.sql', '.js', '.mjs', '.ts', '.tsx', '.yml', '.yaml',
+                '.hcl', '.ini', '.cfg', '.lock', '.in', '.hashes', '.txt', '.css', '.html', '.jsx'}
+    tracked = [path for path in git('ls-files', '-z').split('\0') if path]
+    files = sorted(path for path in tracked if
+                   (Path(path).suffix in suffixes or Path(path).name in {'Makefile', 'Dockerfile'}))
+    excluded_types = {}
+    included = set(files)
+    for path in tracked:
+        if path not in included:
+            suffix = Path(path).suffix or '(no suffix)'
+            excluded_types[suffix] = excluded_types.get(suffix, 0) + 1
+    sources = {row[0].split('#', 1)[0] for table in _source_tables(db)
+               for row in db.execute(f'SELECT DISTINCT source FROM {table}')}
+    groups = {}
+    for path in files:
+        parts = Path(path).parts
+        group = '/'.join(parts[:2]) if len(parts) > 2 else parts[0] if len(parts) > 1 else '(root)'
+        counts = groups.setdefault(group, {'tracked': 0, 'referenced': 0})
+        counts['tracked'] += 1
+        counts['referenced'] += path in sources
+    absent = [path for path in files if path not in sources]
+    basis = db.execute("SELECT value FROM metadata WHERE key='basis_sha'").fetchone()
+    return {'basis_sha': basis[0] if basis else None, 'checkout_sha': git('rev-parse', 'HEAD').strip(),
+            'tracked': len(files), 'referenced': len(files) - len(absent), 'unreferenced': len(absent),
+            'excluded_types': excluded_types,
+            'groups': groups, 'items': absent[offset:offset + limit],
+            'next_offset': offset + limit if len(absent) > offset + limit else None,
+            'meaning': 'Références source directes seulement ; aucune couverture fonctionnelle ou de sécurité.'}
+
+
+def context(db: sqlite3.Connection, key: str) -> dict:
+    """One-hop work packet plus implementation references, open questions and knowledge limits."""
+    graph = neighborhood(db, key)
+    ids = [node['id'] for node in graph['nodes']]
+    placeholders = ','.join('?' for _ in ids)
+    extra = _rows(db, f'''SELECT l.* FROM links l JOIN nodes n ON n.id=l.source_id
+        WHERE l.target_id IN ({placeholders}) AND (l.kind='implements' OR (l.kind='concerns' AND n.kind='gap'))
+        ORDER BY l.kind,l.source_id,l.target_id''', tuple(ids))
+    nodes = {node['id']: node for node in graph['nodes']}
+    links = {(link['source_id'], link['kind'], link['target_id']): link for link in graph['links']}
+    for link in extra:
+        links[(link['source_id'], link['kind'], link['target_id'])] = link
+        if link['source_id'] not in nodes:
+            nodes[link['source_id']] = dict(db.execute('SELECT * FROM nodes WHERE id=?', (link['source_id'],)).fetchone())
+    for node in nodes.values():
+        source = db.execute("SELECT 1 FROM links WHERE source_id=? AND kind='implements'", (node['id'],)).fetchone()
+        node['representation'] = 'source' if source else 'architecture'
+        node['knowledge'] = {row['dimension']: row['state'] for row in assessments(db, node['id'])}
+    packet = {'nodes': [nodes[id] for id in sorted(nodes)], 'links': [links[id] for id in sorted(links)],
+             'basis': {row['key']: row['value'] for row in _rows(db, 'SELECT * FROM metadata')},
+             'meaning': 'state décrit la connaissance documentaire ; assessments sépare code, déploiement et vérification. Le paquet couvre un voisinage, pas tout le système.',
+             'focus': key, 'assessments': assessments(db, key),
+             'question_ids': [node['id'] for node in nodes.values() if node['kind'] == 'gap'],
+             'missing_links': _rows(db, 'SELECT * FROM missing_links WHERE node_id=?', (key,))}
+    if len(json.dumps(packet, ensure_ascii=False)) > MAX_CONTEXT_CHARS:
+        raise ValueError('context exceeds 28000 characters; use node --depth 0 and search to narrow the question')
+    return packet
 
 
 def gaps(db: sqlite3.Connection) -> list[dict]:
@@ -149,7 +246,7 @@ def validate(db: sqlite3.Connection, root: Path = ROOT) -> list[str]:
         errors.append("SQLite integrity_check failed")
     errors.extend(f"foreign key violation: {tuple(row)}" for row in db.execute("PRAGMA foreign_key_check"))
     checkout = root.resolve()
-    for table in ("nodes", "links", "expectations"):
+    for table in _source_tables(db):
         for (source,) in db.execute(f"SELECT DISTINCT source FROM {table}"):
             file = source.split("#", 1)[0]
             candidate = (checkout / file).resolve()
@@ -165,10 +262,13 @@ def validate(db: sqlite3.Connection, root: Path = ROOT) -> list[str]:
 def compare(before: sqlite3.Connection, after: sqlite3.Connection) -> dict:
     """Diff by stable identifiers; a Git revision is represented by its own DB file."""
     keys = {"metadata": ("key",), "nodes": ("id",), "links": ("source_id", "kind", "target_id"),
+            "assessments": ("node_id", "dimension"),
             "expectations": ("node_id", "link_kind", "direction", "target_kind")}
     result = {}
     for table, columns in keys.items():
         def indexed(db):
+            if table == 'assessments' and table not in _source_tables(db):
+                return {}
             return {tuple(row[column] for column in columns): dict(row)
                     for row in db.execute(f"SELECT * FROM {table}")}
         old, new = indexed(before), indexed(after)
@@ -194,6 +294,10 @@ def read(command: str, db: sqlite3.Connection, *, key: str = "", other: str = ""
                 "gaps": gaps(db)}
     if command == "gaps":
         return {"items": gaps(db)}
+    if command == 'coverage':
+        return coverage(db, limit=limit, offset=offset)
+    if command == 'context':
+        return context(db, key)
     if command == "search":
         if not key:
             raise ValueError("search term required")
@@ -205,6 +309,7 @@ def read(command: str, db: sqlite3.Connection, *, key: str = "", other: str = ""
     if command == "node":
         graph = neighborhood(db, key, depth)
         graph['missing_links'] = _rows(db, "SELECT * FROM missing_links WHERE node_id=?", (key,))
+        graph['assessments'] = assessments(db, key)
         return graph
     if command == "path":
         return {"links": shortest_path(db, key, other, depth)}
@@ -214,6 +319,7 @@ def read(command: str, db: sqlite3.Connection, *, key: str = "", other: str = ""
 def import_json(path: Path, payload: dict) -> None:
     """Transactional, explicit editor for a new or existing map (no SQL input)."""
     allowed = {"metadata": ("key", "value"), "nodes": ("id", "kind", "title", "description", "state", "source"),
+               "assessments": ("node_id", "dimension", "state", "note", "source"),
                "links": ("source_id", "kind", "target_id", "description", "source"),
                "expectations": ("node_id", "link_kind", "direction", "target_kind", "reason", "source")}
     if not isinstance(payload, dict) or set(payload) - set(allowed):
@@ -235,7 +341,7 @@ def import_json(path: Path, payload: dict) -> None:
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare"))
+    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare", "context", "coverage"))
     p.add_argument("key", nargs="?", default="")
     p.add_argument("other", nargs="?", default="")
     p.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -262,15 +368,15 @@ def main(argv=None) -> None:
                                depth=args.depth, limit=args.limit, offset=args.offset))
     except (ValueError, sqlite3.Error, OSError) as exc:
         p.exit(2, f"cartography: {exc}\n")
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.json or args.command == 'context':
+        print(json.dumps(result, ensure_ascii=False, indent=None if args.command == 'context' else 2))
     else:
         if args.command == "overview":
             print("STANDARD — carte descriptive (aucune autorité)\n")
             for domain in result['domains']:
                 print(f"{domain['id']}: {domain['title']} — {domain['description']}")
             print(f"\n{len(result['gaps'])} lacunes/questions · base {result['basis'].get('basis_sha', '?')[:12]}")
-            print("Commandes : gaps, search MOT, node ID, path SOURCE DEST, validate")
+            print("Commandes : context ID, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
         elif args.command == "gaps":
             for item in result['items']:
                 detail = item['description']
@@ -289,6 +395,17 @@ def main(argv=None) -> None:
                 print(f"  {item['source_id']} --{item['kind']}--> {item['target_id']} ({item['description']})")
             for item in result['missing_links']:
                 print(f"  ? {item['direction']} {item['link_kind']} {item['target_kind']}: {item['reason']}")
+            for item in result['assessments']:
+                print(f"  {item['dimension']}={item['state']}: {item['note']}")
+        elif args.command == 'coverage':
+            print(result['meaning'])
+            print(f"{result['referenced']}/{result['tracked']} fichiers suivis cités ; {result['unreferenced']} sans référence directe.")
+            for group, counts in sorted(result['groups'].items()):
+                print(f"{group}: {counts['referenced']}/{counts['tracked']} cités")
+            for path in result['items']:
+                print(f"? {path}")
+            if result['next_offset'] is not None:
+                print(f"Suite disponible : --offset {result['next_offset']}")
         elif args.command == "path":
             for item in result['links']:
                 print(f"{item['source_id']} --{item['kind']}--> {item['target_id']}")
@@ -304,6 +421,7 @@ def main(argv=None) -> None:
                         print(f"{table} {action}: " + ', '.join(
                             str(row[column]) for column in
                             {"metadata": ("key",), "nodes": ("id",), "links": ("source_id", "kind", "target_id"),
+                             "assessments": ("node_id", "dimension"),
                              "expectations": ("node_id", "link_kind", "direction", "target_kind")}[table]))
         else:
             for item in result.get('items', []):
