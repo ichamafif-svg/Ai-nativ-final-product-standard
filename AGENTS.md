@@ -171,6 +171,22 @@ read/search its snapshot, fetch only configured research sources, and experiment
 Research outputs are notes, never signed facts or permission to register an instrument.
 
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
+For architecture research, use `python -m interface.context.cartography search WORD`, then `context ID` for a bounded
+work packet: typed links, sources, implementation references, open questions and separate implementation/deployment/verification knowledge.
+Discover the snapshot vocabulary with `types` and `types relations --limit 5` (paged). Object ID prefixes are historical; `nodes.kind` is the type.
+`contains` is physical, `comprises` logical composition, `hosts` process-to-role realization. `runs_as` is process identity, `owned_by` resource ownership.
+`checked_by` methods and fixtures describe coverage, not outcomes. Relation IDs distinguish parallel mounts; follow explicit `deferred_ref` for whole neighbor definitions.
+Start with `overview --json` or `context domain/standard` for navigation across the full lifecycle; each domain has an entrypoint.
+Use `topology ID` for placement/channels/mounts/privileges and protection/instrument/probe coverage; start at
+`resource/assembly-lab`, `resource/assembly-stack` or `resource/assembly-measurement`, then follow at depth 1.
+Fixtures describe their own environments; a simulated Bac or shared definition never qualifies the running deployment.
+Use `flow ID` for ordered source-backed paths and their timing/checks/failure/scope/limits, discovered in overview.
+Use `shared ID` for direct common process/account/admin/key/budget/kernel/code/storage dependencies; follow dependency IDs to continue.
+These describe local or optional assemblies, not observed deployment. Missing conditions and identity owners remain gaps.
+Use `audit` to check inventory/navigation/packet bounds and source byte drift; inventory completeness never proves semantic completeness or deployment.
+Use `coverage --json` to find tracked code/config files with no direct map reference; citations are not behavioral coverage.
+Continue at the returned node IDs and read their sources at the stated basis; the map does not replace code review or admission.
+[ARCHITECTURE_PATH.md](ARCHITECTURE_PATH.md) is an optional narrative of the agent/candidate/network paths.
 The installed agent submits candidate execution to `fabric.runtime.supervisor` outside its namespaces.
 It has no cgroupfs mount. Supervisor loss refuses execution without local fallback. The command API accepts only
 scratch/cache mounts and bounded limits; results remain untrusted. Agent and supervisor still share the lab UID

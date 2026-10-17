@@ -1,0 +1,3006 @@
+{
+  "version": 1,
+  "meaning": "Catalogue descriptif versionné, copié dans chaque photographie SQLite ; aucune autorité de sécurité.",
+  "node_types": [
+    {
+      "id": "arch/access",
+      "description": "access — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "arch/assembly",
+      "description": "Assemblage décrit par un installateur/appelant ; ne prouve aucun déploiement observé."
+    },
+    {
+      "id": "arch/component",
+      "description": "Responsabilité logique ; distincte de son processus et de son implémentation source."
+    },
+    {
+      "id": "arch/domain",
+      "description": "domain — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "arch/fixture",
+      "description": "Environnement/matériel de vérification ; pas identité avec le déploiement."
+    },
+    {
+      "id": "arch/flow",
+      "description": "flow — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "arch/gap",
+      "description": "gap — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "arch/guarantee",
+      "description": "guarantee — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "arch/instrument",
+      "description": "Analyse ou mesure ; ses dépendances et sa fixture doivent être parcourues."
+    },
+    {
+      "id": "arch/probe",
+      "description": "Exerce une opération précise dans une fixture ; pas un résultat enregistré."
+    },
+    {
+      "id": "arch/property",
+      "description": "property — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "arch/source",
+      "description": "Fichier, module ou définition source ; sa présence ne prouve ni exécution ni protection."
+    },
+    {
+      "id": "data/archive",
+      "description": "archive — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/artifact",
+      "description": "artifact — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/capture",
+      "description": "capture — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/database",
+      "description": "database — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/evidence-store",
+      "description": "evidence store — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/journal",
+      "description": "journal — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/log",
+      "description": "log — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/pin-store",
+      "description": "pin store — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/register",
+      "description": "register — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/repo",
+      "description": "repo — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "data/table",
+      "description": "table — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "ext/destination",
+      "description": "destination — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "ext/provider",
+      "description": "provider — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "ext/standard",
+      "description": "Spécification/standard ; distinct d’un logiciel exécutable."
+    },
+    {
+      "id": "ext/third-party",
+      "description": "third party — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "ext/upstream",
+      "description": "upstream — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "ext/user",
+      "description": "user — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "fs/directory",
+      "description": "directory — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "fs/scratch",
+      "description": "scratch — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "fs/snapshot",
+      "description": "snapshot — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/allowlist",
+      "description": "allowlist — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/dns",
+      "description": "dns — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/listener",
+      "description": "listener — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/proxy",
+      "description": "proxy — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/relay",
+      "description": "relay — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/tcp-port",
+      "description": "tcp port — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/tls",
+      "description": "tls — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "net/unix-socket",
+      "description": "unix socket — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/cgroup",
+      "description": "cgroup — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/container",
+      "description": "container — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/enclosure",
+      "description": "enclosure — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/host",
+      "description": "Hôte logique vu par l’assemblage ; son support physique/VM/conteneur peut rester inconnu."
+    },
+    {
+      "id": "run/kernel",
+      "description": "kernel — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/launcher",
+      "description": "launcher — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/namespace",
+      "description": "namespace — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/process",
+      "description": "process — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/runtime",
+      "description": "runtime — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/seccomp",
+      "description": "seccomp — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/service",
+      "description": "service — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/thread",
+      "description": "thread — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "run/vm",
+      "description": "Machine virtuelle ; catalogue disponible, absence de nœud ne prouve pas absence de VM parente."
+    },
+    {
+      "id": "trust/account",
+      "description": "account — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/admin",
+      "description": "admin — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/capability",
+      "description": "capability — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/constraint",
+      "description": "constraint — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/effect",
+      "description": "effect — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/genesis",
+      "description": "genesis — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/judge",
+      "description": "Rôle de jugement ; ne présuppose pas de processus ou autorité administratrice distincts."
+    },
+    {
+      "id": "trust/key",
+      "description": "key — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/pin",
+      "description": "pin — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/policy",
+      "description": "policy — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/principal",
+      "description": "principal — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/public-key",
+      "description": "public key — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/release",
+      "description": "release — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/secret",
+      "description": "secret — entité descriptive, assertions limitées aux sources citées."
+    },
+    {
+      "id": "trust/signing-credential",
+      "description": "Signer pouvant être clé locale OU jeton transit ; mode concret non conclu sans source."
+    },
+    {
+      "id": "trust/token",
+      "description": "token — entité descriptive, assertions limitées aux sources citées."
+    }
+  ],
+  "relation_types": [
+    {
+      "id": "accesses",
+      "description": "Ressource visée par une capacité descriptive ; ne confère aucun droit.",
+      "pairs": [
+        [
+          "trust/capability",
+          "arch/component"
+        ],
+        [
+          "trust/capability",
+          "data/evidence-store"
+        ],
+        [
+          "trust/capability",
+          "data/journal"
+        ],
+        [
+          "trust/capability",
+          "data/register"
+        ],
+        [
+          "trust/capability",
+          "data/repo"
+        ],
+        [
+          "trust/capability",
+          "data/table"
+        ],
+        [
+          "trust/capability",
+          "ext/destination"
+        ],
+        [
+          "trust/capability",
+          "fs/scratch"
+        ],
+        [
+          "trust/capability",
+          "trust/secret"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "administered_by",
+      "description": "Autorité d’administration commune à examiner face aux compromis.",
+      "pairs": [
+        [
+          "fs/directory",
+          "trust/admin"
+        ],
+        [
+          "run/host",
+          "trust/admin"
+        ],
+        [
+          "run/kernel",
+          "trust/admin"
+        ],
+        [
+          "trust/account",
+          "trust/admin"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "authorizes_call_to",
+      "description": "authorizes call to — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "trust/token",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "calls",
+      "description": "Invocation de responsabilité/fonction ; aucune connexion réseau implicite.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "arch/instrument"
+        ],
+        [
+          "arch/component",
+          "data/journal"
+        ],
+        [
+          "arch/component",
+          "data/register"
+        ],
+        [
+          "arch/component",
+          "trust/genesis"
+        ],
+        [
+          "arch/component",
+          "trust/policy"
+        ],
+        [
+          "arch/instrument",
+          "arch/probe"
+        ],
+        [
+          "run/process",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "checked_by",
+      "description": "Couverture déclarée par un instrument/sonde/définition ; pas résultat ni preuve suffisante.",
+      "pairs": [
+        [
+          "arch/access",
+          "arch/instrument"
+        ],
+        [
+          "arch/access",
+          "arch/probe"
+        ],
+        [
+          "arch/access",
+          "arch/source"
+        ],
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "arch/instrument"
+        ],
+        [
+          "arch/component",
+          "arch/probe"
+        ],
+        [
+          "arch/component",
+          "arch/source"
+        ],
+        [
+          "arch/guarantee",
+          "arch/instrument"
+        ],
+        [
+          "arch/guarantee",
+          "arch/probe"
+        ],
+        [
+          "arch/guarantee",
+          "arch/source"
+        ],
+        [
+          "arch/property",
+          "arch/instrument"
+        ],
+        [
+          "arch/property",
+          "arch/probe"
+        ],
+        [
+          "arch/property",
+          "arch/source"
+        ],
+        [
+          "data/archive",
+          "arch/component"
+        ],
+        [
+          "data/repo",
+          "arch/component"
+        ],
+        [
+          "data/repo",
+          "arch/instrument"
+        ]
+      ],
+      "attributes": {
+        "method": {
+          "enum": [
+            "analysis",
+            "attempt",
+            "simulation",
+            "replay",
+            "unspecified"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "comprises",
+      "description": "Composition architecturale ; aucune implication de placement ou privilège.",
+      "pairs": [
+        [
+          "arch/assembly",
+          "arch/fixture"
+        ],
+        [
+          "arch/assembly",
+          "run/host"
+        ],
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/domain",
+          "arch/component"
+        ],
+        [
+          "arch/domain",
+          "arch/domain"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "concerns",
+      "description": "concerns — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/gap",
+          "arch/access"
+        ],
+        [
+          "arch/gap",
+          "arch/assembly"
+        ],
+        [
+          "arch/gap",
+          "arch/component"
+        ],
+        [
+          "arch/gap",
+          "arch/domain"
+        ],
+        [
+          "arch/gap",
+          "arch/fixture"
+        ],
+        [
+          "arch/gap",
+          "arch/flow"
+        ],
+        [
+          "arch/gap",
+          "arch/gap"
+        ],
+        [
+          "arch/gap",
+          "arch/guarantee"
+        ],
+        [
+          "arch/gap",
+          "arch/instrument"
+        ],
+        [
+          "arch/gap",
+          "arch/probe"
+        ],
+        [
+          "arch/gap",
+          "arch/property"
+        ],
+        [
+          "arch/gap",
+          "arch/source"
+        ],
+        [
+          "arch/gap",
+          "data/archive"
+        ],
+        [
+          "arch/gap",
+          "data/artifact"
+        ],
+        [
+          "arch/gap",
+          "data/capture"
+        ],
+        [
+          "arch/gap",
+          "data/database"
+        ],
+        [
+          "arch/gap",
+          "data/evidence-store"
+        ],
+        [
+          "arch/gap",
+          "data/journal"
+        ],
+        [
+          "arch/gap",
+          "data/log"
+        ],
+        [
+          "arch/gap",
+          "data/pin-store"
+        ],
+        [
+          "arch/gap",
+          "data/register"
+        ],
+        [
+          "arch/gap",
+          "data/repo"
+        ],
+        [
+          "arch/gap",
+          "data/table"
+        ],
+        [
+          "arch/gap",
+          "ext/destination"
+        ],
+        [
+          "arch/gap",
+          "ext/provider"
+        ],
+        [
+          "arch/gap",
+          "ext/standard"
+        ],
+        [
+          "arch/gap",
+          "ext/third-party"
+        ],
+        [
+          "arch/gap",
+          "ext/upstream"
+        ],
+        [
+          "arch/gap",
+          "ext/user"
+        ],
+        [
+          "arch/gap",
+          "fs/directory"
+        ],
+        [
+          "arch/gap",
+          "fs/scratch"
+        ],
+        [
+          "arch/gap",
+          "fs/snapshot"
+        ],
+        [
+          "arch/gap",
+          "net/allowlist"
+        ],
+        [
+          "arch/gap",
+          "net/dns"
+        ],
+        [
+          "arch/gap",
+          "net/listener"
+        ],
+        [
+          "arch/gap",
+          "net/proxy"
+        ],
+        [
+          "arch/gap",
+          "net/relay"
+        ],
+        [
+          "arch/gap",
+          "net/tcp-port"
+        ],
+        [
+          "arch/gap",
+          "net/tls"
+        ],
+        [
+          "arch/gap",
+          "net/unix-socket"
+        ],
+        [
+          "arch/gap",
+          "run/cgroup"
+        ],
+        [
+          "arch/gap",
+          "run/container"
+        ],
+        [
+          "arch/gap",
+          "run/enclosure"
+        ],
+        [
+          "arch/gap",
+          "run/host"
+        ],
+        [
+          "arch/gap",
+          "run/kernel"
+        ],
+        [
+          "arch/gap",
+          "run/launcher"
+        ],
+        [
+          "arch/gap",
+          "run/namespace"
+        ],
+        [
+          "arch/gap",
+          "run/process"
+        ],
+        [
+          "arch/gap",
+          "run/runtime"
+        ],
+        [
+          "arch/gap",
+          "run/seccomp"
+        ],
+        [
+          "arch/gap",
+          "run/service"
+        ],
+        [
+          "arch/gap",
+          "run/thread"
+        ],
+        [
+          "arch/gap",
+          "run/vm"
+        ],
+        [
+          "arch/gap",
+          "trust/account"
+        ],
+        [
+          "arch/gap",
+          "trust/admin"
+        ],
+        [
+          "arch/gap",
+          "trust/capability"
+        ],
+        [
+          "arch/gap",
+          "trust/constraint"
+        ],
+        [
+          "arch/gap",
+          "trust/effect"
+        ],
+        [
+          "arch/gap",
+          "trust/genesis"
+        ],
+        [
+          "arch/gap",
+          "trust/judge"
+        ],
+        [
+          "arch/gap",
+          "trust/key"
+        ],
+        [
+          "arch/gap",
+          "trust/pin"
+        ],
+        [
+          "arch/gap",
+          "trust/policy"
+        ],
+        [
+          "arch/gap",
+          "trust/principal"
+        ],
+        [
+          "arch/gap",
+          "trust/public-key"
+        ],
+        [
+          "arch/gap",
+          "trust/release"
+        ],
+        [
+          "arch/gap",
+          "trust/secret"
+        ],
+        [
+          "arch/gap",
+          "trust/signing-credential"
+        ],
+        [
+          "arch/gap",
+          "trust/token"
+        ],
+        [
+          "arch/guarantee",
+          "arch/access"
+        ],
+        [
+          "arch/guarantee",
+          "arch/assembly"
+        ],
+        [
+          "arch/guarantee",
+          "arch/component"
+        ],
+        [
+          "arch/guarantee",
+          "arch/domain"
+        ],
+        [
+          "arch/guarantee",
+          "arch/fixture"
+        ],
+        [
+          "arch/guarantee",
+          "arch/flow"
+        ],
+        [
+          "arch/guarantee",
+          "arch/gap"
+        ],
+        [
+          "arch/guarantee",
+          "arch/guarantee"
+        ],
+        [
+          "arch/guarantee",
+          "arch/instrument"
+        ],
+        [
+          "arch/guarantee",
+          "arch/probe"
+        ],
+        [
+          "arch/guarantee",
+          "arch/property"
+        ],
+        [
+          "arch/guarantee",
+          "arch/source"
+        ],
+        [
+          "arch/guarantee",
+          "data/archive"
+        ],
+        [
+          "arch/guarantee",
+          "data/artifact"
+        ],
+        [
+          "arch/guarantee",
+          "data/capture"
+        ],
+        [
+          "arch/guarantee",
+          "data/database"
+        ],
+        [
+          "arch/guarantee",
+          "data/evidence-store"
+        ],
+        [
+          "arch/guarantee",
+          "data/journal"
+        ],
+        [
+          "arch/guarantee",
+          "data/log"
+        ],
+        [
+          "arch/guarantee",
+          "data/pin-store"
+        ],
+        [
+          "arch/guarantee",
+          "data/register"
+        ],
+        [
+          "arch/guarantee",
+          "data/repo"
+        ],
+        [
+          "arch/guarantee",
+          "data/table"
+        ],
+        [
+          "arch/guarantee",
+          "ext/destination"
+        ],
+        [
+          "arch/guarantee",
+          "ext/provider"
+        ],
+        [
+          "arch/guarantee",
+          "ext/standard"
+        ],
+        [
+          "arch/guarantee",
+          "ext/third-party"
+        ],
+        [
+          "arch/guarantee",
+          "ext/upstream"
+        ],
+        [
+          "arch/guarantee",
+          "ext/user"
+        ],
+        [
+          "arch/guarantee",
+          "fs/directory"
+        ],
+        [
+          "arch/guarantee",
+          "fs/scratch"
+        ],
+        [
+          "arch/guarantee",
+          "fs/snapshot"
+        ],
+        [
+          "arch/guarantee",
+          "net/allowlist"
+        ],
+        [
+          "arch/guarantee",
+          "net/dns"
+        ],
+        [
+          "arch/guarantee",
+          "net/listener"
+        ],
+        [
+          "arch/guarantee",
+          "net/proxy"
+        ],
+        [
+          "arch/guarantee",
+          "net/relay"
+        ],
+        [
+          "arch/guarantee",
+          "net/tcp-port"
+        ],
+        [
+          "arch/guarantee",
+          "net/tls"
+        ],
+        [
+          "arch/guarantee",
+          "net/unix-socket"
+        ],
+        [
+          "arch/guarantee",
+          "run/cgroup"
+        ],
+        [
+          "arch/guarantee",
+          "run/container"
+        ],
+        [
+          "arch/guarantee",
+          "run/enclosure"
+        ],
+        [
+          "arch/guarantee",
+          "run/host"
+        ],
+        [
+          "arch/guarantee",
+          "run/kernel"
+        ],
+        [
+          "arch/guarantee",
+          "run/launcher"
+        ],
+        [
+          "arch/guarantee",
+          "run/namespace"
+        ],
+        [
+          "arch/guarantee",
+          "run/process"
+        ],
+        [
+          "arch/guarantee",
+          "run/runtime"
+        ],
+        [
+          "arch/guarantee",
+          "run/seccomp"
+        ],
+        [
+          "arch/guarantee",
+          "run/service"
+        ],
+        [
+          "arch/guarantee",
+          "run/thread"
+        ],
+        [
+          "arch/guarantee",
+          "run/vm"
+        ],
+        [
+          "arch/guarantee",
+          "trust/account"
+        ],
+        [
+          "arch/guarantee",
+          "trust/admin"
+        ],
+        [
+          "arch/guarantee",
+          "trust/capability"
+        ],
+        [
+          "arch/guarantee",
+          "trust/constraint"
+        ],
+        [
+          "arch/guarantee",
+          "trust/effect"
+        ],
+        [
+          "arch/guarantee",
+          "trust/genesis"
+        ],
+        [
+          "arch/guarantee",
+          "trust/judge"
+        ],
+        [
+          "arch/guarantee",
+          "trust/key"
+        ],
+        [
+          "arch/guarantee",
+          "trust/pin"
+        ],
+        [
+          "arch/guarantee",
+          "trust/policy"
+        ],
+        [
+          "arch/guarantee",
+          "trust/principal"
+        ],
+        [
+          "arch/guarantee",
+          "trust/public-key"
+        ],
+        [
+          "arch/guarantee",
+          "trust/release"
+        ],
+        [
+          "arch/guarantee",
+          "trust/secret"
+        ],
+        [
+          "arch/guarantee",
+          "trust/signing-credential"
+        ],
+        [
+          "arch/guarantee",
+          "trust/token"
+        ],
+        [
+          "arch/property",
+          "arch/access"
+        ],
+        [
+          "arch/property",
+          "arch/assembly"
+        ],
+        [
+          "arch/property",
+          "arch/component"
+        ],
+        [
+          "arch/property",
+          "arch/domain"
+        ],
+        [
+          "arch/property",
+          "arch/fixture"
+        ],
+        [
+          "arch/property",
+          "arch/flow"
+        ],
+        [
+          "arch/property",
+          "arch/gap"
+        ],
+        [
+          "arch/property",
+          "arch/guarantee"
+        ],
+        [
+          "arch/property",
+          "arch/instrument"
+        ],
+        [
+          "arch/property",
+          "arch/probe"
+        ],
+        [
+          "arch/property",
+          "arch/property"
+        ],
+        [
+          "arch/property",
+          "arch/source"
+        ],
+        [
+          "arch/property",
+          "data/archive"
+        ],
+        [
+          "arch/property",
+          "data/artifact"
+        ],
+        [
+          "arch/property",
+          "data/capture"
+        ],
+        [
+          "arch/property",
+          "data/database"
+        ],
+        [
+          "arch/property",
+          "data/evidence-store"
+        ],
+        [
+          "arch/property",
+          "data/journal"
+        ],
+        [
+          "arch/property",
+          "data/log"
+        ],
+        [
+          "arch/property",
+          "data/pin-store"
+        ],
+        [
+          "arch/property",
+          "data/register"
+        ],
+        [
+          "arch/property",
+          "data/repo"
+        ],
+        [
+          "arch/property",
+          "data/table"
+        ],
+        [
+          "arch/property",
+          "ext/destination"
+        ],
+        [
+          "arch/property",
+          "ext/provider"
+        ],
+        [
+          "arch/property",
+          "ext/standard"
+        ],
+        [
+          "arch/property",
+          "ext/third-party"
+        ],
+        [
+          "arch/property",
+          "ext/upstream"
+        ],
+        [
+          "arch/property",
+          "ext/user"
+        ],
+        [
+          "arch/property",
+          "fs/directory"
+        ],
+        [
+          "arch/property",
+          "fs/scratch"
+        ],
+        [
+          "arch/property",
+          "fs/snapshot"
+        ],
+        [
+          "arch/property",
+          "net/allowlist"
+        ],
+        [
+          "arch/property",
+          "net/dns"
+        ],
+        [
+          "arch/property",
+          "net/listener"
+        ],
+        [
+          "arch/property",
+          "net/proxy"
+        ],
+        [
+          "arch/property",
+          "net/relay"
+        ],
+        [
+          "arch/property",
+          "net/tcp-port"
+        ],
+        [
+          "arch/property",
+          "net/tls"
+        ],
+        [
+          "arch/property",
+          "net/unix-socket"
+        ],
+        [
+          "arch/property",
+          "run/cgroup"
+        ],
+        [
+          "arch/property",
+          "run/container"
+        ],
+        [
+          "arch/property",
+          "run/enclosure"
+        ],
+        [
+          "arch/property",
+          "run/host"
+        ],
+        [
+          "arch/property",
+          "run/kernel"
+        ],
+        [
+          "arch/property",
+          "run/launcher"
+        ],
+        [
+          "arch/property",
+          "run/namespace"
+        ],
+        [
+          "arch/property",
+          "run/process"
+        ],
+        [
+          "arch/property",
+          "run/runtime"
+        ],
+        [
+          "arch/property",
+          "run/seccomp"
+        ],
+        [
+          "arch/property",
+          "run/service"
+        ],
+        [
+          "arch/property",
+          "run/thread"
+        ],
+        [
+          "arch/property",
+          "run/vm"
+        ],
+        [
+          "arch/property",
+          "trust/account"
+        ],
+        [
+          "arch/property",
+          "trust/admin"
+        ],
+        [
+          "arch/property",
+          "trust/capability"
+        ],
+        [
+          "arch/property",
+          "trust/constraint"
+        ],
+        [
+          "arch/property",
+          "trust/effect"
+        ],
+        [
+          "arch/property",
+          "trust/genesis"
+        ],
+        [
+          "arch/property",
+          "trust/judge"
+        ],
+        [
+          "arch/property",
+          "trust/key"
+        ],
+        [
+          "arch/property",
+          "trust/pin"
+        ],
+        [
+          "arch/property",
+          "trust/policy"
+        ],
+        [
+          "arch/property",
+          "trust/principal"
+        ],
+        [
+          "arch/property",
+          "trust/public-key"
+        ],
+        [
+          "arch/property",
+          "trust/release"
+        ],
+        [
+          "arch/property",
+          "trust/secret"
+        ],
+        [
+          "arch/property",
+          "trust/signing-credential"
+        ],
+        [
+          "arch/property",
+          "trust/token"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "configures",
+      "description": "configures — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "trust/admin",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "confined_by",
+      "description": "Dépendance de confinement à un noyau/runtime/namespace/filtre/budget ; partagé selon attribut.",
+      "pairs": [
+        [
+          "arch/component",
+          "run/cgroup"
+        ],
+        [
+          "arch/component",
+          "run/kernel"
+        ],
+        [
+          "run/container",
+          "run/cgroup"
+        ],
+        [
+          "run/container",
+          "run/kernel"
+        ],
+        [
+          "run/container",
+          "run/namespace"
+        ],
+        [
+          "run/container",
+          "run/runtime"
+        ],
+        [
+          "run/container",
+          "run/seccomp"
+        ],
+        [
+          "run/enclosure",
+          "run/cgroup"
+        ],
+        [
+          "run/enclosure",
+          "run/kernel"
+        ],
+        [
+          "run/enclosure",
+          "run/namespace"
+        ],
+        [
+          "run/enclosure",
+          "run/runtime"
+        ],
+        [
+          "run/enclosure",
+          "run/seccomp"
+        ],
+        [
+          "run/process",
+          "run/cgroup"
+        ],
+        [
+          "run/process",
+          "run/kernel"
+        ],
+        [
+          "run/process",
+          "run/namespace"
+        ],
+        [
+          "run/process",
+          "run/runtime"
+        ],
+        [
+          "run/process",
+          "run/seccomp"
+        ],
+        [
+          "run/thread",
+          "run/cgroup"
+        ],
+        [
+          "run/thread",
+          "run/kernel"
+        ],
+        [
+          "run/thread",
+          "run/namespace"
+        ],
+        [
+          "run/thread",
+          "run/runtime"
+        ],
+        [
+          "run/thread",
+          "run/seccomp"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        },
+        "shared": {
+          "type": "boolean"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "connects_to",
+      "description": "Connexion/relais vers un canal ou destinataire ; modalités dans description/conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "ext/destination"
+        ],
+        [
+          "arch/component",
+          "net/unix-socket"
+        ],
+        [
+          "arch/component",
+          "run/process"
+        ],
+        [
+          "run/process",
+          "net/tcp-port"
+        ],
+        [
+          "run/process",
+          "net/unix-socket"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "via": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "constrains",
+      "description": "constrains — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "trust/policy",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "contains",
+      "description": "Placement physique dans l’environnement indiqué ; pas simple composition logicielle.",
+      "pairs": [
+        [
+          "run/container",
+          "run/container"
+        ],
+        [
+          "run/container",
+          "run/enclosure"
+        ],
+        [
+          "run/container",
+          "run/namespace"
+        ],
+        [
+          "run/container",
+          "run/process"
+        ],
+        [
+          "run/container",
+          "run/thread"
+        ],
+        [
+          "run/enclosure",
+          "run/container"
+        ],
+        [
+          "run/enclosure",
+          "run/enclosure"
+        ],
+        [
+          "run/enclosure",
+          "run/namespace"
+        ],
+        [
+          "run/enclosure",
+          "run/process"
+        ],
+        [
+          "run/enclosure",
+          "run/thread"
+        ],
+        [
+          "run/host",
+          "run/container"
+        ],
+        [
+          "run/host",
+          "run/enclosure"
+        ],
+        [
+          "run/host",
+          "run/namespace"
+        ],
+        [
+          "run/host",
+          "run/process"
+        ],
+        [
+          "run/host",
+          "run/thread"
+        ],
+        [
+          "run/process",
+          "run/thread"
+        ],
+        [
+          "run/vm",
+          "run/container"
+        ],
+        [
+          "run/vm",
+          "run/enclosure"
+        ],
+        [
+          "run/vm",
+          "run/namespace"
+        ],
+        [
+          "run/vm",
+          "run/process"
+        ],
+        [
+          "run/vm",
+          "run/thread"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "depends_on",
+      "description": "Dépendance fonctionnelle ; ne constitue pas un chemin réseau ou un droit d’accès.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "ext/third-party"
+        ],
+        [
+          "arch/component",
+          "fs/scratch"
+        ],
+        [
+          "arch/component",
+          "trust/constraint"
+        ],
+        [
+          "arch/component",
+          "trust/judge"
+        ],
+        [
+          "arch/instrument",
+          "arch/component"
+        ],
+        [
+          "trust/capability",
+          "net/unix-socket"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "derived_from",
+      "description": "derived from — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "data/capture",
+          "data/capture"
+        ],
+        [
+          "fs/directory",
+          "data/repo"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "discovers",
+      "description": "discovers — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/source"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "documents",
+      "description": "documents — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "data/archive"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "documents_absence",
+      "description": "documents absence — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/domain",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "enforced_by",
+      "description": "Point d’implémentation cité pour une garantie ; qualification du déploiement séparée.",
+      "pairs": [
+        [
+          "arch/guarantee",
+          "arch/component"
+        ],
+        [
+          "arch/guarantee",
+          "arch/source"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "entrypoint",
+      "description": "entrypoint — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/domain",
+          "arch/assembly"
+        ],
+        [
+          "arch/domain",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "evaluates",
+      "description": "Examine/juge un élément dans le fonctionnement du composant ; pas une sonde indépendante.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "data/repo"
+        ],
+        [
+          "trust/judge",
+          "trust/capability"
+        ],
+        [
+          "trust/judge",
+          "trust/effect"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "expects_property",
+      "description": "expects property — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/access",
+          "arch/property"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "exposes",
+      "description": "exposes — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "net/unix-socket"
+        ],
+        [
+          "arch/component",
+          "trust/capability"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "governed_by",
+      "description": "Autorité descriptive de décision ; la carte n’applique aucune autorisation.",
+      "pairs": [
+        [
+          "trust/capability",
+          "trust/admin"
+        ],
+        [
+          "trust/capability",
+          "trust/judge"
+        ],
+        [
+          "trust/capability",
+          "trust/principal"
+        ],
+        [
+          "trust/judge",
+          "trust/principal"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "holds",
+      "description": "Accès à un secret/moyen de signer ; un jeton transit ne signifie pas détention des octets privés.",
+      "pairs": [
+        [
+          "arch/component",
+          "data/evidence-store"
+        ],
+        [
+          "arch/component",
+          "data/table"
+        ],
+        [
+          "arch/component",
+          "net/unix-socket"
+        ],
+        [
+          "arch/component",
+          "trust/signing-credential"
+        ],
+        [
+          "arch/component",
+          "trust/token"
+        ],
+        [
+          "data/journal",
+          "data/register"
+        ],
+        [
+          "data/journal",
+          "trust/policy"
+        ],
+        [
+          "run/process",
+          "fs/directory"
+        ],
+        [
+          "run/process",
+          "trust/genesis"
+        ],
+        [
+          "trust/principal",
+          "trust/signing-credential"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "hosted_on",
+      "description": "hosted on — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "run/host",
+          "run/container"
+        ],
+        [
+          "run/host",
+          "run/host"
+        ],
+        [
+          "run/host",
+          "run/vm"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "hosts",
+      "description": "Un processus/environnement réalise un rôle logique ; mémoire/administration partagée à examiner.",
+      "pairs": [
+        [
+          "arch/component",
+          "trust/principal"
+        ],
+        [
+          "run/container",
+          "arch/component"
+        ],
+        [
+          "run/process",
+          "arch/component"
+        ],
+        [
+          "run/process",
+          "arch/instrument"
+        ],
+        [
+          "run/process",
+          "trust/judge"
+        ],
+        [
+          "run/process",
+          "trust/principal"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "impacts",
+      "description": "Ressource touchée par un effet ; distincte de la capacité qui produit cet effet.",
+      "pairs": [
+        [
+          "trust/effect",
+          "arch/component"
+        ],
+        [
+          "trust/effect",
+          "data/journal"
+        ],
+        [
+          "trust/effect",
+          "data/register"
+        ],
+        [
+          "trust/effect",
+          "data/repo"
+        ],
+        [
+          "trust/effect",
+          "data/table"
+        ],
+        [
+          "trust/effect",
+          "ext/destination"
+        ],
+        [
+          "trust/effect",
+          "fs/scratch"
+        ],
+        [
+          "trust/effect",
+          "run/cgroup"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "implements",
+      "description": "Définition source d’une responsabilité logique ; ne prouve pas son activation.",
+      "pairs": [
+        [
+          "arch/source",
+          "arch/component"
+        ],
+        [
+          "arch/source",
+          "arch/instrument"
+        ],
+        [
+          "arch/source",
+          "arch/probe"
+        ],
+        [
+          "arch/source",
+          "trust/admin"
+        ],
+        [
+          "arch/source",
+          "trust/constraint"
+        ],
+        [
+          "arch/source",
+          "trust/judge"
+        ],
+        [
+          "arch/source",
+          "trust/principal"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "indexes",
+      "description": "indexes — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "arch/guarantee"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "inherits_account_of",
+      "description": "inherits account of — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "run/process"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "instance_of",
+      "description": "instance of — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/fixture",
+          "arch/component"
+        ],
+        [
+          "run/enclosure",
+          "arch/component"
+        ],
+        [
+          "run/process",
+          "arch/component"
+        ],
+        [
+          "run/process",
+          "arch/instrument"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "launches",
+      "description": "launches — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "fs/directory"
+        ],
+        [
+          "run/process",
+          "run/container"
+        ],
+        [
+          "trust/admin",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "limited_by",
+      "description": "Contrainte applicable à la capacité ; pas valeur d’autorisation.",
+      "pairs": [
+        [
+          "arch/component",
+          "trust/constraint"
+        ],
+        [
+          "data/table",
+          "trust/constraint"
+        ],
+        [
+          "trust/capability",
+          "trust/constraint"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "listens_on",
+      "description": "Écoute sur un canal ; permissions/protocole documentés sans les inventer.",
+      "pairs": [
+        [
+          "arch/component",
+          "net/tcp-port"
+        ],
+        [
+          "arch/component",
+          "net/unix-socket"
+        ],
+        [
+          "run/process",
+          "net/tcp-port"
+        ],
+        [
+          "run/process",
+          "net/unix-socket"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        },
+        "permission": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "loads_from",
+      "description": "Dépendance au code/configuration/spécification ; pas seulement permission de lire.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/source"
+        ],
+        [
+          "arch/component",
+          "fs/directory"
+        ],
+        [
+          "arch/component",
+          "run/runtime"
+        ],
+        [
+          "arch/component",
+          "trust/policy"
+        ],
+        [
+          "arch/component",
+          "trust/principal"
+        ],
+        [
+          "arch/component",
+          "trust/signing-credential"
+        ],
+        [
+          "trust/judge",
+          "arch/source"
+        ],
+        [
+          "trust/judge",
+          "run/runtime"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "mediated_by",
+      "description": "Contrôle/filtrage sur la capacité ou donnée indiquée ; lire moment/échec/périmètre.",
+      "pairs": [
+        [
+          "data/artifact",
+          "arch/component"
+        ],
+        [
+          "data/table",
+          "arch/component"
+        ],
+        [
+          "trust/capability",
+          "arch/component"
+        ],
+        [
+          "trust/capability",
+          "trust/judge"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "mounts",
+      "description": "Ressource montée ou explicitement exclue ; mode obligatoire.",
+      "pairs": [
+        [
+          "run/container",
+          "data/archive"
+        ],
+        [
+          "run/container",
+          "data/artifact"
+        ],
+        [
+          "run/container",
+          "data/capture"
+        ],
+        [
+          "run/container",
+          "data/database"
+        ],
+        [
+          "run/container",
+          "data/evidence-store"
+        ],
+        [
+          "run/container",
+          "data/journal"
+        ],
+        [
+          "run/container",
+          "data/log"
+        ],
+        [
+          "run/container",
+          "data/pin-store"
+        ],
+        [
+          "run/container",
+          "data/register"
+        ],
+        [
+          "run/container",
+          "data/repo"
+        ],
+        [
+          "run/container",
+          "data/table"
+        ],
+        [
+          "run/container",
+          "fs/directory"
+        ],
+        [
+          "run/container",
+          "fs/scratch"
+        ],
+        [
+          "run/container",
+          "fs/snapshot"
+        ],
+        [
+          "run/container",
+          "net/unix-socket"
+        ],
+        [
+          "run/enclosure",
+          "data/archive"
+        ],
+        [
+          "run/enclosure",
+          "data/artifact"
+        ],
+        [
+          "run/enclosure",
+          "data/capture"
+        ],
+        [
+          "run/enclosure",
+          "data/database"
+        ],
+        [
+          "run/enclosure",
+          "data/evidence-store"
+        ],
+        [
+          "run/enclosure",
+          "data/journal"
+        ],
+        [
+          "run/enclosure",
+          "data/log"
+        ],
+        [
+          "run/enclosure",
+          "data/pin-store"
+        ],
+        [
+          "run/enclosure",
+          "data/register"
+        ],
+        [
+          "run/enclosure",
+          "data/repo"
+        ],
+        [
+          "run/enclosure",
+          "data/table"
+        ],
+        [
+          "run/enclosure",
+          "fs/directory"
+        ],
+        [
+          "run/enclosure",
+          "fs/scratch"
+        ],
+        [
+          "run/enclosure",
+          "fs/snapshot"
+        ],
+        [
+          "run/enclosure",
+          "trust/genesis"
+        ]
+      ],
+      "attributes": {
+        "mode": {
+          "enum": [
+            "ro",
+            "rw",
+            "excluded"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    {
+      "id": "observes",
+      "description": "observes — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/instrument",
+          "arch/component"
+        ],
+        [
+          "arch/probe",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "outside_of",
+      "description": "Extérieur à cet environnement précis ; ne signifie pas indépendant de l’hôte/UID.",
+      "pairs": [
+        [
+          "run/container",
+          "run/enclosure"
+        ],
+        [
+          "run/process",
+          "run/enclosure"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "owned_by",
+      "description": "Compte propriétaire d’une ressource ; ne décrit pas une exécution.",
+      "pairs": [
+        [
+          "data/evidence-store",
+          "trust/account"
+        ],
+        [
+          "data/log",
+          "trust/account"
+        ],
+        [
+          "data/pin-store",
+          "trust/account"
+        ],
+        [
+          "trust/policy",
+          "trust/account"
+        ],
+        [
+          "trust/signing-credential",
+          "trust/account"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "produces",
+      "description": "produces — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "data/archive"
+        ],
+        [
+          "arch/component",
+          "data/artifact"
+        ],
+        [
+          "arch/component",
+          "data/journal"
+        ],
+        [
+          "arch/component",
+          "data/repo"
+        ],
+        [
+          "arch/component",
+          "fs/directory"
+        ],
+        [
+          "arch/component",
+          "fs/scratch"
+        ],
+        [
+          "arch/component",
+          "trust/effect"
+        ],
+        [
+          "arch/component",
+          "trust/policy"
+        ],
+        [
+          "arch/component",
+          "trust/token"
+        ],
+        [
+          "arch/instrument",
+          "data/artifact"
+        ],
+        [
+          "trust/capability",
+          "trust/effect"
+        ],
+        [
+          "trust/judge",
+          "data/register"
+        ],
+        [
+          "trust/principal",
+          "data/artifact"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "protected_by",
+      "description": "protected by — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "data/evidence-store",
+          "trust/admin"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "protects_access",
+      "description": "protects access — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/access"
+        ],
+        [
+          "trust/constraint",
+          "arch/access"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "reads",
+      "description": "reads — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "data/archive"
+        ],
+        [
+          "arch/component",
+          "data/capture"
+        ],
+        [
+          "arch/component",
+          "data/evidence-store"
+        ],
+        [
+          "arch/component",
+          "data/log"
+        ],
+        [
+          "arch/component",
+          "data/register"
+        ],
+        [
+          "arch/component",
+          "data/repo"
+        ],
+        [
+          "arch/instrument",
+          "data/journal"
+        ],
+        [
+          "arch/instrument",
+          "data/pin-store"
+        ],
+        [
+          "arch/instrument",
+          "trust/genesis"
+        ],
+        [
+          "run/process",
+          "fs/scratch"
+        ]
+      ],
+      "attributes": {
+        "access": {
+          "enum": [
+            "permitted"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "when": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "realizes",
+      "description": "Implémentation logique d’un contrat ; distincte d’une citation source.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "requests",
+      "description": "requests — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "trust/capability"
+        ],
+        [
+          "run/process",
+          "trust/capability"
+        ],
+        [
+          "trust/principal",
+          "trust/capability"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "requires",
+      "description": "requires — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "trust/capability",
+          "trust/capability"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "responds_to",
+      "description": "responds to — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "data/artifact"
+        ],
+        [
+          "arch/component",
+          "trust/principal"
+        ],
+        [
+          "data/repo",
+          "arch/component"
+        ],
+        [
+          "run/process",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "runs_as",
+      "description": "Identité OS d’un processus/thread ; distincte du propriétaire d’un fichier.",
+      "pairs": [
+        [
+          "run/process",
+          "trust/account"
+        ],
+        [
+          "run/thread",
+          "trust/account"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "signs",
+      "description": "signs — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "trust/principal",
+          "data/artifact"
+        ],
+        [
+          "trust/principal",
+          "trust/policy"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "stores_in",
+      "description": "stores in — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "data/evidence-store"
+        ],
+        [
+          "arch/component",
+          "data/log"
+        ],
+        [
+          "arch/component",
+          "data/pin-store"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "transmits",
+      "description": "Transmission logique de demande/donnée ; ne déduit pas son transport physique.",
+      "pairs": [
+        [
+          "arch/component",
+          "arch/component"
+        ],
+        [
+          "arch/component",
+          "trust/principal"
+        ],
+        [
+          "data/artifact",
+          "arch/component"
+        ],
+        [
+          "data/capture",
+          "arch/component"
+        ],
+        [
+          "data/journal",
+          "arch/component"
+        ],
+        [
+          "data/register",
+          "arch/component"
+        ],
+        [
+          "net/tcp-port",
+          "net/unix-socket"
+        ],
+        [
+          "net/unix-socket",
+          "net/tcp-port"
+        ],
+        [
+          "trust/token",
+          "arch/component"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "uses_account",
+      "description": "Compte utilisé par une responsabilité logique ; chercher son instance concrète.",
+      "pairs": [
+        [
+          "arch/component",
+          "trust/account"
+        ],
+        [
+          "arch/instrument",
+          "trust/account"
+        ],
+        [
+          "arch/probe",
+          "trust/account"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "uses_environment",
+      "description": "Fixture/périmètre utilisé ou ciblé ; ne qualifie pas le déploiement.",
+      "pairs": [
+        [
+          "arch/access",
+          "arch/fixture"
+        ],
+        [
+          "arch/access",
+          "run/container"
+        ],
+        [
+          "arch/access",
+          "run/enclosure"
+        ],
+        [
+          "arch/access",
+          "run/host"
+        ],
+        [
+          "arch/assembly",
+          "arch/fixture"
+        ],
+        [
+          "arch/component",
+          "arch/fixture"
+        ],
+        [
+          "arch/instrument",
+          "arch/fixture"
+        ],
+        [
+          "arch/probe",
+          "arch/fixture"
+        ],
+        [
+          "trust/judge",
+          "arch/fixture"
+        ]
+      ],
+      "attributes": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    {
+      "id": "writes",
+      "description": "writes — relation descriptive, lire sa source et ses conditions.",
+      "pairs": [
+        [
+          "arch/component",
+          "data/capture"
+        ],
+        [
+          "arch/component",
+          "data/evidence-store"
+        ],
+        [
+          "arch/component",
+          "data/journal"
+        ],
+        [
+          "arch/component",
+          "data/register"
+        ],
+        [
+          "arch/component",
+          "data/repo"
+        ],
+        [
+          "run/process",
+          "fs/scratch"
+        ]
+      ],
+      "attributes": {
+        "access": {
+          "enum": [
+            "permitted"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "when": {
+          "type": "string"
+        }
+      },
+      "required": []
+    }
+  ]
+}

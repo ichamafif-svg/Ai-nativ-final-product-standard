@@ -223,6 +223,8 @@ Un scénario owner-only ne démontre pas toute la règle TENANT.
 
 La capture des logs, les empreintes et les checkpoints apportent des contrôles locaux. Ils ne démontrent pas
 une rétention indépendante face au root de cet hôte. K, BT et le second juge partagent encore un processus.
+Le parcours détaillé agent → superviseur → candidat, ainsi que les sorties distinctes de l'agent et du produit,
+est relevé dans [`ARCHITECTURE_PATH.md`](ARCHITECTURE_PATH.md) avec ses sources et ses lacunes.
 Le service agent du laboratoire passe par `engine.agents.enclosed` : bubblewrap crée une racine de fichiers
 limitée, des namespaces PID/réseau/IPC/UTS et retire les capacités. Seuls l'état agent en écriture, le dépôt
 local en lecture, la configuration, le contexte public et les répertoires des sockets choisis sont exposés.
