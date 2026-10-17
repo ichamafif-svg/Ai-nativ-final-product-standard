@@ -28,6 +28,39 @@ CREATE TABLE assessments (
   PRIMARY KEY(node_id,dimension)
 );
 """
+DETAILS = """
+CREATE TABLE link_conditions (
+  source_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  timing TEXT NOT NULL CHECK(length(timing) BETWEEN 1 AND 500),
+  checks TEXT NOT NULL CHECK(length(checks) BETWEEN 1 AND 1500),
+  on_failure TEXT NOT NULL CHECK(length(on_failure) BETWEEN 1 AND 1000),
+  scope TEXT NOT NULL CHECK(length(scope) BETWEEN 1 AND 1000),
+  limitation TEXT NOT NULL CHECK(length(limitation) BETWEEN 1 AND 1500),
+  source TEXT NOT NULL CHECK(length(source) BETWEEN 1 AND 300),
+  PRIMARY KEY(source_id,kind,target_id),
+  FOREIGN KEY(source_id,kind,target_id) REFERENCES links(source_id,kind,target_id) ON DELETE CASCADE
+);
+CREATE TABLE flows (
+  id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 2 AND 100),
+  title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 200),
+  description TEXT NOT NULL CHECK(length(description) BETWEEN 1 AND 2000),
+  source TEXT NOT NULL CHECK(length(source) BETWEEN 1 AND 300)
+);
+CREATE TABLE flow_steps (
+  flow_id TEXT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 64),
+  source_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  PRIMARY KEY(flow_id,position),
+  FOREIGN KEY(source_id,kind,target_id) REFERENCES links(source_id,kind,target_id) ON DELETE CASCADE
+);
+"""
+DEPENDENCIES = ('runs_in', 'uses_identity', 'administered_by', 'uses_secret',
+                'shares_budget', 'uses_kernel', 'loads_from', 'stores_in', 'inherits_account_of')
+CONTROL_LINKS = ('governed_by', 'mediated_by', 'limited_by')
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -68,7 +101,7 @@ FROM expectations e WHERE NOT EXISTS (
     (CASE WHEN e.direction='out' THEN l.source_id ELSE l.target_id END)=e.node_id
     AND (e.target_kind='' OR other.kind=e.target_kind)
 );
-""" + ASSESSMENTS + "INSERT INTO metadata VALUES('schema_version','2');"
+""" + ASSESSMENTS + DETAILS + "INSERT INTO metadata VALUES('schema_version','3');"
 
 
 class MapConnection(sqlite3.Connection):
@@ -103,11 +136,58 @@ def _rows(db: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict]:
     return [dict(row) for row in db.execute(sql, args)]
 
 
+def _has_table(db: sqlite3.Connection, name: str) -> bool:
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
 def _source_tables(db: sqlite3.Connection) -> list[str]:
-    tables = ['nodes', 'links', 'expectations']
-    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assessments'").fetchone():
-        tables.append('assessments')
-    return tables
+    return [name for name in ('nodes', 'links', 'expectations', 'assessments', 'link_conditions', 'flows')
+            if _has_table(db, name)]
+
+
+def conditions(db: sqlite3.Connection, source_id: str, kind: str, target_id: str) -> dict | None:
+    if not _has_table(db, 'link_conditions'):
+        return None
+    row = db.execute('SELECT * FROM link_conditions WHERE source_id=? AND kind=? AND target_id=?',
+                     (source_id, kind, target_id)).fetchone()
+    return dict(row) if row else None
+
+
+def _bounded(packet: dict) -> dict:
+    if len(json.dumps(packet, ensure_ascii=False)) > MAX_CONTEXT_CHARS:
+        raise ValueError('context exceeds 28000 characters; use node --depth 0, search or shared --limit to narrow the question')
+    return packet
+
+
+def flow(db: sqlite3.Connection, key: str) -> dict:
+    row = db.execute('SELECT * FROM flows WHERE id=?', (key,)).fetchone() if _has_table(db, 'flows') else None
+    if row is None:
+        raise ValueError(f'unknown flow: {key}')
+    steps = _rows(db, """SELECT s.position,l.* FROM flow_steps s JOIN links l
+        USING(source_id,kind,target_id) WHERE s.flow_id=? ORDER BY s.position""", (key,))
+    for step in steps:
+        step['conditions'] = conditions(db, step['source_id'], step['kind'], step['target_id'])
+    ids = sorted({s[k] for s in steps for k in ('source_id', 'target_id')})
+    return _bounded({'flow': dict(row), 'steps': steps,
+                     'basis': {r['key']: r['value'] for r in _rows(db, 'SELECT * FROM metadata')},
+                     'nodes': [dict(db.execute('SELECT * FROM nodes WHERE id=?', (id,)).fetchone()) for id in ids],
+                     'meaning': 'Parcours décrit dans le code, pas trace exécutée. Conditions absentes = non renseignées. Lire context ID pour les dépendances et inconnues.'})
+
+
+def shared(db: sqlite3.Connection, key: str, *, limit: int, offset: int) -> dict:
+    if db.execute('SELECT 1 FROM nodes WHERE id=?', (key,)).fetchone() is None:
+        raise ValueError(f'unknown node: {key}')
+    marks = ','.join('?' for _ in DEPENDENCIES)
+    dependencies = _rows(db, f'SELECT * FROM links WHERE source_id=? AND kind IN ({marks}) ORDER BY target_id,kind',
+                         (key, *DEPENDENCIES))
+    items = []
+    for dependency in sorted({r['target_id'] for r in dependencies}):
+        items.extend(_rows(db, f"""SELECT target_id AS dependency_id,source_id AS node_id,kind,description,source
+            FROM links WHERE target_id=? AND source_id<>? AND kind IN ({marks}) ORDER BY source_id,kind""",
+                           (dependency, key, *DEPENDENCIES)))
+    return _bounded({'focus': key, 'dependencies': dependencies, 'items': items[offset:offset + limit],
+            'next_offset': offset + limit if len(items) > offset + limit else None,
+            'meaning': 'Dépendances directes communes documentées ; lire leurs conditions. Assemblage local ou optionnel, pas inventaire observé du déploiement. Absence de lien ne prouve pas indépendance.'})
 
 
 def assessments(db: sqlite3.Connection, node_id: str) -> list[dict]:
@@ -193,11 +273,18 @@ def context(db: sqlite3.Connection, key: str) -> dict:
                        if focus['kind'] == 'domain' else
                        'Relations directes et questions des voisins ; sources du focus et de ses contrôles pour une capacité. Poursuivre par context ID pour les autres voisins.'),
              'focus': key, 'assessments': assessments(db, key),
+             'conditions': [detail for link in graph['links']
+                            if (detail := conditions(db, link['source_id'], link['kind'], link['target_id'])) is not None],
+             'missing_conditions': [{k: l[k] for k in ('source_id', 'kind', 'target_id', 'source')}
+                                    for l in graph['links'] if l['source_id'] == key and l['kind'] in CONTROL_LINKS
+                                    and conditions(db, l['source_id'], l['kind'], l['target_id']) is None],
+             'dependency_ids': sorted({l['target_id'] for l in graph['links']
+                                       if l['source_id'] == key and l['kind'] in DEPENDENCIES}),
+             'flow_ids': [r[0] for r in db.execute('SELECT DISTINCT flow_id FROM flow_steps WHERE source_id=? OR target_id=? ORDER BY flow_id', (key, key))]
+                         if _has_table(db, 'flow_steps') else [],
              'question_ids': [node['id'] for node in nodes.values() if node['kind'] == 'gap'],
              'missing_links': _rows(db, 'SELECT * FROM missing_links WHERE node_id=?', (key,))}
-    if len(json.dumps(packet, ensure_ascii=False)) > MAX_CONTEXT_CHARS:
-        raise ValueError('context exceeds 28000 characters; use node --depth 0 and search to narrow the question')
-    return packet
+    return _bounded(packet)
 
 
 def gaps(db: sqlite3.Connection) -> list[dict]:
@@ -206,7 +293,13 @@ def gaps(db: sqlite3.Connection) -> list[dict]:
     missing = _rows(db, """SELECT node_id AS id, link_kind, direction, target_kind,
         reason AS description, source, 'missing_link' AS category FROM missing_links
         ORDER BY node_id, link_kind""")
-    return explicit + missing
+    undocumented = []
+    for link in _rows(db, "SELECT l.* FROM links l JOIN nodes n ON n.id=l.source_id WHERE n.kind='capability' ORDER BY l.source_id,l.kind,l.target_id"):
+        if link['kind'] in CONTROL_LINKS and conditions(db, link['source_id'], link['kind'], link['target_id']) is None:
+            undocumented.append({'id': link['source_id'], 'link_kind': link['kind'], 'target_id': link['target_id'],
+                                 'description': 'Moment, vérifications, échec et périmètre du contrôle non renseignés.',
+                                 'source': link['source'], 'category': 'missing_condition'})
+    return explicit + missing + undocumented
 
 
 def neighborhood(db: sqlite3.Connection, node_id: str, depth: int = 1) -> dict:
@@ -256,6 +349,17 @@ def validate(db: sqlite3.Connection, root: Path = ROOT) -> list[str]:
     errors = []
     if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
         errors.append("SQLite integrity_check failed")
+    required = {'metadata': ('key', 'value'),
+                'nodes': ('id', 'kind', 'title', 'description', 'state', 'source'),
+                'links': ('source_id', 'kind', 'target_id', 'description', 'source'),
+                'expectations': ('node_id', 'link_kind', 'direction', 'target_kind', 'reason', 'source'),
+                'missing_links': ('node_id', 'link_kind', 'direction', 'target_kind', 'reason', 'source')}
+    for name, columns in required.items():
+        actual = {row['name'] for row in db.execute(f'PRAGMA table_info({name})')}
+        if not set(columns) <= actual:
+            errors.append(f'required map structure missing or incomplete: {name}')
+    if errors:
+        return errors
     errors.extend(f"foreign key violation: {tuple(row)}" for row in db.execute("PRAGMA foreign_key_check"))
     checkout = root.resolve()
     for table in _source_tables(db):
@@ -265,6 +369,13 @@ def validate(db: sqlite3.Connection, root: Path = ROOT) -> list[str]:
             if (Path(file).is_absolute() or ".." in Path(file).parts or
                     not candidate.is_relative_to(checkout) or not candidate.is_file()):
                 errors.append(f"source absent or outside checkout: {source}")
+    if _has_table(db, 'flows'):
+        for (id,) in db.execute('SELECT id FROM flows ORDER BY id'):
+            steps = _rows(db, 'SELECT * FROM flow_steps WHERE flow_id=? ORDER BY position', (id,))
+            if not steps or [s['position'] for s in steps] != list(range(1, len(steps) + 1)):
+                errors.append(f'flow positions missing or non-contiguous: {id}')
+            if any(a['target_id'] != b['source_id'] for a, b in zip(steps, steps[1:])):
+                errors.append(f'flow has disconnected steps: {id}')
     basis = db.execute("SELECT value FROM metadata WHERE key='basis_sha'").fetchone()
     if not basis or len(basis[0]) != 40 or any(c not in '0123456789abcdef' for c in basis[0]):
         errors.append("basis_sha missing or invalid")
@@ -275,11 +386,13 @@ def compare(before: sqlite3.Connection, after: sqlite3.Connection) -> dict:
     """Diff by stable identifiers; a Git revision is represented by its own DB file."""
     keys = {"metadata": ("key",), "nodes": ("id",), "links": ("source_id", "kind", "target_id"),
             "assessments": ("node_id", "dimension"),
+            "link_conditions": ("source_id", "kind", "target_id"), "flows": ("id",),
+            "flow_steps": ("flow_id", "position"),
             "expectations": ("node_id", "link_kind", "direction", "target_kind")}
     result = {}
     for table, columns in keys.items():
         def indexed(db):
-            if table == 'assessments' and table not in _source_tables(db):
+            if not _has_table(db, table):
                 return {}
             return {tuple(row[column] for column in columns): dict(row)
                     for row in db.execute(f"SELECT * FROM {table}")}
@@ -301,11 +414,16 @@ def read(command: str, db: sqlite3.Connection, *, key: str = "", other: str = ""
         raise ValueError("offset must be between 0 and 1000000")
     if command == "overview":
         return {"basis": {row['key']: row['value'] for row in _rows(db, "SELECT * FROM metadata")},
+                "flows": _rows(db, 'SELECT * FROM flows ORDER BY id') if _has_table(db, 'flows') else [],
                 "entrypoints": _rows(db, '''SELECT DISTINCT n.id,n.title FROM links l
                     JOIN nodes n ON n.id=l.target_id WHERE l.kind='entrypoint' ORDER BY n.id'''),
                 "domains": _rows(db, "SELECT id,title,description FROM nodes WHERE kind='domain' ORDER BY id"),
                 "counts": {row['kind']: row['n'] for row in _rows(db, "SELECT kind,count(*) AS n FROM nodes GROUP BY kind")},
                 "gaps": gaps(db)}
+    if command == 'flow':
+        return flow(db, key)
+    if command == 'shared':
+        return shared(db, key, limit=limit, offset=offset)
     if command == "gaps":
         return {"items": gaps(db)}
     if command == 'coverage':
@@ -335,7 +453,10 @@ def import_json(path: Path, payload: dict) -> None:
     allowed = {"metadata": ("key", "value"), "nodes": ("id", "kind", "title", "description", "state", "source"),
                "assessments": ("node_id", "dimension", "state", "note", "source"),
                "links": ("source_id", "kind", "target_id", "description", "source"),
-               "expectations": ("node_id", "link_kind", "direction", "target_kind", "reason", "source")}
+               "expectations": ("node_id", "link_kind", "direction", "target_kind", "reason", "source"),
+               "link_conditions": ("source_id", "kind", "target_id", "timing", "checks", "on_failure", "scope", "limitation", "source"),
+               "flows": ("id", "title", "description", "source"),
+               "flow_steps": ("flow_id", "position", "source_id", "kind", "target_id")}
     if not isinstance(payload, dict) or set(payload) - set(allowed):
         raise ValueError("unknown tables in import")
     with connect(path, write=True) as db:
@@ -355,7 +476,7 @@ def import_json(path: Path, payload: dict) -> None:
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare", "context", "coverage"))
+    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare", "context", "coverage", "flow", "shared"))
     p.add_argument("key", nargs="?", default="")
     p.add_argument("other", nargs="?", default="")
     p.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -382,16 +503,17 @@ def main(argv=None) -> None:
                                depth=args.depth, limit=args.limit, offset=args.offset))
     except (ValueError, sqlite3.Error, OSError) as exc:
         p.exit(2, f"cartography: {exc}\n")
-    if args.json or args.command == 'context':
-        print(json.dumps(result, ensure_ascii=False, indent=None if args.command == 'context' else 2))
+    if args.json or args.command in ('context', 'flow', 'shared'):
+        print(json.dumps(result, ensure_ascii=False, indent=None if args.command in ('context', 'flow', 'shared') else 2))
     else:
         if args.command == "overview":
             print("STANDARD — carte descriptive (aucune autorité)\n")
             for domain in result['domains']:
                 print(f"{domain['id']}: {domain['title']} — {domain['description']}")
             print('\nEntrées de recherche : ' + ', '.join(node['id'] for node in result['entrypoints']))
+            print('Parcours : ' + ', '.join(row['id'] for row in result['flows']))
             print(f"\n{len(result['gaps'])} lacunes/questions · base {result['basis'].get('basis_sha', '?')[:12]}")
-            print("Commandes : context ID, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
+            print("Commandes : context ID, flow ID, shared ID, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
         elif args.command == "gaps":
             for item in result['items']:
                 detail = item['description']
@@ -437,6 +559,8 @@ def main(argv=None) -> None:
                             str(row[column]) for column in
                             {"metadata": ("key",), "nodes": ("id",), "links": ("source_id", "kind", "target_id"),
                              "assessments": ("node_id", "dimension"),
+                             "link_conditions": ("source_id", "kind", "target_id"), "flows": ("id",),
+                             "flow_steps": ("flow_id", "position"),
                              "expectations": ("node_id", "link_kind", "direction", "target_kind")}[table]))
         else:
             for item in result.get('items', []):

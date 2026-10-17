@@ -12,6 +12,75 @@ from interface.context.cartography import (DEFAULT_DB, compare, connect, gaps, i
 
 
 class StandardMap(unittest.TestCase):
+    def test_validation_rejects_metadata_only_or_missing_core_structure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            empty = Path(temp) / 'metadata.sqlite'
+            with connect(empty, write=True) as db:
+                db.execute('CREATE TABLE metadata (key TEXT, value TEXT)')
+                db.execute('INSERT INTO metadata VALUES (?,?)', ('basis_sha', 'a' * 40))
+            with connect(empty) as db:
+                self.assertIn('required map structure missing or incomplete: nodes', validate(db))
+            path = Path(temp) / 'map.sqlite'
+            initialize(path)
+            with connect(path, write=True) as db:
+                db.execute('DROP VIEW missing_links')
+            with connect(path) as db:
+                self.assertIn('required map structure missing or incomplete: missing_links', validate(db))
+
+    def test_ordered_flows_and_common_dependencies_are_navigable(self):
+        with connect() as db:
+            for (id,) in db.execute('SELECT id FROM nodes'):
+                self.assertEqual(context(db, id)['focus'], id)
+            for flow in read('overview', db)['flows']:
+                steps = read('flow', db, key=flow['id'])['steps']
+                self.assertEqual([s['position'] for s in steps], list(range(1, len(steps) + 1)))
+                self.assertTrue(all(a['target_id'] == b['source_id'] for a, b in zip(steps, steps[1:])))
+            packet = read('shared', db, key='component/effect-guard')
+            self.assertIn(('resource/process-operator', 'component/observation-boundary'),
+                          {(x['dependency_id'], x['node_id']) for x in packet['items']})
+            first = read('shared', db, key='component/effect-guard', limit=1)
+            second = read('shared', db, key='component/effect-guard', limit=1, offset=first['next_offset'])
+            self.assertEqual(first['items'] + second['items'], packet['items'][:2])
+            pin = next(x for x in context(db, 'capability/observe')['conditions']
+                       if x['target_id'] == 'constraint/program-pin')
+            self.assertIn('construction', pin['timing'])
+            self.assertIn('Pas de rehash par call', pin['limitation'])
+
+    def test_flow_integrity_and_condition_gaps_do_not_invent_certainty(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'map.sqlite'
+            initialize(path)
+            edge = {'source_id': 'cap', 'kind': 'limited_by', 'target_id': 'control'}
+            import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}], 'nodes': [
+                {'id': id, 'kind': kind, 'title': id, 'source': 'ARCHITECTURE.md'}
+                for id, kind in [('cap', 'capability'), ('control', 'constraint')]],
+                'links': [{**edge, 'source': 'ARCHITECTURE.md'}],
+                'flows': [{'id': 'walk', 'title': 'Walk', 'description': 'Documented only.', 'source': 'ARCHITECTURE.md'}]})
+            with connect(path) as db:
+                self.assertEqual(context(db, 'cap')['conditions'], [])
+                self.assertEqual(context(db, 'cap')['missing_conditions'][0]['target_id'], 'control')
+                self.assertTrue(any(x['category'] == 'missing_condition' for x in gaps(db)))
+                self.assertIn('flow positions missing or non-contiguous: walk', validate(db))
+            detail = {**edge, 'timing': 'on start', 'checks': 'ceiling', 'on_failure': 'refused',
+                      'scope': 'one process', 'limitation': 'not every effect', 'source': 'ARCHITECTURE.md'}
+            # Invalid edge reference rolls back both condition and step writes.
+            with self.assertRaises(sqlite3.IntegrityError):
+                import_json(path, {'link_conditions': [detail], 'flow_steps': [
+                    {'flow_id': 'walk', 'position': 1, **edge, 'target_id': 'absent'}]})
+            with connect(path) as db:
+                self.assertEqual(context(db, 'cap')['conditions'], [])
+            import_json(path, {'link_conditions': [detail], 'flow_steps': [
+                {'flow_id': 'walk', 'position': 1, **edge}]})
+            with connect(path) as db:
+                self.assertEqual(validate(db), [])
+                self.assertEqual(context(db, 'cap')['missing_conditions'], [])
+                self.assertFalse(any(x['category'] == 'missing_condition' for x in gaps(db)))
+                self.assertEqual(read('flow', db, key='walk')['steps'][0]['conditions']['timing'], 'on start')
+            with connect(path, write=True) as db:
+                db.execute("INSERT INTO flow_steps VALUES ('walk',2,'cap','limited_by','control')")
+            with connect(path) as db:
+                self.assertIn('flow has disconnected steps: walk', validate(db))
+
     def test_architecture_loop_is_connected_through_real_boundaries(self):
         with connect() as db:
             self.assertEqual([row['target_id'] for row in shortest_path(
@@ -110,10 +179,16 @@ class StandardMap(unittest.TestCase):
                 import_json(path, {'nodes': [{'id': 'same', 'kind': 'component', 'title': 'Same', 'source': 'ARCHITECTURE.md'}]})
             with connect(before, write=True) as db:
                 db.execute('DROP TABLE assessments')
+                db.execute('DROP TABLE flow_steps')
+                db.execute('DROP TABLE flows')
+                db.execute('DROP TABLE link_conditions')
             import_json(after, {'assessments': [{'node_id': 'same', 'dimension': 'deployment', 'state': 'unknown',
                                                 'note': 'Not observed.', 'source': 'ARCHITECTURE.md'}]})
             with connect(before) as old, connect(after) as new:
                 self.assertEqual(compare(old, new)['assessments']['added'][0]['dimension'], 'deployment')
+                self.assertEqual(read('overview', old)['flows'], [])
+                self.assertEqual(context(old, 'same')['conditions'], [])
+                self.assertEqual(compare(old, new)['flows']['added'], [])
 
     def test_context_refuses_oversized_packet_instead_of_hiding_constraints(self):
         with tempfile.TemporaryDirectory() as temp:
