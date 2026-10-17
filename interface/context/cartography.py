@@ -6,6 +6,7 @@ The database is opened read-only unless ``init`` or ``import-json`` is requested
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -58,6 +59,12 @@ CREATE TABLE flow_steps (
   FOREIGN KEY(source_id,kind,target_id) REFERENCES links(source_id,kind,target_id) ON DELETE CASCADE
 );
 """
+FINGERPRINTS = """
+CREATE TABLE source_fingerprints (
+  source TEXT PRIMARY KEY CHECK(length(source) BETWEEN 1 AND 300),
+  sha256 TEXT NOT NULL CHECK(length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*')
+);
+"""
 DEPENDENCIES = ('runs_in', 'uses_identity', 'administered_by', 'uses_secret',
                 'shares_budget', 'uses_kernel', 'loads_from', 'stores_in', 'inherits_account_of')
 CONTROL_LINKS = ('governed_by', 'mediated_by', 'limited_by')
@@ -107,7 +114,7 @@ FROM expectations e WHERE NOT EXISTS (
     (CASE WHEN e.direction='out' THEN l.source_id ELSE l.target_id END)=e.node_id
     AND (e.target_kind='' OR other.kind=e.target_kind)
 );
-""" + ASSESSMENTS + DETAILS + "INSERT INTO metadata VALUES('schema_version','3');"
+""" + ASSESSMENTS + DETAILS + FINGERPRINTS + "INSERT INTO metadata VALUES('schema_version','4');"
 
 
 class MapConnection(sqlite3.Connection):
@@ -149,6 +156,85 @@ def _has_table(db: sqlite3.Connection, name: str) -> bool:
 def _source_tables(db: sqlite3.Connection) -> list[str]:
     return [name for name in ('nodes', 'links', 'expectations', 'assessments', 'link_conditions', 'flows')
             if _has_table(db, name)]
+
+
+def source_paths(db: sqlite3.Connection) -> set[str]:
+    return {row[0].split('#', 1)[0] for table in _source_tables(db)
+            for row in db.execute(f'SELECT DISTINCT source FROM {table}')}
+
+
+def fingerprint_sources(db: sqlite3.Connection, root: Path = ROOT) -> None:
+    """Explicit byte baseline for drift detection, never a semantic review or test result."""
+    errors = validate(db, root)
+    if errors:
+        raise ValueError('; '.join(errors))
+    rows = [(source, hashlib.sha256((root / source).read_bytes()).hexdigest())
+            for source in sorted(source_paths(db))]
+    db.execute('DELETE FROM source_fingerprints')
+    db.executemany('INSERT INTO source_fingerprints VALUES (?,?)', rows)
+
+
+def source_drift(db: sqlite3.Connection, root: Path = ROOT) -> dict:
+    recorded = ({r['source']: r['sha256'] for r in _rows(db, 'SELECT * FROM source_fingerprints')}
+                if _has_table(db, 'source_fingerprints') else {})
+    current = source_paths(db)
+    changed, unavailable = [], []
+    checkout = root.resolve()
+    for source in sorted(current & recorded.keys()):
+        path = (checkout / source).resolve()
+        if (Path(source).is_absolute() or '..' in Path(source).parts or
+                not path.is_relative_to(checkout) or not path.is_file()):
+            unavailable.append(source)
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != recorded[source]:
+            changed.append(source)
+    return {'changed': changed, 'unavailable': unavailable, 'not_recorded': sorted(current - recorded.keys()),
+            'no_longer_referenced': sorted(recorded.keys() - current),
+            'meaning': 'Différence des octets source depuis la photographie de la carte ; absence de dérive ne prouve pas justesse sémantique.'}
+
+
+def audit(db: sqlite3.Connection, root: Path = ROOT) -> dict:
+    errors = validate(db, root)
+    if errors:
+        return {'structural_errors': errors, 'inventory_complete': False}
+    inventory = coverage(db, root, limit=200)
+    isolated = [r[0] for r in db.execute("""SELECT id FROM nodes n WHERE NOT EXISTS
+        (SELECT 1 FROM links l WHERE l.source_id=n.id OR l.target_id=n.id) ORDER BY id""")]
+    source_ownerless = [r[0] for r in db.execute("""SELECT id FROM nodes n WHERE id LIKE 'component/enforcer/%'
+        AND NOT EXISTS (SELECT 1 FROM links l WHERE l.source_id=n.id AND l.kind='implements') ORDER BY id""")]
+    adjacency = {r[0]: set() for r in db.execute('SELECT id FROM nodes')}
+    for a, b in db.execute('SELECT source_id,target_id FROM links'):
+        adjacency[a].add(b)
+        adjacency[b].add(a)
+    seen = {r[0] for r in db.execute("SELECT id FROM nodes WHERE kind='domain'")}
+    queue = deque(seen)
+    while queue:
+        for other in adjacency[queue.popleft()] - seen:
+            seen.add(other)
+            queue.append(other)
+    unreachable = sorted(adjacency.keys() - seen)
+    oversized = []
+    for id in sorted(adjacency):
+        try:
+            context(db, id)
+        except ValueError as exc:
+            oversized.append({'id': id, 'packet': 'context', 'error': str(exc)})
+    if _has_table(db, 'flows'):
+        for (id,) in db.execute('SELECT id FROM flows ORDER BY id'):
+            try:
+                flow(db, id)
+            except ValueError as exc:
+                oversized.append({'id': id, 'packet': 'flow', 'error': str(exc)})
+    drift = source_drift(db, root)
+    documentary_gaps = gaps(db)
+    counts = {category: sum(x['category'] == category for x in documentary_gaps)
+              for category in ('architecture', 'missing_link', 'missing_condition')}
+    return {'structural_errors': [], 'coverage': inventory, 'isolated_nodes': isolated,
+            'unreachable_from_domains': unreachable, 'source_nodes_without_owner': source_ownerless,
+            'oversized_packets': oversized, 'source_drift': drift, 'gap_counts': counts,
+            'inventory_complete': not (inventory['unreferenced'] or isolated or source_ownerless or unreachable or
+                                       oversized or counts['missing_condition'] or drift['changed'] or drift['unavailable'] or drift['not_recorded'] or drift['no_longer_referenced']),
+            'semantic_completeness': 'not_proven', 'deployment_qualification': 'not_assessed',
+            'meaning': 'Complétude de l’inventaire selon le périmètre coverage, navigation non orientée et fraîcheur des sources seulement. Les lacunes ne sont pas supprimées ; ni tous les comportements ni tous les accès ne sont démontrés.'}
 
 
 def conditions(db: sqlite3.Connection, source_id: str, kind: str, target_id: str) -> dict | None:
@@ -226,8 +312,7 @@ def coverage(db: sqlite3.Connection, root: Path = ROOT, *, limit: int = 100, off
         if path not in included:
             suffix = Path(path).suffix or '(no suffix)'
             excluded_types[suffix] = excluded_types.get(suffix, 0) + 1
-    sources = {row[0].split('#', 1)[0] for table in _source_tables(db)
-               for row in db.execute(f'SELECT DISTINCT source FROM {table}')}
+    sources = source_paths(db)
     groups = {}
     for path in files:
         parts = Path(path).parts
@@ -394,7 +479,7 @@ def compare(before: sqlite3.Connection, after: sqlite3.Connection) -> dict:
     keys = {"metadata": ("key",), "nodes": ("id",), "links": ("source_id", "kind", "target_id"),
             "assessments": ("node_id", "dimension"),
             "link_conditions": ("source_id", "kind", "target_id"), "flows": ("id",),
-            "flow_steps": ("flow_id", "position"),
+            "flow_steps": ("flow_id", "position"), "source_fingerprints": ("source",),
             "expectations": ("node_id", "link_kind", "direction", "target_kind")}
     result = {}
     for table, columns in keys.items():
@@ -419,6 +504,8 @@ def read(command: str, db: sqlite3.Connection, *, key: str = "", other: str = ""
         raise ValueError("limit must be between 1 and 200")
     if offset < 0 or offset > 1_000_000:
         raise ValueError("offset must be between 0 and 1000000")
+    if command == 'audit':
+        return audit(db)
     if command == "overview":
         return {"basis": {row['key']: row['value'] for row in _rows(db, "SELECT * FROM metadata")},
                 "flows": _rows(db, 'SELECT * FROM flows ORDER BY id') if _has_table(db, 'flows') else [],
@@ -473,7 +560,8 @@ def import_json(path: Path, payload: dict) -> None:
                "expectations": ("node_id", "link_kind", "direction", "target_kind", "reason", "source"),
                "link_conditions": ("source_id", "kind", "target_id", "timing", "checks", "on_failure", "scope", "limitation", "source"),
                "flows": ("id", "title", "description", "source"),
-               "flow_steps": ("flow_id", "position", "source_id", "kind", "target_id")}
+               "flow_steps": ("flow_id", "position", "source_id", "kind", "target_id"),
+               "source_fingerprints": ("source", "sha256")}
     if not isinstance(payload, dict) or set(payload) - set(allowed):
         raise ValueError("unknown tables in import")
     with connect(path, write=True) as db:
@@ -493,7 +581,7 @@ def import_json(path: Path, payload: dict) -> None:
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare", "context", "coverage", "flow", "shared", "topology"))
+    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare", "context", "coverage", "flow", "shared", "topology", "audit"))
     p.add_argument("key", nargs="?", default="")
     p.add_argument("other", nargs="?", default="")
     p.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -520,8 +608,8 @@ def main(argv=None) -> None:
                                depth=args.depth, limit=args.limit, offset=args.offset))
     except (ValueError, sqlite3.Error, OSError) as exc:
         p.exit(2, f"cartography: {exc}\n")
-    if args.json or args.command in ('context', 'flow', 'shared', 'topology'):
-        print(json.dumps(result, ensure_ascii=False, indent=None if args.command in ('context', 'flow', 'shared', 'topology') else 2))
+    if args.json or args.command in ('context', 'flow', 'shared', 'topology', 'audit'):
+        print(json.dumps(result, ensure_ascii=False, indent=None if args.command in ('context', 'flow', 'shared', 'topology', 'audit') else 2))
     else:
         if args.command == "overview":
             print("STANDARD — carte descriptive (aucune autorité)\n")
@@ -530,7 +618,7 @@ def main(argv=None) -> None:
             print('\nEntrées de recherche : ' + ', '.join(node['id'] for node in result['entrypoints']))
             print('Parcours : ' + ', '.join(row['id'] for row in result['flows']))
             print(f"\n{len(result['gaps'])} lacunes/questions · base {result['basis'].get('basis_sha', '?')[:12]}")
-            print("Commandes : context ID, topology ID, flow ID, shared ID, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
+            print("Commandes : context ID, topology ID, flow ID, shared ID, audit, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
         elif args.command == "gaps":
             for item in result['items']:
                 detail = item['description']
@@ -577,14 +665,14 @@ def main(argv=None) -> None:
                             {"metadata": ("key",), "nodes": ("id",), "links": ("source_id", "kind", "target_id"),
                              "assessments": ("node_id", "dimension"),
                              "link_conditions": ("source_id", "kind", "target_id"), "flows": ("id",),
-                             "flow_steps": ("flow_id", "position"),
+                             "flow_steps": ("flow_id", "position"), "source_fingerprints": ("source",),
                              "expectations": ("node_id", "link_kind", "direction", "target_kind")}[table]))
         else:
             for item in result.get('items', []):
                 print(f"{item['id']} [{item['kind']}/{item['state']}] {item['title']}")
             if result.get('next_offset') is not None:
                 print(f"Suite disponible : --offset {result['next_offset']}")
-    if args.command == 'validate' and result['errors']:
+    if (args.command == 'validate' and result['errors']) or (args.command == 'audit' and not result['inventory_complete']):
         raise SystemExit(1)
 
 

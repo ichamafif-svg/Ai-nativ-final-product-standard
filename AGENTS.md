@@ -180,6 +180,7 @@ Fixtures describe their own environments; a simulated Bac or shared definition n
 Use `flow ID` for ordered source-backed paths and their timing/checks/failure/scope/limits, discovered in overview.
 Use `shared ID` for direct common process/account/admin/key/budget/kernel/code/storage dependencies; follow dependency IDs to continue.
 These describe local or optional assemblies, not observed deployment. Missing conditions and identity owners remain gaps.
+Use `audit` to check inventory/navigation/packet bounds and source byte drift; inventory completeness never proves semantic completeness or deployment.
 Use `coverage --json` to find tracked code/config files with no direct map reference; citations are not behavioral coverage.
 Continue at the returned node IDs and read their sources at the stated basis; the map does not replace code review or admission.
 [ARCHITECTURE_PATH.md](ARCHITECTURE_PATH.md) is an optional narrative of the agent/candidate/network paths.

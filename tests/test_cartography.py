@@ -12,6 +12,41 @@ from interface.context.cartography import (DEFAULT_DB, compare, connect, gaps, i
 
 
 class StandardMap(unittest.TestCase):
+    def test_inventory_audit_is_complete_without_claiming_security_completeness(self):
+        with connect() as db:
+            result = read('audit', db)
+            self.assertTrue(result['inventory_complete'], result)
+            self.assertEqual(result['coverage']['unreferenced'], 0)
+            self.assertEqual(result['isolated_nodes'], [])
+            self.assertEqual(result['unreachable_from_domains'], [])
+            self.assertEqual(result['oversized_packets'], [])
+            self.assertEqual(result['semantic_completeness'], 'not_proven')
+            self.assertGreater(result['gap_counts']['missing_link'], 0)
+
+    def test_fingerprints_expose_source_drift_and_old_maps_remain_unknown(self):
+        from interface.context.cartography import fingerprint_sources, source_drift
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'known.py'
+            source.write_text('first version')
+            path = root / 'map.sqlite'
+            initialize(path)
+            import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
+                               'nodes': [{'id': 'known', 'kind': 'component', 'title': 'Known', 'source': 'known.py'}]})
+            with connect(path, write=True) as db:
+                self.assertEqual(source_drift(db, root)['not_recorded'], ['known.py'])
+                fingerprint_sources(db, root)
+            with connect(path) as db:
+                self.assertEqual(source_drift(db, root)['changed'], [])
+                self.assertEqual(source_drift(db, root)['not_recorded'], [])
+            source.write_text('changed bytes')
+            with connect(path) as db:
+                self.assertEqual(source_drift(db, root)['changed'], ['known.py'])
+            with connect(path, write=True) as db:
+                db.execute('DROP TABLE source_fingerprints')
+            with connect(path) as db:
+                self.assertEqual(source_drift(db, root)['not_recorded'], ['known.py'])
+
     def test_topology_distinguishes_host_namespace_and_measurement_fixtures(self):
         with connect() as db:
             packet = read('topology', db, key='resource/lab-agent-env')
@@ -183,6 +218,7 @@ class StandardMap(unittest.TestCase):
             initialize(path)
             import_json(path, {'nodes': [{'id': 'known', 'kind': 'component', 'title': 'Known',
                                           'source': 'fabric/known.py#symbol'}]})
+            import_json(path, {'source_fingerprints': [{'source': 'engine/unknown.py', 'sha256': '0' * 64}]})
             with connect(path) as db:
                 result = coverage(db, repo, limit=1)
                 self.assertEqual((result['tracked'], result['referenced'], result['unreferenced']), (3, 1, 2))
@@ -202,6 +238,7 @@ class StandardMap(unittest.TestCase):
                 db.execute('DROP TABLE flow_steps')
                 db.execute('DROP TABLE flows')
                 db.execute('DROP TABLE link_conditions')
+                db.execute('DROP TABLE source_fingerprints')
             import_json(after, {'assessments': [{'node_id': 'same', 'dimension': 'deployment', 'state': 'unknown',
                                                 'note': 'Not observed.', 'source': 'ARCHITECTURE.md'}]})
             with connect(before) as old, connect(after) as new:
