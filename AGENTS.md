@@ -174,6 +174,9 @@ The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](AR
 For architecture research, use `python -m interface.context.cartography search WORD`, then `context ID` for a bounded
 work packet: typed links, sources, implementation references, open questions and separate implementation/deployment/verification knowledge.
 Start with `overview --json` or `context domain/standard` for navigation across the full lifecycle; each domain has an entrypoint.
+Use `topology ID` for placement/channels/mounts/privileges and protection/instrument/probe coverage; start at
+`resource/assembly-lab`, `resource/assembly-stack` or `resource/assembly-measurement`, then follow at depth 1.
+Fixtures describe their own environments; a simulated Bac or shared definition never qualifies the running deployment.
 Use `flow ID` for ordered source-backed paths and their timing/checks/failure/scope/limits, discovered in overview.
 Use `shared ID` for direct common process/account/admin/key/budget/kernel/code/storage dependencies; follow dependency IDs to continue.
 These describe local or optional assemblies, not observed deployment. Missing conditions and identity owners remain gaps.

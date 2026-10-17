@@ -61,6 +61,12 @@ CREATE TABLE flow_steps (
 DEPENDENCIES = ('runs_in', 'uses_identity', 'administered_by', 'uses_secret',
                 'shares_budget', 'uses_kernel', 'loads_from', 'stores_in', 'inherits_account_of')
 CONTROL_LINKS = ('governed_by', 'mediated_by', 'limited_by')
+TOPOLOGY_LINKS = (*DEPENDENCIES, 'contains', 'instance_of', 'outside_of', 'spawned_by',
+                  'mounts_ro', 'mounts_rw', 'excludes_mount', 'listens_on', 'connects_to',
+                  'serves', 'transfers_to', 'can_read', 'can_write', 'holds', 'launches',
+                  'protects_access', 'measures_property', 'exercises_access', 'checks_property',
+                  'uses_environment', 'targets_environment', 'has_role', 'coverage_limit', 'expects_property', 'uses_probe')
+
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -302,7 +308,7 @@ def gaps(db: sqlite3.Connection) -> list[dict]:
     return explicit + missing + undocumented
 
 
-def neighborhood(db: sqlite3.Connection, node_id: str, depth: int = 1) -> dict:
+def neighborhood(db: sqlite3.Connection, node_id: str, depth: int = 1, *, kinds: tuple | None = None) -> dict:
     if depth < 0 or depth > 3:
         raise ValueError("depth must be between 0 and 3")
     root = db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
@@ -314,8 +320,9 @@ def neighborhood(db: sqlite3.Connection, node_id: str, depth: int = 1) -> dict:
     for _ in range(depth):
         nxt = set()
         for current in sorted(frontier):
-            for row in _rows(db, """SELECT * FROM links WHERE source_id=? OR target_id=?
-                                     ORDER BY source_id,kind,target_id""", (current, current)):
+            filter_sql = f" AND kind IN ({','.join('?' for _ in kinds)})" if kinds else ''
+            for row in _rows(db, "SELECT * FROM links WHERE (source_id=? OR target_id=?)" + filter_sql +
+                             " ORDER BY source_id,kind,target_id", (current, current, *(kinds or ()))):
                 edges[(row['source_id'], row['kind'], row['target_id'])] = row
                 nxt.update((row['source_id'], row['target_id']))
         frontier = nxt - seen
@@ -420,6 +427,16 @@ def read(command: str, db: sqlite3.Connection, *, key: str = "", other: str = ""
                 "domains": _rows(db, "SELECT id,title,description FROM nodes WHERE kind='domain' ORDER BY id"),
                 "counts": {row['kind']: row['n'] for row in _rows(db, "SELECT kind,count(*) AS n FROM nodes GROUP BY kind")},
                 "gaps": gaps(db)}
+    if command == 'topology':
+        graph = neighborhood(db, key, depth, kinds=TOPOLOGY_LINKS)
+        graph['basis'] = {r['key']: r['value'] for r in _rows(db, 'SELECT * FROM metadata')}
+        graph['conditions'] = [detail for link in graph['links']
+                               if (detail := conditions(db, link['source_id'], link['kind'], link['target_id'])) is not None]
+        graph['focus'] = key
+        graph['meaning'] = ('Topologie décrite dans le code : laboratoire, Stack optionnelle et fixtures de mesure sont distincts. '
+                            'Aucun déploiement observé ni résultat de sonde enregistré. Exclut les liens de simple citation ; '
+                            'lire context ID pour les questions et appréciations. La profondeur est bornée, pas la liste de tous les accès possibles.')
+        return _bounded(graph)
     if command == 'flow':
         return flow(db, key)
     if command == 'shared':
@@ -476,7 +493,7 @@ def import_json(path: Path, payload: dict) -> None:
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare", "context", "coverage", "flow", "shared"))
+    p.add_argument("command", choices=("init", "import-json", "overview", "gaps", "search", "node", "path", "validate", "compare", "context", "coverage", "flow", "shared", "topology"))
     p.add_argument("key", nargs="?", default="")
     p.add_argument("other", nargs="?", default="")
     p.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -503,8 +520,8 @@ def main(argv=None) -> None:
                                depth=args.depth, limit=args.limit, offset=args.offset))
     except (ValueError, sqlite3.Error, OSError) as exc:
         p.exit(2, f"cartography: {exc}\n")
-    if args.json or args.command in ('context', 'flow', 'shared'):
-        print(json.dumps(result, ensure_ascii=False, indent=None if args.command in ('context', 'flow', 'shared') else 2))
+    if args.json or args.command in ('context', 'flow', 'shared', 'topology'):
+        print(json.dumps(result, ensure_ascii=False, indent=None if args.command in ('context', 'flow', 'shared', 'topology') else 2))
     else:
         if args.command == "overview":
             print("STANDARD — carte descriptive (aucune autorité)\n")
@@ -513,7 +530,7 @@ def main(argv=None) -> None:
             print('\nEntrées de recherche : ' + ', '.join(node['id'] for node in result['entrypoints']))
             print('Parcours : ' + ', '.join(row['id'] for row in result['flows']))
             print(f"\n{len(result['gaps'])} lacunes/questions · base {result['basis'].get('basis_sha', '?')[:12]}")
-            print("Commandes : context ID, flow ID, shared ID, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
+            print("Commandes : context ID, topology ID, flow ID, shared ID, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
         elif args.command == "gaps":
             for item in result['items']:
                 detail = item['description']

@@ -12,6 +12,26 @@ from interface.context.cartography import (DEFAULT_DB, compare, connect, gaps, i
 
 
 class StandardMap(unittest.TestCase):
+    def test_topology_distinguishes_host_namespace_and_measurement_fixtures(self):
+        with connect() as db:
+            packet = read('topology', db, key='resource/lab-agent-env')
+            edges = {(x['source_id'], x['kind'], x['target_id']) for x in packet['links']}
+            self.assertIn(('resource/lab-supervisor-process', 'outside_of', 'resource/lab-agent-env'), edges)
+            self.assertNotIn(('resource/lab-agent-env', 'contains', 'resource/lab-supervisor-process'), edges)
+            self.assertIn(('resource/lab-agent-env', 'mounts_ro', 'resource/lab-execution-dir'), edges)
+            supervisor = read('topology', db, key='resource/lab-supervisor-process')
+            self.assertIn('resource/uid-agent', {x['target_id'] for x in supervisor['links'] if x['kind'] == 'uses_identity'})
+            self.assertFalse(any(x['kind'] == 'implements' for x in supervisor['links']))
+            native = read('topology', db, key='instrument/topology-agent-native')
+            self.assertIn('resource/probe-native-env', {x['target_id'] for x in native['links'] if x['kind'] == 'uses_environment'})
+            fake = read('topology', db, key='instrument/topology-supervisor-contract')
+            self.assertIn('resource/probe-fake-executor', {x['target_id'] for x in fake['links'] if x['kind'] == 'uses_environment'})
+            self.assertTrue(any('Ne prouve aucune isolation OCI' in x['limitation'] for x in fake['conditions']))
+            config = read('topology', db, key='instrument/topology-oci-config')
+            self.assertIn('resource/role-instrument', {x['target_id'] for x in config['links'] if x['kind'] == 'has_role'})
+            for id in ('resource/assembly-lab', 'resource/assembly-stack', 'resource/assembly-measurement'):
+                self.assertEqual(read('topology', db, key=id)['focus'], id)
+
     def test_validation_rejects_metadata_only_or_missing_core_structure(self):
         with tempfile.TemporaryDirectory() as temp:
             empty = Path(temp) / 'metadata.sqlite'
