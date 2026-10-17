@@ -2,9 +2,13 @@
 
 La carte répond à « qui fait quoi, avec quelle capacité, quelle limite, quel effet et quel travail reste ouvert ? ». Elle est une **description du dépôt**. Une relation dans la carte n'accorde aucun droit ; `documented` indique seulement qu'une source la décrit. Les tests cités ne sont pas des résultats mesurés. K, BT et les instruments ne consultent pas cette base pour juger.
 
-La base versionnée est `interface/context/standard.sqlite`. Elle contient 152 objets et 238 liens, ancrés sur le commit indiqué par `basis_sha`. Ses domaines couvrent agent, build, produit, client, contrôle, vérification et récupération. L'inventaire des garanties dans `fabric/guarantees.toml` est représenté avec ses limites explicites. Les 38 lacunes ou questions incluent aussi les chaînes de capacité encore manquantes pour certains effets. La couverture du dépôt est mesurée séparément : une zone sans référence source n'est pas automatiquement une protection absente.
+La base versionnée est `interface/context/standard.sqlite`. Elle contient 376 objets et 604 liens, ancrés sur le commit indiqué par `basis_sha`. Ses domaines couvrent agent, build, produit, client, contrôle, vérification et récupération. Les 42 lacunes ou questions et les fichiers sans référence restent visibles. La couverture du dépôt est mesurée séparément : une zone sans référence source n'est pas automatiquement une protection absente.
 
-Pour travailler, l'agent utilise `search`, puis `context ID`. Ce paquet contient chaque objet une seule fois, ses relations directes, les sources d'implémentation, les questions liées et les relations attendues absentes. Les identifiants permettent de poursuivre avec un autre `context`. Le paquet est limité à 28 000 caractères ; un dépassement est un refus explicite, jamais une suppression silencieuse de contraintes. Il est toujours rendu en JSON compact. [Le parcours agent, candidat et réseau](ARCHITECTURE_PATH.md) offre une lecture narrative facultative du même sujet.
+La boucle est reliée : obligations → file de travail → construction/relecture → propositions → programmes de mesure → observations signées → admission K/BT → guard → dépôt ou registres → exécution et observations suivantes. Le catalogue, les contrats de blocs, la surface COUP, la distribution, les preuves et la reconstruction ont leurs propres objets et sources. Ces flèches combinent des relations typées de travail, de données ou de contrôle ; ce ne sont pas toutes des appels directs.
+
+Pour travailler, l'agent commence par `overview --json` ou `context domain/standard`, puis `context ID` ou `search`. Les entrées de recherche de l'overview pointent vers chaque domaine. Un contexte de domaine donne ses relations et questions directes ; un contexte de composant inclut ses sources et les questions des voisins ; une capacité inclut aussi les sources de ses contrôles. Le champ `scope` dit ce qui est développé. Chaque objet apparaît une seule fois ; les autres responsabilités se lisent par leur identifiant. Le paquet est limité à 28 000 caractères ; un dépassement est un refus explicite, jamais une suppression silencieuse de contraintes. Il est toujours rendu en JSON compact. [Le parcours agent, candidat et réseau](ARCHITECTURE_PATH.md) offre une lecture narrative facultative.
+
+Les frontières importantes sont explicites : préchecks agent et mesures admises sont séparés ; les programmes lisent les captures privées du contrôle, tandis que l'interface utilise une projection publique ; le runner exporte un arbre depuis Git sans hériter automatiquement de la pile `Stack` ; TUF et la reconstruction d'archives suivent encore un autre chemin. Les rapports de tests potentiellement falsifiables et les contrôles non mesurés restent des limites de garantie.
 
 Les liens `implements` distinguent un objet de code source d'un composant d'architecture. Un fichier peut implémenter plusieurs responsabilités ; cela ne crée pas plusieurs services. `context` indique `representation=source` et le déploiement de cet objet source est `not_applicable`.
 
@@ -16,6 +20,11 @@ Depuis la racine du dépôt, sans serveur, dépendance ou accès à une base pro
 
 ```sh
 python -m interface.context.cartography overview
+python -m interface.context.cartography context domain/standard
+python -m interface.context.cartography context component/mission-assembly
+python -m interface.context.cartography context component/instrument-host
+python -m interface.context.cartography context capability/merge
+python -m interface.context.cartography context capability/deploy
 python -m interface.context.cartography gaps
 python -m interface.context.cartography search superviseur
 python -m interface.context.cartography context capability/candidate-run

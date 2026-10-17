@@ -164,12 +164,21 @@ def context(db: sqlite3.Connection, key: str) -> dict:
     graph = neighborhood(db, key)
     ids = [node['id'] for node in graph['nodes']]
     placeholders = ','.join('?' for _ in ids)
+    focus = next(node for node in graph['nodes'] if node['id'] == key)
+    implementation_ids = {key}
+    if focus['kind'] == 'capability':
+        implementation_ids.update(link['target_id'] for link in graph['links'] if link['source_id'] == key
+                                  and link['kind'] in ('mediated_by', 'limited_by', 'governed_by'))
     extra = _rows(db, f'''SELECT l.* FROM links l JOIN nodes n ON n.id=l.source_id
         WHERE l.target_id IN ({placeholders}) AND (l.kind='implements' OR (l.kind='concerns' AND n.kind='gap'))
         ORDER BY l.kind,l.source_id,l.target_id''', tuple(ids))
     nodes = {node['id']: node for node in graph['nodes']}
     links = {(link['source_id'], link['kind'], link['target_id']): link for link in graph['links']}
     for link in extra:
+        if link['kind'] == 'implements' and link['target_id'] not in implementation_ids:
+            continue
+        if focus['kind'] == 'domain' and link['kind'] == 'concerns' and link['target_id'] != key:
+            continue
         links[(link['source_id'], link['kind'], link['target_id'])] = link
         if link['source_id'] not in nodes:
             nodes[link['source_id']] = dict(db.execute('SELECT * FROM nodes WHERE id=?', (link['source_id'],)).fetchone())
@@ -180,6 +189,9 @@ def context(db: sqlite3.Connection, key: str) -> dict:
     packet = {'nodes': [nodes[id] for id in sorted(nodes)], 'links': [links[id] for id in sorted(links)],
              'basis': {row['key']: row['value'] for row in _rows(db, 'SELECT * FROM metadata')},
              'meaning': 'state décrit la connaissance documentaire ; assessments sépare code, déploiement et vérification. Le paquet couvre un voisinage, pas tout le système.',
+             'scope': ('Domaine : relations et questions directes seulement ; lire context ID pour les responsabilités voisines.'
+                       if focus['kind'] == 'domain' else
+                       'Relations directes et questions des voisins ; sources du focus et de ses contrôles pour une capacité. Poursuivre par context ID pour les autres voisins.'),
              'focus': key, 'assessments': assessments(db, key),
              'question_ids': [node['id'] for node in nodes.values() if node['kind'] == 'gap'],
              'missing_links': _rows(db, 'SELECT * FROM missing_links WHERE node_id=?', (key,))}
@@ -289,6 +301,8 @@ def read(command: str, db: sqlite3.Connection, *, key: str = "", other: str = ""
         raise ValueError("offset must be between 0 and 1000000")
     if command == "overview":
         return {"basis": {row['key']: row['value'] for row in _rows(db, "SELECT * FROM metadata")},
+                "entrypoints": _rows(db, '''SELECT DISTINCT n.id,n.title FROM links l
+                    JOIN nodes n ON n.id=l.target_id WHERE l.kind='entrypoint' ORDER BY n.id'''),
                 "domains": _rows(db, "SELECT id,title,description FROM nodes WHERE kind='domain' ORDER BY id"),
                 "counts": {row['kind']: row['n'] for row in _rows(db, "SELECT kind,count(*) AS n FROM nodes GROUP BY kind")},
                 "gaps": gaps(db)}
@@ -375,6 +389,7 @@ def main(argv=None) -> None:
             print("STANDARD — carte descriptive (aucune autorité)\n")
             for domain in result['domains']:
                 print(f"{domain['id']}: {domain['title']} — {domain['description']}")
+            print('\nEntrées de recherche : ' + ', '.join(node['id'] for node in result['entrypoints']))
             print(f"\n{len(result['gaps'])} lacunes/questions · base {result['basis'].get('basis_sha', '?')[:12]}")
             print("Commandes : context ID, coverage, gaps, search MOT, node ID, path SOURCE DEST, validate")
         elif args.command == "gaps":

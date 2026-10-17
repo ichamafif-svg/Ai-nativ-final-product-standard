@@ -173,6 +173,7 @@ Research outputs are notes, never signed facts or permission to register an inst
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
 For architecture research, use `python -m interface.context.cartography search WORD`, then `context ID` for a bounded
 work packet: typed links, sources, implementation references, open questions and separate implementation/deployment/verification knowledge.
+Start with `overview --json` or `context domain/standard` for navigation across the full lifecycle; each domain has an entrypoint.
 Use `coverage --json` to find tracked code/config files with no direct map reference; citations are not behavioral coverage.
 Continue at the returned node IDs and read their sources at the stated basis; the map does not replace code review or admission.
 [ARCHITECTURE_PATH.md](ARCHITECTURE_PATH.md) is an optional narrative of the agent/candidate/network paths.

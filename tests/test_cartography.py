@@ -12,6 +12,34 @@ from interface.context.cartography import (DEFAULT_DB, compare, connect, gaps, i
 
 
 class StandardMap(unittest.TestCase):
+    def test_architecture_loop_is_connected_through_real_boundaries(self):
+        with connect() as db:
+            self.assertEqual([row['target_id'] for row in shortest_path(
+                db, 'component/work-queue', 'resource/proposals')],
+                ['component/repairer', 'component/candidate-workflow', 'resource/proposals'])
+            self.assertEqual([row['target_id'] for row in shortest_path(
+                db, 'component/trusted-service', 'resource/main')],
+                ['component/effect-guard', 'component/git-adapter', 'resource/main'])
+            self.assertTrue(shortest_path(db, 'resource/proposals', 'resource/journal', 8))
+            packet = context(db, 'capability/observe')
+            self.assertIn('gap/suite-report-trust', packet['question_ids'])
+            for node in read('overview', db)['entrypoints']:
+                self.assertEqual(context(db, node['id'])['focus'], node['id'])
+            for (id,) in db.execute("SELECT id FROM nodes WHERE kind='domain'"):
+                self.assertEqual(context(db, id)['focus'], id)
+
+    def test_measurement_inputs_and_release_paths_are_distinct(self):
+        with connect() as db:
+            reads = {row[0] for row in db.execute("SELECT target_id FROM links WHERE source_id=? AND kind='reads'",
+                                                 ('component/production-measures',))}
+            self.assertIn('resource/recorded-series', reads)
+            self.assertNotIn('resource/public-captures', reads)
+            self.assertTrue(db.execute("SELECT 1 FROM links WHERE source_id='component/release-runner' "
+                                       "AND kind='produces' AND target_id='resource/release-tree'").fetchone())
+            self.assertTrue(db.execute("SELECT 1 FROM links WHERE source_id='component/reconstruct' "
+                                       "AND kind='reconstructs' AND target_id='resource/release-artifact'").fetchone())
+            self.assertIn('requests', {row['link_kind'] for row in context(db, 'capability/data-read')['missing_links']})
+
     def test_work_packet_answers_candidate_authority_effects_and_unknown_deployment(self):
         with connect() as db:
             packet = context(db, 'capability/candidate-run')
