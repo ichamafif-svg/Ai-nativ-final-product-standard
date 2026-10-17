@@ -173,6 +173,9 @@ Research outputs are notes, never signed facts or permission to register an inst
 The architecture, its chosen coverage and its limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
 For architecture research, use `python -m interface.context.cartography search WORD`, then `context ID` for a bounded
 work packet: typed links, sources, implementation references, open questions and separate implementation/deployment/verification knowledge.
+Discover the snapshot vocabulary with `types` and `types relations --limit 5` (paged). Object ID prefixes are historical; `nodes.kind` is the type.
+`contains` is physical, `comprises` logical composition, `hosts` process-to-role realization. `runs_as` is process identity, `owned_by` resource ownership.
+`checked_by` methods and fixtures describe coverage, not outcomes. Relation IDs distinguish parallel mounts; follow explicit `deferred_ref` for whole neighbor definitions.
 Start with `overview --json` or `context domain/standard` for navigation across the full lifecycle; each domain has an entrypoint.
 Use `topology ID` for placement/channels/mounts/privileges and protection/instrument/probe coverage; start at
 `resource/assembly-lab`, `resource/assembly-stack` or `resource/assembly-measurement`, then follow at depth 1.

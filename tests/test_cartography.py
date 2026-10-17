@@ -12,6 +12,119 @@ from interface.context.cartography import (DEFAULT_DB, compare, connect, gaps, i
 
 
 class StandardMap(unittest.TestCase):
+    def test_expected_types_match_unions_of_exact_types_and_families(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'map.sqlite'
+            initialize(path)
+            selectors=('fs/*|data/*','fs/directory|data/*','fs/*|data/artifact','data/artifact')
+            import_json(path, {'metadata':[{'key':'basis_sha','value':'a'*40}], 'nodes':[
+                {'id':'box','kind':'run/container','title':'Box','source':'ARCHITECTURE.md'},
+                {'id':'dir','kind':'fs/directory','title':'Directory','source':'ARCHITECTURE.md'}],
+                'expectations':[{'node_id':'box','link_kind':'mounts','direction':'out','target_kind':t,
+                                 'reason':'Mount target required','source':'ARCHITECTURE.md'} for t in selectors]})
+            with connect(path) as db:
+                self.assertEqual(len(context(db,'box')['missing_links']),4)
+            import_json(path, {'links':[{'source_id':'box','kind':'mounts','target_id':'dir',
+                                         'properties':{'mode':'ro'},'source':'ARCHITECTURE.md'}]})
+            with connect(path) as db:
+                self.assertEqual(validate(db),[])
+                self.assertEqual([r['target_kind'] for r in context(db,'box')['missing_links']],['data/artifact'])
+
+    def test_typed_mounts_keep_parallel_relations_and_reject_invalid_attributes(self):
+        with connect() as db:
+            mounts = read('node', db, key='resource/lab-candidate-env')['links']
+            parallel = [l for l in mounts if l['kind']=='mounts' and l['target_id']=='resource/lab-private-staging']
+            self.assertEqual({l['properties']['mode'] for l in parallel}, {'ro','rw'})
+            self.assertEqual(len({l['id'] for l in parallel}), 2)
+            self.assertEqual(db.execute("SELECT count(*) FROM nodes WHERE id LIKE 'resource/role-%'").fetchone()[0], 0)
+            self.assertNotIn('state', {r['name'] for r in db.execute('PRAGMA table_info(nodes)')})
+            self.assertEqual(db.execute("SELECT kind FROM nodes WHERE id='authority/kernel'").fetchone()[0], 'trust/judge')
+            hosted = {r[0] for r in db.execute("SELECT target_id FROM links WHERE source_id='resource/process-operator' AND kind='hosts'")}
+            self.assertTrue({'authority/kernel','authority/bt'} <= hosted)
+            self.assertEqual(db.execute("SELECT count(*) FROM nodes WHERE kind='run/vm'").fetchone()[0], 0)
+            self.assertTrue(any(x['id']=='run/vm' for x in read('types',db)['items']))
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'map.sqlite'
+            initialize(path)
+            import_json(path, {'nodes': [
+                {'id':'box','kind':'run/container','title':'Box','source':'ARCHITECTURE.md'},
+                {'id':'dir','kind':'fs/directory','title':'Directory','source':'ARCHITECTURE.md'}]})
+            for attrs in ({}, {'mode':'admin'}, {'mode':'ro','grant':True}):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    import_json(path, {'links':[{'source_id':'box','kind':'mounts','target_id':'dir',
+                                                'properties':attrs,'source':'ARCHITECTURE.md'}]})
+            import_json(path, {'links':[{'id':mode,'source_id':'box','kind':'mounts','target_id':'dir',
+                                        'properties':{'mode':mode},'source':'ARCHITECTURE.md'} for mode in ('ro','rw')]})
+            with self.assertRaisesRegex(sqlite3.IntegrityError,'ambiguous'):
+                import_json(path, {'link_conditions':[{'source_id':'box','kind':'mounts','target_id':'dir',
+                    'timing':'start','checks':'path','on_failure':'refuse','scope':'mount','limitation':'one mode',
+                    'source':'ARCHITECTURE.md'}]})
+            with connect(path,write=True) as db:
+                db.execute("UPDATE links SET source_id='dir' WHERE id='ro'")
+                self.assertTrue(any('invalid endpoints' in e for e in validate(db)))
+
+    def test_frozen_catalogue_and_legacy_reads_do_not_reinterpret_history(self):
+        with tempfile.TemporaryDirectory() as temp:
+            legacy=Path(temp)/'v4.sqlite'
+            with connect(legacy,write=True) as db:
+                db.executescript('''
+                    CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT);
+                    INSERT INTO metadata VALUES('schema_version','4');
+                    INSERT INTO metadata VALUES('basis_sha','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+                    CREATE TABLE nodes(id TEXT PRIMARY KEY,kind TEXT,title TEXT,description TEXT,state TEXT,source TEXT);
+                    INSERT INTO nodes VALUES('old','component','Old','','documented','ARCHITECTURE.md');
+                    CREATE TABLE links(source_id TEXT,kind TEXT,target_id TEXT,description TEXT,source TEXT);
+                    CREATE TABLE expectations(node_id TEXT,link_kind TEXT,direction TEXT,target_kind TEXT,reason TEXT,source TEXT);
+                    CREATE VIEW missing_links AS SELECT * FROM expectations;
+                ''')
+            with connect(legacy) as db:
+                self.assertEqual(validate(db), [])
+                self.assertEqual(context(db,'old')['nodes'][0]['kind'],'component')
+                self.assertEqual(read('types',db)['items'], [])
+            typed=Path(temp)/'v5.sqlite'
+            initialize(typed)
+            with connect(typed,write=True) as db:
+                db.execute("UPDATE relation_types SET description='Snapshot-specific meaning' WHERE id='mounts'")
+            with connect(typed) as db:
+                definitions=read('types',db,key='relations')['items']
+                self.assertEqual(next(r for r in definitions if r['id']=='mounts')['description'],'Snapshot-specific meaning')
+                with connect(legacy) as old:
+                    self.assertTrue(compare(old,db)['relation_types']['added'])
+
+    def test_migration_records_distinguish_parallel_edges_and_archive_removed_role_knowledge(self):
+        from interface.context.cartography_migrate import migration_records
+        role={'id':'resource/role-probe','state':'documented'}
+        assessment={'node_id':role['id'],'dimension':'deployment','state':'unknown','source':'CARTOGRAPHY.md'}
+        links=[{'source_id':'box','kind':kind,'target_id':'snapshot','description':kind}
+               for kind in ('mounts_ro','mounts_rw')]
+        edge_map={('box',link['kind'],'snapshot'):('box','mounts','snapshot',False,'unique/'+link['kind'])
+                  for link in links}
+        records=migration_records({'nodes':[role],'links':links,'assessments':[assessment]}, {}, edge_map)
+        self.assertEqual({r['new_key'] for r in records if r['entity']=='link'},
+                         {'unique/mounts_ro','unique/mounts_rw'})
+        record=next(r for r in records if r['entity']=='node')
+        self.assertIsNone(record['new_key'])
+        self.assertEqual(json.loads(record['note'].split('; assessments=',1)[1]),[assessment])
+
+    def test_migration_ledger_accounts_for_every_previous_object_and_link(self):
+        with connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM migration_ledger WHERE entity='node'").fetchone()[0],615)
+            self.assertEqual(db.execute("SELECT count(*) FROM migration_ledger WHERE entity='link'").fetchone()[0],1198)
+            removed=list(db.execute('SELECT * FROM migration_ledger WHERE new_key IS NULL'))
+            self.assertEqual(len(removed),47)
+            self.assertTrue(all('role replaced' in r['note'] for r in removed))
+            self.assertEqual(db.execute('SELECT count(*) FROM link_conditions').fetchone()[0],78)
+            for row in db.execute("SELECT * FROM migration_ledger WHERE entity='node' AND new_key IS NOT NULL"):
+                self.assertIsNotNone(db.execute('SELECT 1 FROM nodes WHERE id=?',(row['new_key'],)).fetchone())
+            for row in db.execute("SELECT new_key FROM migration_ledger WHERE entity='link' AND new_key IS NOT NULL"):
+                self.assertIsNotNone(db.execute('SELECT id FROM links WHERE id=?',(row['new_key'],)).fetchone())
+            for flow in read('overview',db)['flows']:
+                steps=read('flow',db,key=flow['id'])['steps']
+                self.assertTrue(all(s['id'] for s in steps))
+                self.assertTrue(all(a['target_id']==b['source_id'] for a,b in zip(steps,steps[1:])))
+            self.assertTrue(any(s.get('reverse') for f in read('overview',db)['flows']
+                                for s in read('flow',db,key=f['id'])['steps']))
+
     def test_inventory_audit_is_complete_without_claiming_security_completeness(self):
         with connect() as db:
             result = read('audit', db)
@@ -32,7 +145,7 @@ class StandardMap(unittest.TestCase):
             path = root / 'map.sqlite'
             initialize(path)
             import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
-                               'nodes': [{'id': 'known', 'kind': 'component', 'title': 'Known', 'source': 'known.py'}]})
+                               'nodes': [{'id': 'known', 'kind': 'arch/component', 'title': 'Known', 'source': 'known.py'}]})
             with connect(path, write=True) as db:
                 self.assertEqual(source_drift(db, root)['not_recorded'], ['known.py'])
                 fingerprint_sources(db, root)
@@ -53,9 +166,9 @@ class StandardMap(unittest.TestCase):
             edges = {(x['source_id'], x['kind'], x['target_id']) for x in packet['links']}
             self.assertIn(('resource/lab-supervisor-process', 'outside_of', 'resource/lab-agent-env'), edges)
             self.assertNotIn(('resource/lab-agent-env', 'contains', 'resource/lab-supervisor-process'), edges)
-            self.assertIn(('resource/lab-agent-env', 'mounts_ro', 'resource/lab-execution-dir'), edges)
+            self.assertIn(('resource/lab-agent-env', 'mounts', 'resource/lab-execution-dir'), edges)
             supervisor = read('topology', db, key='resource/lab-supervisor-process')
-            self.assertIn('resource/uid-agent', {x['target_id'] for x in supervisor['links'] if x['kind'] == 'uses_identity'})
+            self.assertIn('resource/uid-agent', {x['target_id'] for x in supervisor['links'] if x['kind'] == 'runs_as'})
             self.assertFalse(any(x['kind'] == 'implements' for x in supervisor['links']))
             native = read('topology', db, key='instrument/topology-agent-native')
             self.assertIn('resource/probe-native-env', {x['target_id'] for x in native['links'] if x['kind'] == 'uses_environment'})
@@ -63,7 +176,8 @@ class StandardMap(unittest.TestCase):
             self.assertIn('resource/probe-fake-executor', {x['target_id'] for x in fake['links'] if x['kind'] == 'uses_environment'})
             self.assertTrue(any('Ne prouve aucune isolation OCI' in x['limitation'] for x in fake['conditions']))
             config = read('topology', db, key='instrument/topology-oci-config')
-            self.assertIn('resource/role-instrument', {x['target_id'] for x in config['links'] if x['kind'] == 'has_role'})
+            self.assertEqual(next(x for x in config['nodes'] if x['id']==config['focus'])['kind'], 'arch/instrument')
+            self.assertTrue(any(x['properties'].get('method')=='analysis' for x in config['links'] if x['kind']=='checked_by'))
             for id in ('resource/assembly-lab', 'resource/assembly-stack', 'resource/assembly-measurement'):
                 self.assertEqual(read('topology', db, key=id)['focus'], id)
 
@@ -108,7 +222,7 @@ class StandardMap(unittest.TestCase):
             edge = {'source_id': 'cap', 'kind': 'limited_by', 'target_id': 'control'}
             import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}], 'nodes': [
                 {'id': id, 'kind': kind, 'title': id, 'source': 'ARCHITECTURE.md'}
-                for id, kind in [('cap', 'capability'), ('control', 'constraint')]],
+                for id, kind in [('cap', 'trust/capability'), ('control', 'trust/constraint')]],
                 'links': [{**edge, 'source': 'ARCHITECTURE.md'}],
                 'flows': [{'id': 'walk', 'title': 'Walk', 'description': 'Documented only.', 'source': 'ARCHITECTURE.md'}]})
             with connect(path) as db:
@@ -132,7 +246,7 @@ class StandardMap(unittest.TestCase):
                 self.assertFalse(any(x['category'] == 'missing_condition' for x in gaps(db)))
                 self.assertEqual(read('flow', db, key='walk')['steps'][0]['conditions']['timing'], 'on start')
             with connect(path, write=True) as db:
-                db.execute("INSERT INTO flow_steps VALUES ('walk',2,'cap','limited_by','control')")
+                db.execute("INSERT INTO flow_steps SELECT flow_id,2,source_id,kind,target_id,link_id,reverse FROM flow_steps WHERE flow_id='walk' AND position=1")
             with connect(path) as db:
                 self.assertIn('flow has disconnected steps: walk', validate(db))
 
@@ -141,15 +255,16 @@ class StandardMap(unittest.TestCase):
             self.assertEqual([row['target_id'] for row in shortest_path(
                 db, 'component/work-queue', 'resource/proposals')],
                 ['component/repairer', 'component/candidate-workflow', 'resource/proposals'])
-            self.assertEqual([row['target_id'] for row in shortest_path(
-                db, 'component/trusted-service', 'resource/main')],
-                ['component/effect-guard', 'component/git-adapter', 'resource/main'])
+            self.assertTrue(shortest_path(db, 'component/trusted-service', 'resource/main'))
+            merge = read('flow', db, key='flow/merge')['steps']
+            self.assertIn('component/effect-guard', {s['source_id'] for s in merge})
+            self.assertIn('resource/main', {s['target_id'] for s in merge})
             self.assertTrue(shortest_path(db, 'resource/proposals', 'resource/journal', 8))
             packet = context(db, 'capability/observe')
             self.assertIn('gap/suite-report-trust', packet['question_ids'])
             for node in read('overview', db)['entrypoints']:
                 self.assertEqual(context(db, node['id'])['focus'], node['id'])
-            for (id,) in db.execute("SELECT id FROM nodes WHERE kind='domain'"):
+            for (id,) in db.execute("SELECT id FROM nodes WHERE kind='arch/domain'"):
                 self.assertEqual(context(db, id)['focus'], id)
 
     def test_measurement_inputs_and_release_paths_are_distinct(self):
@@ -161,7 +276,7 @@ class StandardMap(unittest.TestCase):
             self.assertTrue(db.execute("SELECT 1 FROM links WHERE source_id='component/release-runner' "
                                        "AND kind='produces' AND target_id='resource/release-tree'").fetchone())
             self.assertTrue(db.execute("SELECT 1 FROM links WHERE source_id='component/reconstruct' "
-                                       "AND kind='reconstructs' AND target_id='resource/release-artifact'").fetchone())
+                                       "AND kind='produces' AND target_id='resource/release-artifact'").fetchone())
             self.assertIn('requests', {row['link_kind'] for row in context(db, 'capability/data-read')['missing_links']})
 
     def test_work_packet_answers_candidate_authority_effects_and_unknown_deployment(self):
@@ -188,11 +303,12 @@ class StandardMap(unittest.TestCase):
             path = Path(temp) / 'map.sqlite'
             initialize(path)
             import_json(path, {'nodes': [
-                {'id': 'cap', 'kind': 'capability', 'title': 'Cap', 'source': 'ARCHITECTURE.md'},
-                {'id': 'file', 'kind': 'resource', 'title': 'File', 'source': 'ARCHITECTURE.md'}],
-                'links': [{'source_id': 'cap', 'kind': 'governed_by', 'target_id': 'file', 'source': 'ARCHITECTURE.md'}],
+                {'id': 'cap', 'kind': 'trust/capability', 'title': 'Cap', 'source': 'ARCHITECTURE.md'},
+                {'id': 'file', 'kind': 'data/artifact', 'title': 'File', 'source': 'ARCHITECTURE.md'}],
                 'expectations': [{'node_id': 'cap', 'link_kind': 'governed_by', 'direction': 'out',
-                                  'target_kind': 'authority', 'reason': 'Authority unknown', 'source': 'ARCHITECTURE.md'}]})
+                                  'target_kind': 'trust/admin', 'reason': 'Authority unknown', 'source': 'ARCHITECTURE.md'}]})
+            with self.assertRaisesRegex(sqlite3.IntegrityError,'invalid endpoints'):
+                import_json(path, {'links': [{'source_id': 'cap', 'kind': 'governed_by', 'target_id': 'file', 'source': 'ARCHITECTURE.md'}]})
             with connect(path) as db:
                 packet = context(db, 'cap')
                 self.assertTrue(all(x['state'] == 'unknown' for x in packet['assessments']))
@@ -216,7 +332,7 @@ class StandardMap(unittest.TestCase):
             (repo / 'untracked.py').write_text('not in inventory')
             path = root / 'map.sqlite'
             initialize(path)
-            import_json(path, {'nodes': [{'id': 'known', 'kind': 'component', 'title': 'Known',
+            import_json(path, {'nodes': [{'id': 'known', 'kind': 'arch/component', 'title': 'Known',
                                           'source': 'fabric/known.py#symbol'}]})
             import_json(path, {'source_fingerprints': [{'source': 'engine/unknown.py', 'sha256': '0' * 64}]})
             with connect(path) as db:
@@ -232,7 +348,7 @@ class StandardMap(unittest.TestCase):
             before, after = [Path(temp) / name for name in ('old.sqlite', 'new.sqlite')]
             for path in (before, after):
                 initialize(path)
-                import_json(path, {'nodes': [{'id': 'same', 'kind': 'component', 'title': 'Same', 'source': 'ARCHITECTURE.md'}]})
+                import_json(path, {'nodes': [{'id': 'same', 'kind': 'arch/component', 'title': 'Same', 'source': 'ARCHITECTURE.md'}]})
             with connect(before, write=True) as db:
                 db.execute('DROP TABLE assessments')
                 db.execute('DROP TABLE flow_steps')
@@ -251,9 +367,9 @@ class StandardMap(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'map.sqlite'
             initialize(path)
-            nodes = [{'id': f'node/{i}', 'kind': 'component', 'title': str(i),
+            nodes = [{'id': f'node/{i}', 'kind': 'arch/gap', 'title': str(i),
                       'description': 'x' * 1900, 'source': 'ARCHITECTURE.md'} for i in range(20)]
-            links = [{'source_id': 'node/0', 'kind': 'depends_on', 'target_id': f'node/{i}',
+            links = [{'source_id': 'node/0', 'kind': 'concerns', 'target_id': f'node/{i}',
                       'source': 'ARCHITECTURE.md'} for i in range(1, 20)]
             import_json(path, {'nodes': nodes, 'links': links})
             with connect(path) as db:
@@ -276,7 +392,7 @@ class StandardMap(unittest.TestCase):
             self.assertEqual([x['target_id'] for x in shortest_path(
                 db, 'agent/mission', 'component/candidate')],
                 ['capability/candidate-run', 'authority/supervisor', 'component/candidate'])
-            self.assertTrue(any(x['kind'] == 'component' for x in read('search', db, key='OpenBao')['items']))
+            self.assertTrue(any(x['kind'] == 'arch/component' for x in read('search', db, key='OpenBao')['items']))
             self.assertEqual(read('search', db, key='%')['items'], [])
             self.assertRaises(sqlite3.OperationalError, db.execute,
                               "UPDATE nodes SET title='altered' WHERE id='authority/kernel'")
@@ -288,10 +404,10 @@ class StandardMap(unittest.TestCase):
             data = {
                 'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
                 'nodes': [
-                    {'id': 'probe/a', 'kind': 'instrument', 'title': 'Probe', 'source': 'ARCHITECTURE.md'},
-                    {'id': 'target/a', 'kind': 'component', 'title': 'Target', 'source': 'ARCHITECTURE.md'}],
+                    {'id': 'probe/a', 'kind': 'arch/instrument', 'title': 'Probe', 'source': 'ARCHITECTURE.md'},
+                    {'id': 'target/a', 'kind': 'arch/component', 'title': 'Target', 'source': 'ARCHITECTURE.md'}],
                 'expectations': [{'node_id': 'probe/a', 'link_kind': 'observes', 'direction': 'out',
-                                  'target_kind': 'component', 'reason': 'Target required',
+                                  'target_kind': 'arch/component', 'reason': 'Target required',
                                   'source': 'ARCHITECTURE.md'}]}
             import_json(path, data)
             with connect(path) as db:
@@ -322,16 +438,16 @@ class StandardMap(unittest.TestCase):
             path = Path(temp) / 'map.sqlite'
             initialize(path)
             with self.assertRaises(ValueError):
-                import_json(path, {'nodes': [{'id': 'node', 'kind': 'component',
+                import_json(path, {'nodes': [{'id': 'node', 'kind': 'arch/component',
                                              'title': 'N', 'source': 'ARCHITECTURE.md', 'grant': True}]})
             with self.assertRaises(sqlite3.IntegrityError):
                 import_json(path, {'nodes': [
-                    {'id': 'good', 'kind': 'component', 'title': 'Good', 'source': 'ARCHITECTURE.md'},
+                    {'id': 'good', 'kind': 'arch/component', 'title': 'Good', 'source': 'ARCHITECTURE.md'},
                     {'id': 'bad', 'kind': 'invalid', 'title': 'Bad', 'source': 'ARCHITECTURE.md'}]})
             with connect(path) as db:
                 self.assertEqual(db.execute('SELECT count(*) FROM nodes').fetchone()[0], 0)
             import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
-                               'nodes': [{'id': 'escaped', 'kind': 'component', 'title': 'Escape',
+                               'nodes': [{'id': 'escaped', 'kind': 'arch/component', 'title': 'Escape',
                                           'source': '../outside'}]})
             with connect(path) as db:
                 self.assertIn('source absent or outside checkout: ../outside', validate(db))
@@ -351,7 +467,7 @@ class StandardMap(unittest.TestCase):
             path = root / 'map?#%.sqlite'
             initialize(path)
             import_json(path, {'metadata': [{'key': 'basis_sha', 'value': 'a' * 40}],
-                               'nodes': [{'id': 'link', 'kind': 'component', 'title': 'Link',
+                               'nodes': [{'id': 'link', 'kind': 'arch/component', 'title': 'Link',
                                           'source': 'link.py'}]})
             with connect(path) as db:
                 self.assertIn('source absent or outside checkout: link.py', validate(db, checkout))
